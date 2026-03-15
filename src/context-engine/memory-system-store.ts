@@ -2069,10 +2069,12 @@ function reviewMemoryState(params: {
   longTermMemory: LongTermMemoryEntry[];
   pendingSignificance: PendingMemoryEntry[];
   revisions?: PersistedMemoryRevision[];
+  adjudications?: PersistedMemoryAdjudication[];
 }): MemoryReviewResult {
   const longTermMemory = reviseReviewInputsFromHistory({
     entries: params.longTermMemory,
     revisions: params.revisions ?? [],
+    adjudications: params.adjudications ?? [],
   });
   const conceptIdsFor = (entries: LongTermMemoryEntry[]) =>
     uniqueIds(entries.map((entry) => getEntryConceptId(entry))).slice(0, MAX_WORKING_ITEMS);
@@ -2109,6 +2111,11 @@ function reviewMemoryState(params: {
     (params.revisions ?? [])
       .filter((revision) => revision.adjudicationStatus === "contested")
       .map((revision) => revision.conceptId),
+  ).slice(0, MAX_WORKING_ITEMS);
+  const contestedAdjudicationConceptIds = uniqueIds(
+    (params.adjudications ?? [])
+      .filter((adjudication) => adjudication.status === "contested")
+      .map((adjudication) => adjudication.conceptId),
   ).slice(0, MAX_WORKING_ITEMS);
   const revisedConceptIds = uniqueIds(
     (params.revisions ?? [])
@@ -2149,7 +2156,9 @@ function reviewMemoryState(params: {
         : "",
       contestedRevisionConceptIds[0]
         ? `Concepts with contested revision history: ${contestedRevisionConceptIds.length}`
-        : "",
+        : contestedAdjudicationConceptIds[0]
+          ? `Concepts with contested adjudication: ${contestedAdjudicationConceptIds.length}`
+          : "",
       supersededMemoryIds[0] ? `Superseded memories to retire: ${supersededMemoryIds.length}` : "",
       permanentDeferredIds[0]
         ? `Durable memories waiting for permanence: ${permanentDeferredIds.length}`
@@ -2537,6 +2546,11 @@ export function compileMemoryState(params: {
     longTermMemory: nextLongTerm,
     pendingSignificance: nextPending,
     revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: nextLongTerm,
+      revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    }),
   });
   const reviewedWorkingMemory: WorkingMemorySnapshot = {
     ...nextWorkingMemory,
@@ -3501,6 +3515,11 @@ export function runMemorySleepReview(params: {
     longTermMemory: archivedLongTerm,
     pendingSignificance: params.snapshot.pendingSignificance,
     revisions: collectPersistedMemoryRevisions(archivedLongTerm),
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: archivedLongTerm,
+      revisions: collectPersistedMemoryRevisions(archivedLongTerm),
+    }),
   });
   const workingMemory: WorkingMemorySnapshot = {
     ...params.snapshot.workingMemory,
@@ -3755,6 +3774,14 @@ function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): v
       updated_at INTEGER NOT NULL,
       json TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS memory_adjudications (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      concept_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS pending_memory (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -3815,9 +3842,22 @@ type PersistedMemoryRevision = {
   updatedAt: number;
 };
 
+type PersistedMemoryAdjudication = {
+  id: string;
+  sessionId: string;
+  conceptId: string;
+  status: MemoryAdjudicationStatus;
+  rationale: string;
+  winningMemoryId?: string;
+  losingMemoryIds: string[];
+  scopeSummary?: string;
+  updatedAt: number;
+};
+
 function reviseReviewInputsFromHistory(params: {
   entries: LongTermMemoryEntry[];
   revisions: PersistedMemoryRevision[];
+  adjudications?: PersistedMemoryAdjudication[];
 }): LongTermMemoryEntry[] {
   const revisionsByConcept = new Map<string, PersistedMemoryRevision[]>();
   for (const revision of params.revisions) {
@@ -3828,19 +3868,28 @@ function reviseReviewInputsFromHistory(params: {
   return params.entries.map((entry) => {
     const conceptId = getEntryConceptId(entry);
     const history = revisionsByConcept.get(conceptId) ?? [];
+    const adjudication = params.adjudications?.find((item) => item.conceptId === conceptId);
     if (history.length === 0) {
-      return entry;
+      if (!adjudication) {
+        return entry;
+      }
+      return {
+        ...entry,
+        adjudicationStatus: adjudication.status,
+      };
     }
     const revisionKinds = new Set(history.map((revision) => revision.revisionKind));
     const hasContested = history.some((revision) => revision.adjudicationStatus === "contested");
     const hasSuperseded = history.some((revision) => revision.activeStatus === "superseded");
     return {
       ...entry,
-      adjudicationStatus: hasContested
-        ? "contested"
-        : hasSuperseded && entry.activeStatus === "superseded"
-          ? "superseded"
-          : entry.adjudicationStatus,
+      adjudicationStatus:
+        adjudication?.status ??
+        (hasContested
+          ? "contested"
+          : hasSuperseded && entry.activeStatus === "superseded"
+            ? "superseded"
+            : entry.adjudicationStatus),
       contradictionCount:
         hasContested && entry.contradictionCount === 0 ? 1 : entry.contradictionCount,
       revisionCount: Math.max(entry.revisionCount, history.length - 1),
@@ -3931,6 +3980,68 @@ function collectPersistedMemoryRevisions(
   });
 }
 
+function buildPersistedMemoryAdjudications(params: {
+  sessionId: string;
+  entries: LongTermMemoryEntry[];
+  revisions: PersistedMemoryRevision[];
+}): PersistedMemoryAdjudication[] {
+  const entriesByConcept = new Map<string, LongTermMemoryEntry[]>();
+  for (const entry of params.entries) {
+    const conceptId = getEntryConceptId(entry);
+    const bucket = entriesByConcept.get(conceptId) ?? [];
+    bucket.push(entry);
+    entriesByConcept.set(conceptId, bucket);
+  }
+  const revisionsByConcept = new Map<string, PersistedMemoryRevision[]>();
+  for (const revision of params.revisions) {
+    const bucket = revisionsByConcept.get(revision.conceptId) ?? [];
+    bucket.push(revision);
+    revisionsByConcept.set(revision.conceptId, bucket);
+  }
+
+  const adjudications: PersistedMemoryAdjudication[] = [];
+  for (const [conceptId, conceptEntries] of entriesByConcept.entries()) {
+    const history = revisionsByConcept.get(conceptId) ?? [];
+    const winner = conceptEntries.toSorted(
+      (a, b) => b.confidence - a.confidence || b.updatedAt - a.updatedAt,
+    )[0];
+    const losingMemoryIds = conceptEntries
+      .filter((entry) => entry.id !== winner?.id)
+      .map((entry) => entry.id);
+    let status: MemoryAdjudicationStatus = winner?.adjudicationStatus ?? "authoritative";
+    let rationale = "single authoritative concept state";
+    if (history.some((revision) => revision.adjudicationStatus === "contested")) {
+      status = "contested";
+      rationale = "concept revision history contains contested evidence";
+    } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
+      status = winner?.activeStatus === "superseded" ? "superseded" : status;
+      rationale = "concept includes superseded observations";
+    } else if (history.some((revision) => revision.revisionKind === "updated")) {
+      rationale = "concept resolved through updated revision history";
+    } else if (history.some((revision) => revision.revisionKind === "narrowed")) {
+      rationale = "concept resolved through narrowed revision history";
+    }
+    adjudications.push({
+      id: `adj-${stableHash([params.sessionId, conceptId, status, winner?.id ?? "", history.map((item) => item.id).join(",")].join("::"))}`,
+      sessionId: params.sessionId,
+      conceptId,
+      status,
+      rationale,
+      winningMemoryId: winner?.id,
+      losingMemoryIds,
+      scopeSummary: [
+        winner?.versionScope ? `version=${winner.versionScope}` : "",
+        winner?.installProfileScope ? `profile=${winner.installProfileScope}` : "",
+        winner?.customerScope ? `customer=${winner.customerScope}` : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      updatedAt: winner?.updatedAt ?? Date.now(),
+    });
+  }
+  return adjudications;
+}
+
 export async function loadMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
@@ -3983,6 +4094,14 @@ export async function loadMemoryStoreSnapshot(params: {
         )
         .all(params.sessionId) as Array<{ concept_id: string; json: string }>;
       const revisions = revisionRows.map((row) => JSON.parse(row.json) as PersistedMemoryRevision);
+      const adjudicationRows = db
+        .prepare(
+          "SELECT json FROM memory_adjudications WHERE session_id = ? ORDER BY updated_at DESC",
+        )
+        .all(params.sessionId) as Array<{ json: string }>;
+      const adjudications = adjudicationRows.map(
+        (row) => JSON.parse(row.json) as PersistedMemoryAdjudication,
+      );
       const pendingRows = db
         .prepare("SELECT json FROM pending_memory WHERE session_id = ? ORDER BY updated_at DESC")
         .all(params.sessionId) as Array<{ json: string }>;
@@ -4044,8 +4163,11 @@ export async function loadMemoryStoreSnapshot(params: {
         longTermMemory: longTermRows.map((row) => {
           const entry = sanitizeLongTermEntry(JSON.parse(row.json) as LongTermMemoryEntry);
           const concept = conceptByKey.get(entry.conceptKey);
+          const adjudication = adjudications.find(
+            (item) => item.conceptId === getEntryConceptId(entry),
+          );
           if (!concept) {
-            return entry;
+            return adjudication ? { ...entry, adjudicationStatus: adjudication.status } : entry;
           }
           return {
             ...entry,
@@ -4055,7 +4177,8 @@ export async function loadMemoryStoreSnapshot(params: {
               ...(concept.aliases ?? []),
             ]),
             permanenceStatus: concept.permanenceStatus ?? entry.permanenceStatus,
-            adjudicationStatus: concept.adjudicationStatus ?? entry.adjudicationStatus,
+            adjudicationStatus:
+              adjudication?.status ?? concept.adjudicationStatus ?? entry.adjudicationStatus,
           };
         }),
         pendingSignificance: pendingRows.map((row) =>
@@ -4150,6 +4273,7 @@ export async function persistMemoryStoreSnapshot(params: {
       db.prepare("DELETE FROM memory_concepts WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_concept_aliases WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_revisions WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_adjudications WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM pending_memory WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM permanent_nodes WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_graph_nodes WHERE session_id = ?").run(params.sessionId);
@@ -4159,6 +4283,11 @@ export async function persistMemoryStoreSnapshot(params: {
       const revisions = buildPersistedMemoryRevisions({
         sessionId: params.sessionId,
         entries: params.longTermMemory,
+      });
+      const adjudications = buildPersistedMemoryAdjudications({
+        sessionId: params.sessionId,
+        entries: params.longTermMemory,
+        revisions,
       });
       const conceptIdByKey = new Map(concepts.map((concept) => [concept.conceptKey, concept.id]));
       const insertLongTerm = db.prepare(
@@ -4227,6 +4356,25 @@ export async function persistMemoryStoreSnapshot(params: {
           revision.permanenceStatus,
           revision.updatedAt,
           JSON.stringify(revision),
+        );
+      }
+      const insertAdjudication = db.prepare(
+        `INSERT INTO memory_adjudications (
+          id, session_id, concept_id, status, updated_at, json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          json = excluded.json`,
+      );
+      for (const adjudication of adjudications) {
+        insertAdjudication.run(
+          adjudication.id,
+          adjudication.sessionId,
+          adjudication.conceptId,
+          adjudication.status,
+          adjudication.updatedAt,
+          JSON.stringify(adjudication),
         );
       }
       const insertPending = db.prepare(

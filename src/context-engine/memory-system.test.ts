@@ -1675,6 +1675,9 @@ describe("MemorySystemContextEngine", () => {
       const revisionCount = db
         .prepare("SELECT COUNT(*) AS count FROM memory_revisions WHERE session_id = ?")
         .get(sessionId) as { count: number };
+      const adjudicationCount = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_adjudications WHERE session_id = ?")
+        .get(sessionId) as { count: number };
       const conceptRow = db
         .prepare("SELECT canonical_text FROM memory_concepts WHERE session_id = ? LIMIT 1")
         .get(sessionId) as { canonical_text: string } | undefined;
@@ -1682,6 +1685,7 @@ describe("MemorySystemContextEngine", () => {
       expect(conceptCount.count).toBeGreaterThan(0);
       expect(aliasCount.count).toBeGreaterThan(0);
       expect(revisionCount.count).toBeGreaterThan(0);
+      expect(adjudicationCount.count).toBeGreaterThan(0);
       expect(conceptRow?.canonical_text).toBeTruthy();
     } finally {
       db.close();
@@ -1741,6 +1745,11 @@ describe("MemorySystemContextEngine", () => {
           "SELECT COUNT(*) AS count FROM memory_revisions WHERE session_id = ? AND adjudication_status = 'contested'",
         )
         .get(sessionId) as { count: number };
+      const contestedAdjudications = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_adjudications WHERE session_id = ? AND status = 'contested'",
+        )
+        .get(sessionId) as { count: number };
       const superseded = db
         .prepare(
           "SELECT COUNT(*) AS count FROM memory_revisions WHERE session_id = ? AND active_status = 'superseded'",
@@ -1748,6 +1757,7 @@ describe("MemorySystemContextEngine", () => {
         .get(sessionId) as { count: number };
 
       expect(contested.count).toBeGreaterThan(0);
+      expect(contestedAdjudications.count).toBeGreaterThan(0);
       expect(superseded.count).toBeGreaterThan(0);
     } finally {
       db.close();

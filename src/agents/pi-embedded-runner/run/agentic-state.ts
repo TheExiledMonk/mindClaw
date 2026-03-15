@@ -279,7 +279,9 @@ export type AgenticAcceptanceScenarioId =
   | "promotion_guidance_memory_alignment"
   | "recovering_skills_guidance_alignment"
   | "template_guidance_observability_alignment"
-  | "merge_guidance_observability_alignment";
+  | "merge_guidance_observability_alignment"
+  | "durable_template_family_quality_alignment"
+  | "durable_merge_family_quality_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -3592,6 +3594,141 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   }
 
   {
+    const diagnostics = inspectAgenticExecutionObservability(
+      buildAgenticExecutionState({
+        messages: [
+          {
+            role: "user",
+            content:
+              "Reuse the durable diagnostics family guidance and turn the stable path into a reusable template.",
+            timestamp: Date.now(),
+          } as AgentMessage,
+        ],
+        availableSkills: ["memory-diagnostics"],
+        likelySkills: ["memory-diagnostics"],
+        availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+        memorySystemPromptAddition: [
+          "Integrated memory packet",
+          "Skill family guidance:",
+          "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+        ].join("\n"),
+      }),
+    );
+    const report = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: diagnostics,
+      memoryTrend: {
+        trend: "stable",
+        templateFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    const passed =
+      report.passed &&
+      report.templateFamilies.includes("diagnostics@debugging/node") &&
+      report.diagnostics.consolidationAction === "generalize_existing" &&
+      !report.diagnostics.mergeCandidate &&
+      report.recommendations.includes(
+        "Memory-backed template-ready families: diagnostics@debugging/node.",
+      ) &&
+      report.recommendations.includes(
+        "Template-ready consolidation is active; parameterize the stable workflow instead of creating a new fork.",
+      );
+    scenarios.push({
+      id: "durable_template_family_quality_alignment",
+      passed,
+      summary: passed
+        ? "Durable template-ready family trends stay visible from retrieval through the release-facing quality gate."
+        : "Durable template-ready family trends did not stay visible through the quality gate.",
+      details: `template_families=${report.templateFamilies.join("|")} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const diagnostics = inspectAgenticExecutionObservability(
+      buildAgenticExecutionState({
+        messages: [
+          {
+            role: "user",
+            content:
+              "Use the durable diagnostics overlap evidence to merge the sibling workflows instead of keeping forks alive.",
+            timestamp: Date.now(),
+          } as AgentMessage,
+        ],
+        availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+        likelySkills: ["memory-diagnostics", "diagnostics-report"],
+        availableSkillInfo: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "diagnostics-report", primaryEnv: "node" },
+          { name: "diagnostics-validation", primaryEnv: "node" },
+        ],
+        memorySystemPromptAddition: [
+          "Integrated memory packet",
+          "Skill family guidance:",
+          "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report durable=true",
+        ].join("\n"),
+      }),
+    );
+    const report = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: diagnostics,
+      memoryTrend: {
+        trend: "stable",
+        mergeFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    const passed =
+      report.passed &&
+      report.mergeFamilies.includes("diagnostics@debugging/node") &&
+      report.diagnostics.mergeCandidate &&
+      report.diagnostics.mergeSkills.includes("memory-diagnostics") &&
+      report.diagnostics.mergeSkills.includes("diagnostics-report") &&
+      report.recommendations.includes(
+        "Memory-backed merge-ready families: diagnostics@debugging/node.",
+      ) &&
+      report.recommendations.some((recommendation) =>
+        recommendation.includes("Merge-ready consolidation is active for sibling skills"),
+      );
+    scenarios.push({
+      id: "durable_merge_family_quality_alignment",
+      passed,
+      summary: passed
+        ? "Durable merge-ready family trends stay visible from retrieval through the release-facing quality gate."
+        : "Durable merge-ready family trends did not stay visible through the quality gate.",
+      details: `merge_families=${report.mergeFamilies.join("|")} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
     const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
@@ -4363,6 +4500,29 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       ].join("\n"),
     });
     const templateReport = inspectAgenticExecutionObservability(templateState);
+    const templateGate = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: templateReport,
+      memoryTrend: {
+        trend: "stable",
+        templateFamilies: ["diagnostics@general/node"],
+      },
+    });
     const mergeState = buildAgenticExecutionState({
       messages: [
         {
@@ -4404,6 +4564,10 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
         summary: "agentic soak 0/0 passed",
       },
       diagnosticsOverride: mergeReport,
+      memoryTrend: {
+        trend: "stable",
+        mergeFamilies: ["diagnostics@general/node"],
+      },
     });
     const phases = [
       buildSoakPhaseResult({
@@ -4414,8 +4578,11 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
           !templateState.orchestrationState.mergeCandidate &&
           templateReport.recommendations.some((recommendation) =>
             recommendation.includes("Prefer generalize_existing"),
+          ) &&
+          templateGate.recommendations.includes(
+            "Memory-backed template-ready families: diagnostics@general/node.",
           ),
-        details: `merge=${templateReport.mergeCandidate} recommendations=${templateReport.recommendations.join("|")}`,
+        details: `merge=${templateReport.mergeCandidate} recommendations=${templateGate.recommendations.join("|")}`,
       }),
       buildSoakPhaseResult({
         label: "merge_consolidation",
@@ -4424,10 +4591,14 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
           mergeState.orchestrationState.consolidationAction === "generalize_existing" &&
           mergeState.orchestrationState.mergeCandidate &&
           mergeReport.mergeSkills.length >= 2 &&
+          mergeGate.mergeFamilies.includes("diagnostics@general/node") &&
           mergeGate.diagnostics.recommendations.some((recommendation) =>
             recommendation.includes("Merge overlapping sibling skills"),
+          ) &&
+          mergeGate.recommendations.includes(
+            "Memory-backed merge-ready families: diagnostics@general/node.",
           ),
-        details: `merge=${mergeReport.mergeSkills.join("|")} recommendations=${mergeGate.diagnostics.recommendations.join("|")}`,
+        details: `merge=${mergeReport.mergeSkills.join("|")} recommendations=${mergeGate.recommendations.join("|")}`,
       }),
     ];
     const passed = phases.every((phase) => phase.passed);

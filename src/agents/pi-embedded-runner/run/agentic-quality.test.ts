@@ -323,4 +323,149 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(mergeReport, "summary")).toContain("recommendations=");
   });
+
+  it("keeps durable family-trend recommendations aligned with live consolidation mode", () => {
+    const templateDiagnostics = inspectAgenticExecutionObservability({
+      taskState: {
+        version: 1,
+        taskMode: "debugging",
+        objective: "Template a durable diagnostics family",
+        subtasks: [],
+        blockers: [],
+        assumptions: [],
+        successCriteria: [],
+        planSteps: [],
+        activeArtifacts: [],
+        confidence: "medium",
+      },
+      verificationState: {
+        version: 1,
+        outcome: "verified",
+        goalSatisfaction: "satisfied",
+        evidence: [],
+        goalSignals: [],
+        checksRun: [],
+        failingChecks: [],
+        unresolvedCriteria: [],
+        failureClasses: [],
+      },
+      plannerState: {
+        version: 1,
+        status: "continue",
+        alternativeSkills: [],
+        retryClass: "same_path_retry",
+        shouldEscalate: false,
+      },
+      governanceState: {
+        version: 1,
+        autonomyMode: "continue",
+        riskLevel: "low",
+        approvalRequired: false,
+        secretPromptDetected: false,
+        destructiveActionDetected: false,
+        reasons: [],
+      },
+      orchestrationState: {
+        version: 1,
+        primarySkill: "memory-diagnostics",
+        fallbackSkills: [],
+        skillChain: ["memory-diagnostics"],
+        workflowSteps: [{ skill: "memory-diagnostics", role: "primary" }],
+        rankedSkills: ["memory-diagnostics"],
+        effectiveSkills: ["memory-diagnostics"],
+        effectiveFamilies: ["diagnostics"],
+        promotedSkills: [],
+        prerequisiteWarnings: [],
+        capabilityGaps: [],
+        hasViableFallback: true,
+        multiSkillCandidate: false,
+        chainedWorkflow: false,
+        skillFamilies: ["diagnostics"],
+        overlappingSkills: [],
+        mergeCandidate: false,
+        mergeSkills: [],
+        stabilityState: "neutral",
+        stabilitySkills: [],
+        consolidationAction: "generalize_existing",
+      },
+      environmentState: {
+        version: 1,
+        workspaceKind: "project",
+        capabilitySignals: ["can_execute_commands"],
+        preferredValidationTools: ["exec"],
+        skillEnvironments: ["node"],
+      },
+      failureLearningState: {
+        version: 1,
+        failurePattern: "clean_success",
+        learnFromFailure: false,
+        failureReasons: [],
+        missingCapabilities: [],
+      },
+    });
+    const templateReport = runAgenticQualityGate({
+      diagnosticsOverride: templateDiagnostics,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "stable",
+        templateFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    expect(templateReport.recommendations).toContain(
+      "Template-ready consolidation is active; parameterize the stable workflow instead of creating a new fork.",
+    );
+    expect(templateReport.recommendations).toContain(
+      "Memory-backed template-ready families: diagnostics@debugging/node.",
+    );
+
+    const mergeDiagnostics = {
+      ...templateDiagnostics,
+      mergeCandidate: true,
+      mergeSkills: ["memory-diagnostics", "diagnostics-report"],
+    };
+    const mergeReport = runAgenticQualityGate({
+      diagnosticsOverride: mergeDiagnostics,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "stable",
+        mergeFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    expect(mergeReport.recommendations).toContain(
+      "Merge-ready consolidation is active for sibling skills: memory-diagnostics, diagnostics-report.",
+    );
+    expect(mergeReport.recommendations).toContain(
+      "Memory-backed merge-ready families: diagnostics@debugging/node.",
+    );
+  });
 });

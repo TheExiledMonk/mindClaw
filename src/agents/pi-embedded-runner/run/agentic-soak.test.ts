@@ -40,8 +40,14 @@ describe("agentic soak suite", () => {
     );
     expect(consolidationLifecycle?.phases[0]?.passed).toBe(true);
     expect(consolidationLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(consolidationLifecycle?.phases[0]?.details).toContain(
+      "Memory-backed template-ready families: diagnostics@general/node.",
+    );
     expect(consolidationLifecycle?.phases.at(-1)?.details).toContain(
-      "Merge overlapping sibling skills",
+      "Merge-ready consolidation is active for sibling skills:",
+    );
+    expect(consolidationLifecycle?.phases.at(-1)?.details).toContain(
+      "Memory-backed merge-ready families: diagnostics@general/node.",
     );
   });
 

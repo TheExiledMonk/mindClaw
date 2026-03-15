@@ -8,6 +8,7 @@ import type {
   ContextEngineRuntimeContext,
   IngestBatchResult,
   IngestResult,
+  ReviewResult,
 } from "./types.js";
 import { registerContextEngine } from "./registry.js";
 import { LegacyContextEngine } from "./legacy.js";
@@ -196,6 +197,25 @@ export class MemorySystemContextEngine implements ContextEngine {
         graph: compiled.graph,
       });
     }
+    await this.review({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      runtimeContext: params.runtimeContext,
+      reason: "compaction",
+    });
+    return result;
+  }
+
+  async review(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    runtimeContext?: ContextEngineRuntimeContext;
+    reason?: "manual" | "compaction" | "checkpoint";
+  }): Promise<ReviewResult> {
+    const sessionId = params.sessionKey ?? params.sessionId;
+    const workspaceDir = resolveWorkspaceDir(params.runtimeContext);
     const reviewed = runMemorySleepReview({
       sessionId,
       snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId }),
@@ -209,7 +229,14 @@ export class MemorySystemContextEngine implements ContextEngine {
       permanentMemory: reviewed.permanentMemory,
       graph: reviewed.graph,
     });
-    return result;
+    return {
+      reviewed: true,
+      summary:
+        reviewed.review.carryForwardSummary ??
+        `memory review complete (${params.reason ?? "manual"})`,
+      archivedMemoryIds: reviewed.review.archivedMemoryIds,
+      staleMemoryIds: reviewed.review.staleMemoryIds,
+    };
   }
 
   async dispose(): Promise<void> {

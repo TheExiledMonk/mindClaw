@@ -346,6 +346,66 @@ describe("memory system store", () => {
     expect(packet.accessedLongTermIds).toContain("ltm-related");
   });
 
+  it("uses task-mode-specific graph expansion priorities", () => {
+    const supportPacket = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "support-a",
+          messages: [userMessage("Support ticket: confirm the customer install fix and next action.")],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-base",
+            category: "fact",
+            text: "User issue remains unresolved after the initial install fix.",
+            relations: [
+              { sourceMemoryId: "ltm-base", type: "confirmed_by", targetMemoryId: "ltm-confirmed", weight: 0.9 },
+              { sourceMemoryId: "ltm-base", type: "derived_from", targetMemoryId: "ltm-derived", weight: 0.95 },
+            ],
+          }),
+          longTermEntry({
+            id: "ltm-confirmed",
+            category: "episode",
+            text: "Call transcript verified the root cause after agent handoff.",
+          }),
+          longTermEntry({
+            id: "ltm-direct-2",
+            category: "fact",
+            text: "Customer install profile requires preserving the next support action in memory.",
+            strength: 0.9,
+          }),
+          longTermEntry({
+            id: "ltm-direct-3",
+            category: "decision",
+            text: "Support workflow should confirm the customer-facing fix before closing the ticket.",
+            strength: 0.88,
+          }),
+          longTermEntry({
+            id: "ltm-direct-4",
+            category: "fact",
+            text: "Customer support notes should preserve install status and next support action.",
+            strength: 0.87,
+          }),
+          longTermEntry({
+            id: "ltm-derived",
+            category: "pattern",
+            text: "Refactor-oriented code pattern unrelated to customer support resolution wording.",
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      { messages: [userMessage("Customer support ticket: confirm the actual install fix and resolution.")] },
+    );
+
+    expect(supportPacket.text).toContain("Related memory expansion");
+    const expandedItems = supportPacket.retrievalItems.filter((item) =>
+      item.reason.includes("graph expansion"),
+    );
+    expect(expandedItems[0]?.text).toContain("Call transcript verified");
+  });
+
   it("extracts generalized pattern memories and marks superseded memories", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",
@@ -462,5 +522,35 @@ describe("MemorySystemContextEngine", () => {
 
     const memoryRoot = path.join(tempDir, MEMORY_SYSTEM_DIRNAME);
     await expect(fs.stat(memoryRoot)).resolves.toBeTruthy();
+  });
+
+  it("runs explicit review and persists the reviewed state", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-review-"));
+    process.chdir(tempDir);
+
+    const engine = new MemorySystemContextEngine();
+    await engine.afterTurn({
+      sessionId: "sess-review",
+      sessionKey: "agent:review",
+      sessionFile: path.join(tempDir, "session.jsonl"),
+      messages: [userMessage("Continue the migration review next session and preserve unresolved items.")],
+      prePromptMessageCount: 0,
+      runtimeContext: { workspaceDir: tempDir },
+    });
+
+    const reviewed = await engine.review?.({
+      sessionId: "sess-review",
+      sessionKey: "agent:review",
+      sessionFile: path.join(tempDir, "session.jsonl"),
+      runtimeContext: { workspaceDir: tempDir },
+      reason: "manual",
+    });
+
+    const snapshot = await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId: "agent:review",
+    });
+    expect(reviewed?.reviewed).toBe(true);
+    expect(snapshot.workingMemory.carryForwardSummary).toBeTruthy();
   });
 });

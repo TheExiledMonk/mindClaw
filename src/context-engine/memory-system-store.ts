@@ -1468,27 +1468,74 @@ function rankLongTermEntries(
 function expandRelatedMemories(
   selected: LongTermMemoryEntry[],
   allEntries: LongTermMemoryEntry[],
+  taskMode: MemoryTaskMode,
   graph?: MemoryGraphSnapshot,
 ): LongTermMemoryEntry[] {
   const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
   const expanded: LongTermMemoryEntry[] = [];
   const seen = new Set<string>(selected.map((entry) => entry.id));
   const selectedIds = new Set(selected.map((entry) => entry.id));
+  const allowedRelationTypes = (() => {
+    switch (taskMode) {
+      case "coding":
+        return new Set<MemoryRelationType>(["derived_from", "relevant_to", "confirmed_by"]);
+      case "support":
+        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "relevant_to"]);
+      case "planning":
+        return new Set<MemoryRelationType>(["relevant_to", "superseded_by", "derived_from"]);
+      case "debugging":
+        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "derived_from"]);
+      default:
+        return new Set<MemoryRelationType>([
+          "derived_from",
+          "relevant_to",
+          "superseded_by",
+          "contradicts",
+          "confirmed_by",
+          "linked_to",
+        ]);
+    }
+  })();
+  const relationPriority = (type: MemoryRelationType): number => {
+    switch (type) {
+      case "contradicts":
+        return taskMode === "debugging" || taskMode === "support" ? 4 : 1;
+      case "confirmed_by":
+        return taskMode === "support" ? 4 : 2;
+      case "derived_from":
+        return taskMode === "coding" ? 4 : 2;
+      case "superseded_by":
+        return taskMode === "planning" ? 3 : 1;
+      case "relevant_to":
+        return 3;
+      default:
+        return 1;
+    }
+  };
+  const candidateRelations = selected.flatMap((entry) =>
+    entry.relations
+      .filter((relation) => allowedRelationTypes.has(relation.type))
+      .map((relation) => ({ source: entry.id, relation })),
+  );
+  candidateRelations.sort(
+    (a, b) =>
+      relationPriority(b.relation.type) - relationPriority(a.relation.type) ||
+      b.relation.weight - a.relation.weight,
+  );
 
-  for (const entry of selected) {
-    for (const relation of entry.relations) {
-      if (relation.weight < 0.5 || seen.has(relation.targetMemoryId)) {
-        continue;
-      }
-      const related = byId.get(relation.targetMemoryId);
-      if (!related || related.activeStatus === "superseded") {
-        continue;
-      }
-      seen.add(related.id);
-      expanded.push(related);
-      if (expanded.length >= MAX_PACKET_ITEMS) {
-        return expanded;
-      }
+  for (const candidate of candidateRelations) {
+    const relation = candidate.relation;
+    if (relation.weight < 0.5 || seen.has(relation.targetMemoryId)) {
+      continue;
+    }
+    const related = byId.get(relation.targetMemoryId);
+    if (!related || related.activeStatus === "superseded") {
+      continue;
+    }
+    seen.add(related.id);
+    expanded.push(related);
+    if (expanded.length >= MAX_PACKET_ITEMS) {
+      return expanded;
     }
   }
 
@@ -1497,7 +1544,12 @@ function expandRelatedMemories(
   }
 
   for (const edge of graph.edges) {
-    if (!selectedIds.has(edge.from) || seen.has(edge.to) || edge.weight < 0.5) {
+    if (
+      !selectedIds.has(edge.from) ||
+      seen.has(edge.to) ||
+      edge.weight < 0.5 ||
+      !allowedRelationTypes.has(edge.type)
+    ) {
       continue;
     }
     const related = byId.get(edge.to);
@@ -1556,7 +1608,12 @@ export function retrieveMemoryContextPacket(
       `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
     );
   }
-  const relatedExpansion = expandRelatedMemories(longTerm, snapshot.longTermMemory, snapshot.graph);
+  const relatedExpansion = expandRelatedMemories(
+    longTerm,
+    snapshot.longTermMemory,
+    taskMode,
+    snapshot.graph,
+  );
   if (relatedExpansion.length > 0) {
     retrievalItems.push(
       ...relatedExpansion.map((item) => ({

@@ -19,6 +19,7 @@ import type {
   AssembleResult,
   CompactResult,
   IngestResult,
+  ReviewResult,
 } from "./types.js";
 
 vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
@@ -106,6 +107,21 @@ class MockContextEngine implements ContextEngine {
   async dispose(): Promise<void> {
     // no-op
   }
+
+  async review(_params: {
+    sessionId: string;
+    sessionFile: string;
+    reason?: "manual" | "compaction" | "checkpoint";
+    sessionKey?: string;
+    runtimeContext?: Record<string, unknown>;
+  }): Promise<ReviewResult> {
+    return {
+      reviewed: true,
+      summary: "mock review",
+      archivedMemoryIds: [],
+      staleMemoryIds: [],
+    };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -178,6 +194,18 @@ describe("Engine contract tests", () => {
     const engine = new MockContextEngine();
     // Should complete without error
     await expect(engine.dispose()).resolves.toBeUndefined();
+  });
+
+  it("review() returns review metadata when implemented", async () => {
+    const engine = new MockContextEngine();
+    const result = await engine.review?.({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.json",
+      reason: "manual",
+    });
+
+    expect(result?.reviewed).toBe(true);
+    expect(result?.summary).toBe("mock review");
   });
 
   it("legacy compact preserves runtimeContext currentTokenCount when top-level value is absent", async () => {

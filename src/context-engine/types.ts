@@ -43,6 +43,13 @@ export type BootstrapResult = {
   reason?: string;
 };
 
+export type ReviewResult = {
+  reviewed: boolean;
+  summary?: string;
+  archivedMemoryIds?: string[];
+  staleMemoryIds?: string[];
+};
+
 export type ContextEngineInfo = {
   id: string;
   name: string;
@@ -152,6 +159,17 @@ export interface ContextEngine {
     /** Optional runtime-owned context for engines that need caller state. */
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<CompactResult>;
+
+  /**
+   * Run a deeper review/consolidation pass outside the normal live-turn path.
+   */
+  review?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    runtimeContext?: ContextEngineRuntimeContext;
+    reason?: "manual" | "compaction" | "checkpoint";
+  }): Promise<ReviewResult>;
 
   /**
    * Prepare context-engine-managed subagent state before the child run starts.

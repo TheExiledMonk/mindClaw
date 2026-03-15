@@ -1241,6 +1241,32 @@ describe("agentic-state", () => {
     );
   });
 
+  it("uses memory-backed clarification subtype guidance when the current blocker is generic", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Resume the deployment task once the prerequisite is available.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:environment_variable trend=watch",
+      ].join("\n"),
+    });
+
+    expect(state.plannerState.retryClass).toBe("clarify");
+    expect(state.plannerState.nextAction).toContain(
+      "Configure the missing environment variable before retrying.",
+    );
+    expect(buildAgenticHandoffReport(state).resumeCondition).toContain(
+      "Configure the missing environment variable before resuming.",
+    );
+  });
+
   it("preserves clarification blocker subtypes in failure learning and procedural records", () => {
     const envVarState = buildAgenticExecutionState({
       messages: [

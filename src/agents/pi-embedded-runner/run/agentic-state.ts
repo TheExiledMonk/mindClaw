@@ -315,7 +315,8 @@ export type AgenticAcceptanceScenarioId =
   | "clarification_alignment"
   | "nonblocking_missing_information_alignment"
   | "clarification_payload_alignment"
-  | "clarification_strategy_alignment";
+  | "clarification_strategy_alignment"
+  | "memory_backed_clarification_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -460,6 +461,34 @@ type AgenticRegressionMemorySignal = {
   mergePreferredFamilies: string[];
   preferredFallbackSkills: string[];
 };
+
+function pickClarificationReasonFromMemory(
+  memoryRegressionSignals?: AgenticRegressionMemorySignal,
+): string | undefined {
+  return memoryRegressionSignals?.qualityFailureReasons.find((reason) =>
+    reason.startsWith("missing_information:"),
+  );
+}
+
+function buildClarificationNextAction(reason?: string): string {
+  return reason === "missing_information:environment_variable"
+    ? "Configure the missing environment variable before retrying."
+    : reason === "missing_information:approval"
+      ? "Obtain the required approval before retrying."
+      : reason === "missing_information:external_input"
+        ? "Request the missing external input before retrying."
+        : "Clarify the missing input or fetch the missing prerequisite before retrying.";
+}
+
+function buildClarificationResumeCondition(reason?: string): string {
+  return reason === "missing_information:environment_variable"
+    ? "Configure the missing environment variable before resuming."
+    : reason === "missing_information:approval"
+      ? "Obtain the required approval before resuming."
+      : reason === "missing_information:external_input"
+        ? "Provide the missing external input before resuming."
+        : "Capture an observed validation command or missing prerequisite before resuming.";
+}
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   if (!memoryText) {
@@ -752,7 +781,7 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     : [];
   const qualityFailureReasons = uniqueCompact(
     lines.flatMap((line) => {
-      const reasonsMatch = line.match(/reasons=([a-z0-9_,.-]+)/i);
+      const reasonsMatch = line.match(/reasons=([a-z0-9_:,.-]+)/i);
       if (!reasonsMatch) {
         return [];
       }
@@ -1301,7 +1330,10 @@ function buildPlannerState(params: {
   const blockingMissingInformation =
     dominantFailureClass === "missing_information" &&
     params.verificationState.outcome === "blocked";
-  const clarificationReason = getPrimaryClarificationReason(params.blockers);
+  const clarificationReason = resolveClarificationReason({
+    blockers: params.blockers,
+    memoryRegressionSignals,
+  });
   const templateFamilyActive =
     Boolean(likelyPrimaryFamily) &&
     memoryRegressionSignals.templatePreferredFamilies.includes(likelyPrimaryFamily ?? "");
@@ -1360,13 +1392,7 @@ function buildPlannerState(params: {
       nextAction: shouldEscalate
         ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
         : blockingMissingInformation
-          ? clarificationReason === "missing_information:environment_variable"
-            ? "Configure the missing environment variable before retrying."
-            : clarificationReason === "missing_information:approval"
-              ? "Obtain the required approval before retrying."
-              : clarificationReason === "missing_information:external_input"
-                ? "Request the missing external input before retrying."
-                : "Clarify the missing input or fetch the missing prerequisite before retrying."
+          ? buildClarificationNextAction(clarificationReason)
           : mergeFamilyFallbackSkills.length > 0
             ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${mergeFallbackHint}${fallbackHint}`.trim()
             : templateFamilyActive
@@ -2314,6 +2340,26 @@ function getPrimaryClarificationReason(blockers: string[]): string | undefined {
   return extractClarificationFailureReasons(blockers)[0];
 }
 
+function resolveClarificationReason(params: {
+  blockers: string[];
+  memoryRegressionSignals?: AgenticRegressionMemorySignal;
+}): string | undefined {
+  const blockerReason = getPrimaryClarificationReason(params.blockers);
+  const memoryReason = pickClarificationReasonFromMemory(params.memoryRegressionSignals);
+  if (!blockerReason || blockerReason === "missing_information:file_or_input") {
+    return memoryReason ?? blockerReason;
+  }
+  return blockerReason;
+}
+
+function pickSpecificClarificationFailureReason(reasons: string[]): string | undefined {
+  const specificReason = reasons.find(
+    (reason) =>
+      reason.startsWith("missing_information:") && reason !== "missing_information:file_or_input",
+  );
+  return specificReason ?? reasons.find((reason) => reason.startsWith("missing_information:"));
+}
+
 function extractClarificationSummary(state: AgenticExecutionState): string | undefined {
   if (state.plannerState.retryClass !== "clarify") {
     return undefined;
@@ -2423,6 +2469,7 @@ function buildFailureLearningState(params: {
   plannerState: AgenticPlannerState;
   orchestrationState: AgenticOrchestrationState;
   blockers: string[];
+  memoryRegressionSignals?: AgenticRegressionMemorySignal;
 }): AgenticFailureLearningState {
   const failurePattern: AgenticFailureLearningState["failurePattern"] =
     params.verificationState.outcome === "verified"
@@ -2436,7 +2483,16 @@ function buildFailureLearningState(params: {
   const failureReasons = uniqueCompact(
     [
       ...params.verificationState.failureClasses,
-      ...extractClarificationFailureReasons(params.blockers),
+      ...uniqueCompact(
+        [
+          resolveClarificationReason({
+            blockers: params.blockers,
+            memoryRegressionSignals: params.memoryRegressionSignals,
+          }),
+          ...extractClarificationFailureReasons(params.blockers),
+        ],
+        4,
+      ),
       params.plannerState.escalationReason,
     ],
     8,
@@ -2728,6 +2784,7 @@ export function buildAgenticExecutionState(params: {
     plannerState,
     orchestrationState,
     blockers,
+    memoryRegressionSignals,
   });
   const orchestrationReconciledPlannerState = reconcilePlannerStateWithOrchestration({
     plannerState,
@@ -3300,7 +3357,13 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
     4,
   ).join(" ");
   const clarificationSummary = extractClarificationSummary(state);
-  const clarificationReason = getPrimaryClarificationReason(state.taskState.blockers);
+  const blockerClarificationReason = getPrimaryClarificationReason(state.taskState.blockers);
+  const clarificationReason =
+    !blockerClarificationReason ||
+    blockerClarificationReason === "missing_information:file_or_input"
+      ? (pickSpecificClarificationFailureReason(state.failureLearningState.failureReasons) ??
+        blockerClarificationReason)
+      : blockerClarificationReason;
   const operatorReason =
     state.governanceState.reasons[0] ??
     (state.plannerState.retryClass === "clarify" ? "await_validation_context" : undefined);
@@ -3318,13 +3381,7 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
       : operatorMode === "escalate"
         ? `Resolve escalation before resuming${state.plannerState.escalationReason ? ` (${state.plannerState.escalationReason})` : ""}.`
         : state.plannerState.retryClass === "clarify"
-          ? clarificationReason === "missing_information:environment_variable"
-            ? "Configure the missing environment variable before resuming."
-            : clarificationReason === "missing_information:approval"
-              ? "Obtain the required approval before resuming."
-              : clarificationReason === "missing_information:external_input"
-                ? "Provide the missing external input before resuming."
-                : "Capture an observed validation command or missing prerequisite before resuming."
+          ? buildClarificationResumeCondition(clarificationReason)
           : undefined;
   const resumePrompt =
     operatorMode === "approval_required"
@@ -5269,6 +5326,47 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Clarification blocker subtypes now drive subtype-specific retry and resume guidance."
         : "Clarification retry and resume guidance stayed too generic for blocker subtypes.",
       details: `env=${envVarState.plannerState.nextAction ?? "none"} approval=${approvalState.plannerState.nextAction ?? "none"} external=${externalInputState.plannerState.nextAction ?? "none"}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the deployment task once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:environment_variable trend=watch",
+      ].join("\n"),
+    });
+    const handoff = buildAgenticHandoffReport(state);
+    const passed =
+      state.plannerState.retryClass === "clarify" &&
+      (state.plannerState.nextAction ?? "").includes(
+        "Configure the missing environment variable before retrying.",
+      ) &&
+      (handoff.resumeCondition ?? "").includes(
+        "Configure the missing environment variable before resuming.",
+      );
+    scenarios.push({
+      id: "memory_backed_clarification_alignment",
+      passed,
+      summary: passed
+        ? "Memory-backed blocker history can bias clarification strategy even when the current blocker is generic."
+        : "Memory-backed blocker history did not bias clarification strategy correctly.",
+      details: `next=${state.plannerState.nextAction ?? "none"} resume=${handoff.resumeCondition ?? "none"}`,
     });
   }
 

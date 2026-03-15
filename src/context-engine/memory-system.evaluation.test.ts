@@ -288,5 +288,17 @@ describe("memory system evaluation scenarios", () => {
           item.text.includes("profile-a"),
       ),
     ).toBe(false);
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.startsWith("artifact anchor") && item.text.includes("profile-a"),
+      ),
+    ).toBe(false);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.startsWith("stable permanent node tree branch") &&
+          item.text.includes("profile-a"),
+      ),
+    ).toBe(false);
   });
 });

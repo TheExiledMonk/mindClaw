@@ -821,6 +821,44 @@ function countExplicitScopeMatches(
   return matches;
 }
 
+function hasExplicitScopeContext(scopeContext?: MemoryScopeContext): boolean {
+  return Boolean(
+    scopeContext?.versionScope || scopeContext?.installProfileScope || scopeContext?.customerScope,
+  );
+}
+
+function resolveEntryAdjudication(
+  entry: Pick<LongTermMemoryEntry, "conceptKey" | "semanticKey">,
+  adjudications?: PersistedMemoryAdjudication[],
+): PersistedMemoryAdjudication | undefined {
+  return adjudications?.find((item) => item.conceptId === getEntryConceptId(entry));
+}
+
+function shouldIncludeScopedEntry(params: {
+  entry: LongTermMemoryEntry;
+  taskMode: MemoryTaskMode;
+  scopeContext?: MemoryScopeContext;
+  adjudications?: PersistedMemoryAdjudication[];
+}): boolean {
+  const adjudication = resolveEntryAdjudication(params.entry, params.adjudications);
+  if (
+    adjudication?.status === "contested" &&
+    params.taskMode !== "debugging" &&
+    params.taskMode !== "support"
+  ) {
+    return false;
+  }
+  if (
+    adjudication?.resolutionKind === "scoped_alternative" &&
+    hasExplicitScopeContext(params.scopeContext) &&
+    countExplicitScopeMatches(params.entry, params.scopeContext) === 0 &&
+    params.taskMode !== "debugging"
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function evaluatePermanenceStatus(
   entry: Pick<
     LongTermMemoryEntry,
@@ -1960,6 +1998,60 @@ function permanentTreeHasMemoryId(
   return flattenPermanentNodes(root).some((node) => node.sourceMemoryIds.includes(memoryId));
 }
 
+function collectRelevantPermanentNodes(params: {
+  permanentMemory: PermanentMemoryNode;
+  longTermMemory: LongTermMemoryEntry[];
+  queryTokens: Set<string>;
+  taskMode: MemoryTaskMode;
+  scopeContext?: MemoryScopeContext;
+  adjudications?: PersistedMemoryAdjudication[];
+}): PermanentMemoryNode[] {
+  const entriesById = new Map(params.longTermMemory.map((entry) => [entry.id, entry]));
+  return flattenPermanentNodes(params.permanentMemory)
+    .filter((node) => node.summary)
+    .filter((node) => {
+      if (node.sourceMemoryIds.length === 0) {
+        return true;
+      }
+      const sourceEntries = node.sourceMemoryIds
+        .map((id) => entriesById.get(id))
+        .filter((entry): entry is LongTermMemoryEntry => Boolean(entry));
+      if (sourceEntries.length === 0) {
+        return true;
+      }
+      return sourceEntries.some((entry) =>
+        shouldIncludeScopedEntry({
+          entry,
+          taskMode: params.taskMode,
+          scopeContext: params.scopeContext,
+          adjudications: params.adjudications,
+        }),
+      );
+    })
+    .toSorted((a, b) => {
+      const aSourceEntries = a.sourceMemoryIds
+        .map((id) => entriesById.get(id))
+        .filter((entry): entry is LongTermMemoryEntry => Boolean(entry));
+      const bSourceEntries = b.sourceMemoryIds
+        .map((id) => entriesById.get(id))
+        .filter((entry): entry is LongTermMemoryEntry => Boolean(entry));
+      const aScope = Math.max(
+        0,
+        ...aSourceEntries.map((entry) => countExplicitScopeMatches(entry, params.scopeContext)),
+      );
+      const bScope = Math.max(
+        0,
+        ...bSourceEntries.map((entry) => countExplicitScopeMatches(entry, params.scopeContext)),
+      );
+      return (
+        bScope - aScope ||
+        computeOverlapScore(b.summary ?? "", params.queryTokens) -
+          computeOverlapScore(a.summary ?? "", params.queryTokens)
+      );
+    })
+    .slice(0, MAX_PACKET_ITEMS);
+}
+
 function selectPermanentBranch(
   entry: Pick<LongTermMemoryEntry, "category" | "ontologyKind">,
 ): string[] {
@@ -2937,25 +3029,12 @@ function rankLongTermEntries(
       if (!includeMemoryForContext(entry, taskMode)) {
         return false;
       }
-      const adjudication = adjudications?.find(
-        (item) => item.conceptId === getEntryConceptId(entry),
-      );
-      const hasExplicitScope = Boolean(
-        scopeContext?.versionScope ||
-        scopeContext?.installProfileScope ||
-        scopeContext?.customerScope ||
-        scopeContext?.environmentTags.length ||
-        scopeContext?.artifactRefs.length,
-      );
-      if (
-        adjudication?.resolutionKind === "scoped_alternative" &&
-        hasExplicitScope &&
-        countExplicitScopeMatches(entry, scopeContext) === 0 &&
-        taskMode !== "debugging"
-      ) {
-        return false;
-      }
-      return true;
+      return shouldIncludeScopedEntry({
+        entry,
+        taskMode,
+        scopeContext,
+        adjudications,
+      });
     })
     .toSorted((a, b) => {
       const statePenalty = (entry: LongTermMemoryEntry): number => {
@@ -2973,9 +3052,7 @@ function rankLongTermEntries(
       const contradictionPenalty = (entry: LongTermMemoryEntry): number =>
         entry.contradictionCount * 1.2;
       const adjudicationBonus = (entry: LongTermMemoryEntry): number => {
-        const adjudication = adjudications?.find(
-          (item) => item.conceptId === getEntryConceptId(entry),
-        );
+        const adjudication = resolveEntryAdjudication(entry, adjudications);
         if (!adjudication) {
           return 0;
         }
@@ -3051,6 +3128,9 @@ function classifyArtifactAnchorBucket(
 function collectArtifactAnchoredMemories(params: {
   selectedArtifactRefs: string[];
   longTermMemory: LongTermMemoryEntry[];
+  taskMode: MemoryTaskMode;
+  scopeContext?: MemoryScopeContext;
+  adjudications?: PersistedMemoryAdjudication[];
   graph?: MemoryGraphSnapshot;
 }): {
   constraints: LongTermMemoryEntry[];
@@ -3075,7 +3155,17 @@ function collectArtifactAnchoredMemories(params: {
       continue;
     }
     const related = byId.get(edge.to);
-    if (!related || !includeMemoryForContext(related, "planning") || seen.has(related.id)) {
+    if (
+      !related ||
+      !includeMemoryForContext(related, params.taskMode) ||
+      !shouldIncludeScopedEntry({
+        entry: related,
+        taskMode: params.taskMode,
+        scopeContext: params.scopeContext,
+        adjudications: params.adjudications,
+      }) ||
+      seen.has(related.id)
+    ) {
       continue;
     }
     const bucket = classifyArtifactAnchorBucket(related);
@@ -3212,6 +3302,8 @@ function collectArtifactTraversalExpansion(params: {
   };
   taskMode: MemoryTaskMode;
   longTermMemory: LongTermMemoryEntry[];
+  scopeContext?: MemoryScopeContext;
+  adjudications?: PersistedMemoryAdjudication[];
   graph?: MemoryGraphSnapshot;
   excludeIds?: string[];
 }): Array<{ entry: LongTermMemoryEntry; via: MemoryRelationType; facet: ArtifactAnchorFacet }> {
@@ -3265,6 +3357,12 @@ function collectArtifactTraversalExpansion(params: {
         if (
           entry &&
           includeMemoryForContext(entry, params.taskMode) &&
+          shouldIncludeScopedEntry({
+            entry,
+            taskMode: params.taskMode,
+            scopeContext: params.scopeContext,
+            adjudications: params.adjudications,
+          }) &&
           !seenMemoryIds.has(entry.id)
         ) {
           seenMemoryIds.add(entry.id);
@@ -3386,7 +3484,16 @@ function expandRelatedMemories(
       continue;
     }
     const related = byId.get(relation.targetMemoryId);
-    if (!related || !includeMemoryForContext(related, taskMode)) {
+    if (
+      !related ||
+      !includeMemoryForContext(related, taskMode) ||
+      !shouldIncludeScopedEntry({
+        entry: related,
+        taskMode,
+        scopeContext,
+        adjudications,
+      })
+    ) {
       continue;
     }
     seen.add(related.id);
@@ -3419,23 +3526,15 @@ function expandRelatedMemories(
           continue;
         }
         const artifactRelated = byId.get(artifactEdge.to);
-        if (!artifactRelated || !includeMemoryForContext(artifactRelated, taskMode)) {
-          continue;
-        }
-        const adjudication = adjudications?.find(
-          (item) => item.conceptId === getEntryConceptId(artifactRelated),
-        );
         if (
-          adjudication?.status === "contested" &&
-          taskMode !== "debugging" &&
-          taskMode !== "support"
-        ) {
-          continue;
-        }
-        if (
-          adjudication?.resolutionKind === "scoped_alternative" &&
-          countExplicitScopeMatches(artifactRelated, scopeContext) === 0 &&
-          taskMode !== "debugging"
+          !artifactRelated ||
+          !includeMemoryForContext(artifactRelated, taskMode) ||
+          !shouldIncludeScopedEntry({
+            entry: artifactRelated,
+            taskMode,
+            scopeContext,
+            adjudications,
+          })
         ) {
           continue;
         }
@@ -3448,23 +3547,15 @@ function expandRelatedMemories(
       continue;
     }
     const related = byId.get(edge.to);
-    if (!related || !includeMemoryForContext(related, taskMode)) {
-      continue;
-    }
-    const adjudication = adjudications?.find(
-      (item) => item.conceptId === getEntryConceptId(related),
-    );
     if (
-      adjudication?.status === "contested" &&
-      taskMode !== "debugging" &&
-      taskMode !== "support"
-    ) {
-      continue;
-    }
-    if (
-      adjudication?.resolutionKind === "scoped_alternative" &&
-      countExplicitScopeMatches(related, scopeContext) === 0 &&
-      taskMode !== "debugging"
+      !related ||
+      !includeMemoryForContext(related, taskMode) ||
+      !shouldIncludeScopedEntry({
+        entry: related,
+        taskMode,
+        scopeContext,
+        adjudications,
+      })
     ) {
       continue;
     }
@@ -3546,6 +3637,9 @@ export function retrieveMemoryContextPacket(
   const artifactAnchors = collectArtifactAnchoredMemories({
     selectedArtifactRefs: scopeContext.artifactRefs,
     longTermMemory: snapshot.longTermMemory,
+    taskMode,
+    scopeContext,
+    adjudications,
     graph: snapshot.graph,
   });
   const artifactAnchorLines = [
@@ -3578,6 +3672,8 @@ export function retrieveMemoryContextPacket(
     anchors: artifactAnchors,
     taskMode,
     longTermMemory: snapshot.longTermMemory,
+    scopeContext,
+    adjudications,
     graph: snapshot.graph,
     excludeIds: [...accessedLongTermIds],
   });
@@ -3642,21 +3738,24 @@ export function retrieveMemoryContextPacket(
     );
   }
 
-  const permanent = flattenPermanentNodes(snapshot.permanentMemory)
-    .filter((node) => node.summary)
-    .toSorted(
-      (a, b) =>
-        computeOverlapScore(b.summary ?? "", queryTokens) -
-        computeOverlapScore(a.summary ?? "", queryTokens),
-    )
-    .slice(0, MAX_PACKET_ITEMS)
-    .map((node) => node.summary as string);
+  const permanentNodes = collectRelevantPermanentNodes({
+    permanentMemory: snapshot.permanentMemory,
+    longTermMemory: snapshot.longTermMemory,
+    queryTokens,
+    taskMode,
+    scopeContext,
+    adjudications,
+  });
+  const permanent = permanentNodes.map((node) => node.summary as string);
   if (permanent.length > 0) {
     retrievalItems.push(
-      ...permanent.map((text) => ({
+      ...permanentNodes.map((node) => ({
         kind: "permanent" as const,
-        text,
-        reason: "stable permanent node tree branch",
+        text: node.summary as string,
+        reason:
+          node.sourceMemoryIds.length > 0
+            ? `stable permanent node tree branch (${node.sourceMemoryIds.length} source memories)`
+            : "stable permanent node tree branch",
       })),
     );
     sections.push(

@@ -3839,7 +3839,154 @@ describe("MemorySystemContextEngine", () => {
 
     expect(packet.text).toContain("Skill family guidance:");
     expect(packet.text).toContain("merge_candidate=true");
-    expect(packet.text).toContain("merge_skills=memory-diagnostics,diagnostics-report");
+    expect(packet.text).toContain("merge_skills=diagnostics-report,memory-diagnostics");
+  });
+
+  it("injects durable family trend guidance into retrieved memory packets", () => {
+    const sessionId = "agent:durable-family-guidance-packet";
+    const templateFirst = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Keep the acceptance reporting workflow reusable without duplication."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["acceptance-report"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/acceptance-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: true,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: [],
+          skillFamilies: ["verification"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "low",
+          governanceReasons: [],
+          primarySkill: "acceptance-report",
+          fallbackSkills: [],
+          skillChain: ["acceptance-report"],
+          workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+          rankedSkills: ["acceptance-report"],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          effectiveSkills: ["acceptance-report"],
+          effectiveFamilies: ["verification"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: false,
+          failureReasons: [],
+          nextImprovement: "Parameterize the stable acceptance reporting workflow.",
+        },
+      } as never,
+    });
+    const templateSecond = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Keep the acceptance reporting workflow reusable without duplication."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["acceptance-report"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/acceptance-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: true,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: [],
+          skillFamilies: ["verification"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "low",
+          governanceReasons: [],
+          primarySkill: "acceptance-report",
+          fallbackSkills: [],
+          skillChain: ["acceptance-report"],
+          workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+          rankedSkills: ["acceptance-report"],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          effectiveSkills: ["acceptance-report"],
+          effectiveFamilies: ["verification"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: false,
+          failureReasons: [],
+          nextImprovement: "Keep parameterizing the stable acceptance reporting workflow.",
+        },
+      } as never,
+    });
+    for (const entry of templateFirst.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of templateSecond.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    templateFirst.longTermMemory.push(...templateSecond.longTermMemory);
+    templateFirst.pendingSignificance.push(...templateSecond.pendingSignificance);
+
+    const packet = retrieveMemoryContextPacket(
+      {
+        ...templateFirst,
+      },
+      {
+        messages: [
+          userMessage(
+            "Template the acceptance reporting workflow instead of creating another fork.",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("Skill family guidance:");
+    expect(packet.text).toContain("family=verification");
+    expect(packet.text).toContain("template_candidate=true");
+    expect(packet.text).toContain("durable=true");
+    expect(
+      packet.retrievalItems.some((item) =>
+        item.reason.includes("skill family guidance source=memory_trend"),
+      ),
+    ).toBe(true);
   });
 
   it("injects skill effectiveness guidance into retrieved memory packets", () => {

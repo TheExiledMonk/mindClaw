@@ -1223,6 +1223,80 @@ function deriveMergeScopedFamilies(entries: LongTermMemoryEntry[]): string[] {
     .slice(0, 3);
 }
 
+function formatScopedFamilyGuidanceLine(params: {
+  scopedFamily: string;
+  templateCandidate?: boolean;
+  mergeCandidate?: boolean;
+  mergeSkills?: string[];
+}): string {
+  const [family, scope] = params.scopedFamily.split("@");
+  const [taskMode, env] = (scope ?? "").split("/");
+  return [
+    `family=${family || "unknown"}`,
+    `task_mode=${taskMode || "general"}`,
+    `env=${env || "unknown"}`,
+    "trend=stable",
+    "consolidation=generalize_existing",
+    params.templateCandidate ? "template_candidate=true" : "",
+    params.mergeCandidate ? "merge_candidate=true" : "",
+    params.mergeSkills && params.mergeSkills.length > 0
+      ? `merge_skills=${params.mergeSkills.join(",")}`
+      : "",
+    "durable=true",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function deriveMergeScopedFamilySkills(entries: LongTermMemoryEntry[]): Map<string, string[]> {
+  const skillsByFamily = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const tags = entry.environmentTags ?? [];
+    const consolidationAction = tags
+      .find((tag) => tag.startsWith("procedural:consolidation-action:"))
+      ?.replace("procedural:consolidation-action:", "")
+      .trim();
+    if (consolidationAction !== "generalize_existing") {
+      continue;
+    }
+    const family = tags
+      .find((tag) => tag.startsWith("procedural:skill-family:"))
+      ?.replace("procedural:skill-family:", "")
+      .trim();
+    if (!family) {
+      continue;
+    }
+    const taskMode =
+      tags
+        .find((tag) => tag.startsWith("task-mode:"))
+        ?.replace("task-mode:", "")
+        .trim() || "general";
+    const env =
+      tags
+        .find((tag) => tag.startsWith("procedural:skill-env:"))
+        ?.replace("procedural:skill-env:", "")
+        .trim() || "unknown";
+    const scopedFamily = `${family}@${taskMode}/${env}`;
+    const bucket = skillsByFamily.get(scopedFamily) ?? new Set<string>();
+    for (const skill of tags
+      .filter((tag) => tag.startsWith("procedural:merge-skill:"))
+      .map((tag) => tag.replace("procedural:merge-skill:", "").trim())
+      .filter(Boolean)) {
+      bucket.add(skill);
+    }
+    for (const skill of tags
+      .filter((tag) => tag.startsWith("procedural:overlap-skill:"))
+      .map((tag) => tag.replace("procedural:overlap-skill:", "").trim())
+      .filter(Boolean)) {
+      bucket.add(skill);
+    }
+    if (bucket.size > 0) {
+      skillsByFamily.set(scopedFamily, bucket);
+    }
+  }
+  return new Map([...skillsByFamily.entries()].map(([key, value]) => [key, [...value].toSorted()]));
+}
+
 function normalizeComparable(text: string): string {
   return text
     .toLowerCase()
@@ -6657,6 +6731,7 @@ export function retrieveMemoryContextPacket(
     );
   }
 
+  let emittedSkillFamilyGuidance = false;
   const proceduralGuidance = longTerm.filter((item) =>
     (item.environmentTags ?? []).includes("runtime:procedural"),
   );
@@ -6666,6 +6741,9 @@ export function retrieveMemoryContextPacket(
     const recoveryGuidance = deriveRecoveringScopedSkills(proceduralGuidance);
     const stabilityGuidance = deriveStabilizedScopedSkills(proceduralGuidance);
     const promotionGuidance = derivePromotedScopedSkills(proceduralGuidance);
+    const templateFamilyGuidance = deriveTemplateScopedFamilies(proceduralGuidance);
+    const mergeFamilyGuidance = deriveMergeScopedFamilies(proceduralGuidance);
+    const mergeFamilySkills = deriveMergeScopedFamilySkills(proceduralGuidance);
     if (recommendedSkills.length > 0) {
       sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
     }
@@ -6711,6 +6789,29 @@ export function retrieveMemoryContextPacket(
           })
           .join("\n- ")}`,
       );
+    }
+    const durableFamilyGuidance = uniqueStrings([
+      ...templateFamilyGuidance.map((item) =>
+        formatScopedFamilyGuidanceLine({ scopedFamily: item, templateCandidate: true }),
+      ),
+      ...mergeFamilyGuidance.map((item) =>
+        formatScopedFamilyGuidanceLine({
+          scopedFamily: item,
+          mergeCandidate: true,
+          mergeSkills: mergeFamilySkills.get(item),
+        }),
+      ),
+    ]).slice(0, 4);
+    if (durableFamilyGuidance.length > 0) {
+      retrievalItems.push(
+        ...durableFamilyGuidance.map((line) => ({
+          kind: "long-term" as const,
+          text: line,
+          reason: "skill family guidance source=memory_trend",
+        })),
+      );
+      sections.push(`Skill family guidance:\n- ${durableFamilyGuidance.join("\n- ")}`);
+      emittedSkillFamilyGuidance = true;
     }
     sections.push(
       `Procedural guidance:\n- ${proceduralGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
@@ -6763,7 +6864,7 @@ export function retrieveMemoryContextPacket(
     .map((entry) => ({ entry, line: deriveSkillFamilyGuidanceLine(entry) }))
     .filter((item): item is { entry: LongTermMemoryEntry; line: string } => Boolean(item.line))
     .slice(0, 3);
-  if (skillFamilyGuidance.length > 0) {
+  if (skillFamilyGuidance.length > 0 && !emittedSkillFamilyGuidance) {
     retrievalItems.push(
       ...skillFamilyGuidance.map(({ entry, line }) => ({
         kind: "long-term" as const,

@@ -353,6 +353,32 @@ describe("agentic-state", () => {
     );
   });
 
+  it("uses durable template-ready family trend guidance from memory to generalize a stable skill", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Turn the acceptance reporting workflow into a reusable template without creating another fork.",
+        ),
+      ],
+      availableSkills: ["acceptance-report"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=verification task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
+    expect(state.orchestrationState.mergeCandidate).toBe(false);
+    expect(state.orchestrationState.rationale).toContain(
+      "template-ready verification family guidance",
+    );
+  });
+
   it("uses merge-ready family guidance to merge overlapping sibling skills instead of only templating them", () => {
     const state = buildAgenticExecutionState({
       messages: [

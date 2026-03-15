@@ -290,6 +290,8 @@
     "mac:package": "bash scripts/package-mac-app.sh",
     "mac:restart": "bash scripts/restart-mac.sh",
     "memory:diagnostics": "node --import tsx scripts/memory-diagnostics-report.ts",
+    "memory:diagnostics:markdown": "node --import tsx scripts/memory-diagnostics-report.ts --format markdown",
+    "memory:diagnostics:summary": "node --import tsx scripts/memory-diagnostics-report.ts --format summary",
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",

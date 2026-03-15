@@ -1,6 +1,9 @@
 import process from "node:process";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { generateMemoryDiagnosticsReport } from "../src/context-engine/memory-system-store.js";
+import {
+  formatMemoryDiagnosticsReport,
+  generateMemoryDiagnosticsReport,
+} from "../src/context-engine/memory-system-store.js";
 
 type CliArgs = {
   workspaceDir: string;
@@ -16,7 +19,7 @@ type CliArgs = {
   runRepair: boolean;
   runRecover: boolean;
   outputPath?: string;
-  summaryOnly: boolean;
+  format: "json" | "summary" | "markdown";
   messages: AgentMessage[];
 };
 
@@ -33,7 +36,7 @@ function parseArgs(argv: string[]): CliArgs {
   let runRepair = false;
   let runRecover = false;
   let outputPath: string | undefined;
-  let summaryOnly = false;
+  let format: CliArgs["format"] = "json";
   const acceptanceBackendKinds: Array<"fs-json" | "sqlite-doc" | "sqlite-graph"> = [];
   const messages: AgentMessage[] = [];
 
@@ -102,7 +105,14 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
     if (arg === "--summary-only") {
-      summaryOnly = true;
+      format = "summary";
+      continue;
+    }
+    if (arg === "--format" && next) {
+      if (next === "json" || next === "summary" || next === "markdown") {
+        format = next;
+      }
+      index += 1;
       continue;
     }
     if (arg === "--message" && next) {
@@ -130,31 +140,9 @@ function parseArgs(argv: string[]): CliArgs {
     runRepair,
     runRecover,
     outputPath,
-    summaryOnly,
+    format,
     messages,
   };
-}
-
-function buildSummaryOutput(
-  report: Awaited<ReturnType<typeof generateMemoryDiagnosticsReport>>,
-): string {
-  const lines = [`summary: ${report.summary}`, `health: ${report.health.summary}`];
-  if (report.retrieval) {
-    lines.push(`retrieval: ${report.retrieval.summary}`);
-  }
-  if (report.acceptance) {
-    lines.push(`acceptance: ${report.acceptance.summary}`);
-  }
-  if (report.failedAcceptanceScenarios.length > 0) {
-    lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
-  }
-  if (report.health.issues.length > 0) {
-    lines.push(`issues: ${report.health.issues.join(" | ")}`);
-  }
-  if (report.recommendations.length > 0) {
-    lines.push(`recommendations: ${report.recommendations.join(" | ")}`);
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 async function main(): Promise<void> {
@@ -169,9 +157,7 @@ async function main(): Promise<void> {
     runRepair: args.runRepair,
     runRecover: args.runRecover,
   });
-  const payload = args.summaryOnly
-    ? buildSummaryOutput(report)
-    : `${JSON.stringify(report, null, 2)}\n`;
+  const payload = formatMemoryDiagnosticsReport(report, args.format);
   if (args.outputPath) {
     const fs = await import("node:fs/promises");
     await fs.writeFile(args.outputPath, payload, "utf8");

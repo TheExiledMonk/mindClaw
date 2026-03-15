@@ -378,6 +378,8 @@ export type MemoryDiagnosticsReport = {
   summary: string;
 };
 
+export type MemoryDiagnosticsReportFormat = "json" | "summary" | "markdown";
+
 export type MemoryStoreMaintenanceReport = {
   action: "repair" | "recovery";
   backendKind: MemoryStoreBackendKind;
@@ -6715,6 +6717,92 @@ export async function generateMemoryDiagnosticsReport(params: {
     recommendations,
     summary,
   };
+}
+
+export function formatMemoryDiagnosticsReport(
+  report: MemoryDiagnosticsReport,
+  format: MemoryDiagnosticsReportFormat = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [`summary: ${report.summary}`, `health: ${report.health.summary}`];
+    if (report.retrieval) {
+      lines.push(`retrieval: ${report.retrieval.summary}`);
+    }
+    if (report.acceptance) {
+      lines.push(`acceptance: ${report.acceptance.summary}`);
+    }
+    if (report.failedAcceptanceScenarios.length > 0) {
+      lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
+    }
+    if (report.health.issues.length > 0) {
+      lines.push(`issues: ${report.health.issues.join(" | ")}`);
+    }
+    if (report.recommendations.length > 0) {
+      lines.push(`recommendations: ${report.recommendations.join(" | ")}`);
+    }
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Memory Diagnostics Report",
+    "",
+    `- Generated: ${new Date(report.generatedAt).toISOString()}`,
+    `- Session: \`${report.sessionId}\``,
+    `- Backend: \`${report.backendKind}\``,
+    "",
+    "## Summary",
+    "",
+    report.summary,
+    "",
+    "## Health",
+    "",
+    `- Summary: ${report.health.summary}`,
+    `- Issues: ${report.health.issues.length > 0 ? report.health.issues.join("; ") : "none"}`,
+    `- Recommendations: ${report.recommendations.length > 0 ? report.recommendations.join("; ") : "none"}`,
+    `- Contested concepts: ${report.health.contestedConceptCount}`,
+    `- Entity-linked contested concepts: ${report.health.contestedEntityConflictCount}`,
+    `- Weak-evidence winners: ${report.health.weakEvidenceWinnerCount}`,
+    `- Fragile winners: ${report.health.fragileWinnerCount}`,
+    `- Scoped alternatives: ${report.health.scopedAlternativeConceptCount}`,
+    `- Entity-linked concepts: ${report.health.entityLinkedConceptCount}`,
+    "",
+  ];
+  if (report.retrieval) {
+    lines.push(
+      "## Retrieval",
+      "",
+      `- Summary: ${report.retrieval.summary}`,
+      `- Item count: ${report.retrieval.retrievalItemCount}`,
+      `- Long-term items: ${report.retrieval.longTermItemCount}`,
+      `- Permanent items: ${report.retrieval.permanentItemCount}`,
+      `- Contested items: ${report.retrieval.contestedItemCount}`,
+      `- Top reasons: ${report.retrieval.topReasons.length > 0 ? report.retrieval.topReasons.join("; ") : "none"}`,
+      "",
+    );
+  }
+  if (report.acceptance) {
+    lines.push(
+      "## Acceptance",
+      "",
+      `- Summary: ${report.acceptance.summary}`,
+      `- Passed scenarios: ${report.acceptance.passedCount}/${report.acceptance.scenarioCount}`,
+      `- Failed scenarios: ${report.failedAcceptanceScenarios.length > 0 ? report.failedAcceptanceScenarios.join(", ") : "none"}`,
+      "",
+    );
+  }
+  if (report.maintenance) {
+    lines.push("## Maintenance", "");
+    if (report.maintenance.repair) {
+      lines.push(`- Repair: ${report.maintenance.repair.summary}`);
+    }
+    if (report.maintenance.recovery) {
+      lines.push(`- Recovery: ${report.maintenance.recovery.summary}`);
+    }
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 export function runMemorySleepReview(params: {

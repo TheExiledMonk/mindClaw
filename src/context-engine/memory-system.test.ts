@@ -11,6 +11,7 @@ import {
   deriveLongTermMemoryCandidates,
   exportMemoryStoreBundle,
   generateMemoryDiagnosticsReport,
+  formatMemoryDiagnosticsReport,
   importMemoryStoreBundle,
   inspectMemoryStoreHealth,
   inspectMemoryRetrievalObservability,
@@ -2359,6 +2360,12 @@ describe("MemorySystemContextEngine", () => {
     expect(report.failedAcceptanceScenarios).toEqual([]);
     expect(report.maintenance).toBeUndefined();
     expect(report.recommendations.length).toBeGreaterThan(0);
+    const markdown = formatMemoryDiagnosticsReport(report, "markdown");
+    const summary = formatMemoryDiagnosticsReport(report, "summary");
+    expect(markdown).toContain("# Memory Diagnostics Report");
+    expect(markdown).toContain("## Acceptance");
+    expect(summary).toContain("summary:");
+    expect(summary).toContain("acceptance:");
   });
 
   it("includes maintenance details when diagnostics runs repair", async () => {

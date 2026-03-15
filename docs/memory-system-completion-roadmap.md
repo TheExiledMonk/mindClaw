@@ -157,23 +157,34 @@ Prove the system works under realistic long-run conditions and make failures vis
 - the memory system has a repeatable acceptance suite
 - regressions in identity, adjudication, permanence, or retrieval are detectable
 
+## Current Status
+
+The roadmap started with Phase 1 and has materially advanced through all seven phases.
+
+Current status by phase:
+
+- Phase 1: largely complete in the current codebase
+- Phase 2: materially implemented, with remaining work focused on deeper policy rather than missing structure
+- Phase 3: largely implemented, with remaining work focused on richer ontology rules and long-run governance
+- Phase 4: materially implemented
+- Phase 5: materially implemented
+- Phase 6: materially implemented
+- Phase 7: materially implemented, with remaining work focused on broader benchmark breadth
+
 ## Current Priority Order
 
-1. Phase 1: Structured Concept Layer
-2. Phase 2: Revision And Adjudication Engine
-3. Phase 3: Permanent Ontology Hardening
-4. Phase 4: Runtime Integration Expansion
-5. Phase 5: Retrieval And Compiler Maturity
-6. Phase 6: Store Operations And Migrations
-7. Phase 7: Evaluation And Observability
+The remaining priority order is now:
+
+1. Broader benchmark and soak coverage
+2. Deeper adjudication policy for complex multi-concept rivalries
+3. Richer operator tooling and productization polish
+4. Further ontology refinement only if long-run behavior exposes gaps
 
 ## What We Are Doing Next
 
-The next active implementation target is Phase 1.
+The active completion track is now the final production-hardening layer:
 
-Specifically:
-
-- persist concept rows in `sqlite-graph`
-- persist alias rows in `sqlite-graph`
-- reconstruct concept state on load
-- test concept/alias persistence and reload behavior
+- broaden acceptance and soak coverage across more mixed lifecycle scenarios
+- keep tightening adjudication around fragile and entity-linked rivalries
+- improve operator-facing diagnostics, reporting, and release workflows
+- close documentation drift so the docs match the implemented architecture

@@ -2,7 +2,7 @@
 
 ## Current Direction
 
-The integrated memory system now has four explicit architecture layers:
+The integrated memory system is now much closer to a production architecture than a prototype. The most important layers are:
 
 1. Concept identity
    Each durable memory carries a `semanticKey`, stable `id`, `conceptKey`, canonical text, alias history, `ontologyKind`, and adjudication state.
@@ -16,8 +16,11 @@ The integrated memory system now has four explicit architecture layers:
 3. Runtime checkpoints
    The runner can trigger `review()` on compaction and on milestone-like checkpoints, not only during explicit manual review.
 
-4. Storage backend seam
-   The store persists through a dedicated backend interface. `fs-json` remains the simplest backend, `sqlite-doc` stores the same logical documents in a single SQLite file, and `sqlite-graph` now persists memories, permanent nodes, graph nodes, and graph edges as first-class SQLite rows.
+4. Canonical entities
+   Durable memories can now carry persisted canonical `entityIds` in addition to alias bags. Retrieval, concept matching, and adjudication can all reason over shared entity families instead of only text and scope overlap.
+
+5. Storage backend seam
+   The store persists through a dedicated backend interface. `fs-json` remains the simplest backend, `sqlite-doc` stores the same logical documents in a single SQLite file, and `sqlite-graph` persists memories, concepts, revisions, adjudications, permanent nodes, graph nodes, graph edges, and canonical entities as first-class SQLite rows.
 
 ## Permanent Promotion Policy
 
@@ -55,3 +58,16 @@ This is still a first formalization, not a final schema.
 - superseded memories should remain retrievable with downgrade notes when relevant
 - permanent tree branches should reflect updated adjudication state in the same turn
 - checkpoint review should trigger on milestones without spamming every turn
+- scope matrices across customer/version/profile/environment combinations should not bleed
+- weak or fragile winners should be visible to operators before release
+
+## Operator State
+
+Current operator-facing capabilities now include:
+
+- diagnostics in `json`, `summary`, and `markdown` formats
+- acceptance validation and release-style failure gates
+- repair and backup-based recovery
+- explicit health signals for contested concepts, weak winners, fragile winners, and scope alternatives
+
+The largest remaining production gaps are not plumbing gaps. They are deeper semantic refinement and broader long-run benchmark breadth.

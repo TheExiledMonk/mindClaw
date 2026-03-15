@@ -257,7 +257,8 @@ export type AgenticAcceptanceScenarioId =
   | "skill_consolidation_prefers_existing"
   | "consolidation_persists_to_memory"
   | "goal_satisfaction_downgrades_verified_checks"
-  | "long_run_recovery_reaches_goal_satisfaction";
+  | "long_run_recovery_reaches_goal_satisfaction"
+  | "weakening_skills_quality_gate";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -3072,6 +3073,49 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     });
   }
 
+  {
+    const report = runAgenticQualityGate({
+      failOnWeakeningSkills: true,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        weakeningSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
+    const summary = formatAgenticQualityGateReport(report, "summary");
+    const markdown = formatAgenticQualityGateReport(report, "markdown");
+    const passed =
+      !report.passed &&
+      !report.effectivenessPassed &&
+      report.failReasons.includes("weakening_scoped_skills") &&
+      summary.includes("effectiveness=fail") &&
+      markdown.includes("## Effectiveness");
+    scenarios.push({
+      id: "weakening_skills_quality_gate",
+      passed,
+      summary: passed
+        ? "Weakening scoped skills can fail the quality gate and surface in operator-facing output."
+        : "Weakening scoped skills did not flow through the quality gate correctly.",
+      details: `failReasons=${report.failReasons.join("|")} weakening=${report.weakeningSkills.join("|")}`,
+    });
+  }
+
   const failedScenarioIds = scenarios
     .filter((scenario) => !scenario.passed)
     .map((scenario) => scenario.id);
@@ -3484,14 +3528,16 @@ export function runAgenticQualityGate(params?: {
   failOnEscalation?: boolean;
   failOnMissingFallback?: boolean;
   failOnWeakeningSkills?: boolean;
+  acceptanceOverride?: AgenticAcceptanceReport;
+  soakOverride?: AgenticSoakReport;
   memoryTrend?: {
     weakeningSkills?: string[];
     effectiveSkills?: string[];
     trend?: "stable" | "watch" | "regressing";
   };
 }): AgenticQualityGateReport {
-  const acceptance = runAgenticAcceptanceSuite();
-  const soak = runAgenticSoakSuite();
+  const acceptance = params?.acceptanceOverride ?? runAgenticAcceptanceSuite();
+  const soak = params?.soakOverride ?? runAgenticSoakSuite();
   const diagnosticsState = buildAgenticExecutionState({
     messages: params?.messages ?? [],
   });

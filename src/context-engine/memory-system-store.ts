@@ -1998,6 +1998,162 @@ function permanentTreeHasMemoryId(
   return flattenPermanentNodes(root).some((node) => node.sourceMemoryIds.includes(memoryId));
 }
 
+function shouldSurfacePermanentNode(node: PermanentMemoryNode, taskMode: MemoryTaskMode): boolean {
+  if (node.activeStatus === "archived") {
+    return taskMode === "debugging";
+  }
+  if (node.activeStatus === "superseded") {
+    return taskMode === "debugging";
+  }
+  return true;
+}
+
+function clonePermanentNodeForHistory(node: PermanentMemoryNode): PermanentMemoryNode {
+  return {
+    ...node,
+    id: `${node.id}/history`,
+    children: node.children.map(clonePermanentNodeForHistory),
+  };
+}
+
+function shouldKeepStructuralPermanentNode(
+  node: PermanentMemoryNode,
+  parent: PermanentMemoryNode | undefined,
+): boolean {
+  if (!parent) {
+    return true;
+  }
+  if (parent.id === "root") {
+    return new Set([
+      "identity",
+      "projects",
+      "preferences",
+      "operating-rules",
+      "facts",
+      "constraints",
+      "outcomes",
+      "patterns",
+      "history",
+    ]).has(node.label);
+  }
+  if (parent.label === "history") {
+    return node.label === "retired";
+  }
+  return false;
+}
+
+function reconcilePermanentMemoryTree(params: {
+  root: PermanentMemoryNode;
+  longTermMemory: LongTermMemoryEntry[];
+  adjudications?: PersistedMemoryAdjudication[];
+}): PermanentMemoryNode {
+  const sourceById = new Map(params.longTermMemory.map((entry) => [entry.id, entry]));
+  const historyBranch = ensureChildNode(params.root, "history", "context");
+  const retiredBranch = ensureChildNode(historyBranch, "retired", "context");
+
+  const reconcileNode = (
+    node: PermanentMemoryNode,
+    parent: PermanentMemoryNode | undefined,
+  ): PermanentMemoryNode | undefined => {
+    const isHistoryNode = Boolean(parent?.label === "history" || parent?.label === "retired");
+    node.children = node.children
+      .filter((child) => child.id !== historyBranch.id)
+      .map((child) => reconcileNode(child, node))
+      .filter((child): child is PermanentMemoryNode => Boolean(child));
+
+    const sourceEntries = node.sourceMemoryIds
+      .map((id) => sourceById.get(id))
+      .filter((entry): entry is LongTermMemoryEntry => Boolean(entry));
+    if (sourceEntries.length > 0 && !isHistoryNode) {
+      const sourceAdjudications = sourceEntries
+        .map((entry) => resolveEntryAdjudication(entry, params.adjudications))
+        .filter((item): item is PersistedMemoryAdjudication => Boolean(item));
+      const allRetired = sourceEntries.every(
+        (entry) =>
+          entry.activeStatus === "superseded" ||
+          entry.activeStatus === "archived" ||
+          entry.permanenceStatus === "blocked",
+      );
+      const allSuperseded = sourceEntries.every(
+        (entry) => entry.activeStatus === "superseded" || entry.activeStatus === "archived",
+      );
+      const allBlocked = sourceEntries.every((entry) => entry.permanenceStatus === "blocked");
+      const hasScopedAlternatives = sourceAdjudications.some(
+        (item) => item.resolutionKind === "scoped_alternative",
+      );
+
+      node.sourceMemoryIds = uniqueIds(sourceEntries.map((entry) => entry.id));
+      node.confidence = Math.max(
+        node.confidence,
+        ...sourceEntries.map((entry) => entry.confidence),
+      );
+      node.updatedAt = Math.max(node.updatedAt, ...sourceEntries.map((entry) => entry.updatedAt));
+      node.activeStatus = allSuperseded ? "superseded" : allRetired ? "archived" : "active";
+      if (allSuperseded) {
+        node.relationToParent = "superseded_by";
+      }
+      node.evidence = dedupeTexts(
+        [
+          ...node.evidence,
+          allBlocked ? "Archived after permanent invalidation review." : "",
+          hasScopedAlternatives ? "Permanent branch has scoped alternatives." : "",
+        ].filter(Boolean),
+        MAX_WORKING_ITEMS,
+      );
+
+      if (
+        parent &&
+        node.summary &&
+        node.activeStatus !== "active" &&
+        parent.id !== retiredBranch.id
+      ) {
+        const historyKey = normalizeComparable(node.summary);
+        const existingHistory = retiredBranch.children.find(
+          (child) => normalizeComparable(child.summary ?? child.label) === historyKey,
+        );
+        const historyNode = existingHistory ?? clonePermanentNodeForHistory(node);
+        historyNode.id =
+          existingHistory?.id ?? `${retiredBranch.id}/${retiredBranch.children.length + 1}`;
+        historyNode.label = node.label;
+        historyNode.summary = node.summary;
+        historyNode.nodeType = node.nodeType;
+        historyNode.relationToParent =
+          node.activeStatus === "superseded" ? "superseded_by" : "derived_from";
+        historyNode.evidence = dedupeTexts(
+          [...node.evidence, "Retained in permanent history after invalidation review."],
+          MAX_WORKING_ITEMS,
+        );
+        historyNode.sourceMemoryIds = [...node.sourceMemoryIds];
+        historyNode.confidence = node.confidence;
+        historyNode.activeStatus = "archived";
+        historyNode.updatedAt = node.updatedAt;
+        historyNode.children = [];
+        if (!existingHistory) {
+          retiredBranch.children.push(historyNode);
+        }
+      }
+    }
+
+    const isStructural = !node.summary && node.sourceMemoryIds.length === 0;
+    if (
+      node.id !== params.root.id &&
+      node.id !== historyBranch.id &&
+      node.id !== retiredBranch.id &&
+      isStructural &&
+      node.children.length === 0 &&
+      !shouldKeepStructuralPermanentNode(node, parent)
+    ) {
+      return undefined;
+    }
+    return node;
+  };
+
+  params.root.children = params.root.children
+    .map((child) => reconcileNode(child, params.root))
+    .filter((child): child is PermanentMemoryNode => Boolean(child));
+  return params.root;
+}
+
 function collectRelevantPermanentNodes(params: {
   permanentMemory: PermanentMemoryNode;
   longTermMemory: LongTermMemoryEntry[];
@@ -2009,6 +2165,7 @@ function collectRelevantPermanentNodes(params: {
   const entriesById = new Map(params.longTermMemory.map((entry) => [entry.id, entry]));
   return flattenPermanentNodes(params.permanentMemory)
     .filter((node) => node.summary)
+    .filter((node) => shouldSurfacePermanentNode(node, params.taskMode))
     .filter((node) => {
       if (node.sourceMemoryIds.length === 0) {
         return true;
@@ -2812,7 +2969,15 @@ export function compileMemoryState(params: {
     }
     return false;
   });
-  const nextPermanent = mergePermanentMemoryTree(previous?.permanentMemory, permanentCandidates);
+  const nextPermanent = reconcilePermanentMemoryTree({
+    root: mergePermanentMemoryTree(previous?.permanentMemory, permanentCandidates),
+    longTermMemory: nextLongTerm,
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: nextLongTerm,
+      revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    }),
+  });
   const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
 
   const compilerNotes: string[] = [];

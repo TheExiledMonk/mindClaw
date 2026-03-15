@@ -1395,6 +1395,94 @@ describe("memory system store", () => {
     );
   });
 
+  it("archives retired permanent leaves into a history branch", () => {
+    const compiled = compileMemoryState({
+      sessionId: "permanent-history-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "permanent-history-a",
+          messages: [],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-history-old",
+            category: "strategy",
+            text: "Use the old memory-system workaround in src/context-engine/memory-system.ts.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            updatedAt: Date.now() - 1000 * 60 * 60,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the old workaround.",
+        ),
+      ],
+    });
+
+    const history = compiled.permanentMemory.children.find((child) => child.label === "history");
+    const retired = history?.children.find((child) => child.label === "retired");
+    const historicalLeaf = findPermanentNodeBySummary(
+      retired ?? permanentRoot(),
+      "old memory-system workaround",
+    );
+
+    expect(history).toBeTruthy();
+    expect(retired).toBeTruthy();
+    expect(historicalLeaf?.activeStatus).toBe("archived");
+    expect(
+      historicalLeaf?.evidence.some((item) => item.includes("Retained in permanent history")),
+    ).toBe(true);
+  });
+
+  it("does not surface archived permanent leaves during normal retrieval", () => {
+    const compiled = compileMemoryState({
+      sessionId: "permanent-retrieval-archive-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "permanent-retrieval-archive-a",
+          messages: [],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-archive-old",
+            category: "strategy",
+            text: "Use the old memory-system workaround in src/context-engine/memory-system.ts.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            updatedAt: Date.now() - 1000 * 60 * 60,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the old workaround.",
+        ),
+      ],
+    });
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "Plan the permanent memory-system path rollout in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.startsWith("stable permanent node tree branch") &&
+          item.text.includes("old memory-system workaround"),
+      ),
+    ).toBe(false);
+  });
+
   it("extracts generalized pattern memories and marks superseded memories", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",

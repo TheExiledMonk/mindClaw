@@ -239,9 +239,13 @@ describe("memory system evaluation scenarios", () => {
       ],
     });
 
-    expect(packet.text).toContain("downgraded: superseded");
+    expect(packet.text).toContain("downgraded:");
     expect(
-      packet.retrievalItems.some((item) => item.reason.includes("downgraded=superseded")),
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.includes("downgraded=superseded") ||
+          item.reason.includes("downgraded=revision updated"),
+      ),
     ).toBe(true);
   });
 

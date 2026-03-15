@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { MemorySystemContextEngine } from "./memory-system.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildMemoryContextPacket,
   buildWorkingMemorySnapshot,
@@ -14,7 +13,12 @@ import {
   retrieveMemoryContextPacket,
   runMemorySleepReview,
 } from "./memory-system-store.js";
-import type { LongTermMemoryEntry, PendingMemoryEntry, PermanentMemoryNode } from "./memory-system-store.js";
+import type {
+  LongTermMemoryEntry,
+  PendingMemoryEntry,
+  PermanentMemoryNode,
+} from "./memory-system-store.js";
+import { MemorySystemContextEngine } from "./memory-system.js";
 
 const previousCwd = process.cwd();
 
@@ -75,7 +79,8 @@ function pendingEntry(overrides: Partial<PendingMemoryEntry> = {}): PendingMemor
       ...overrides,
     }),
     pendingReason:
-      overrides.pendingReason ?? "needs recurrence or stronger confirmation before durable promotion",
+      overrides.pendingReason ??
+      "needs recurrence or stronger confirmation before durable promotion",
   };
 }
 
@@ -121,7 +126,9 @@ describe("memory system store", () => {
       workingMemory: buildWorkingMemorySnapshot({
         sessionId: "session-a",
         messages: [
-          userMessage("We are building a new bot with short-term, long-term, and permanent memory."),
+          userMessage(
+            "We are building a new bot with short-term, long-term, and permanent memory.",
+          ),
           userMessage("Next we need to integrate the memory system into context compression."),
         ],
       }),
@@ -139,33 +146,33 @@ describe("memory system store", () => {
       pendingSignificance: [],
       graph: emptyGraph(),
       permanentMemory: permanentRoot([
-          {
-            id: "projects",
-            label: "projects",
-            nodeType: "context",
-            relationToParent: "contains",
-            updatedAt: Date.now(),
-            evidence: [],
-            sourceMemoryIds: [],
-            confidence: 1,
-            activeStatus: "active",
-            children: [
-              {
-                id: "projects/current-bot",
-                label: "current-bot",
-                nodeType: "context",
-                relationToParent: "contains",
-                summary: "Permanent node tree is the highest-stability memory layer.",
-                updatedAt: Date.now(),
-                evidence: [],
-                sourceMemoryIds: [],
-                confidence: 0.9,
-                activeStatus: "active",
-                children: [],
-              },
-            ],
-          },
-        ]),
+        {
+          id: "projects",
+          label: "projects",
+          nodeType: "context",
+          relationToParent: "contains",
+          updatedAt: Date.now(),
+          evidence: [],
+          sourceMemoryIds: [],
+          confidence: 1,
+          activeStatus: "active",
+          children: [
+            {
+              id: "projects/current-bot",
+              label: "current-bot",
+              nodeType: "context",
+              relationToParent: "contains",
+              summary: "Permanent node tree is the highest-stability memory layer.",
+              updatedAt: Date.now(),
+              evidence: [],
+              sourceMemoryIds: [],
+              confidence: 0.9,
+              activeStatus: "active",
+              children: [],
+            },
+          ],
+        },
+      ]),
     });
 
     expect(packet).toContain("Integrated memory packet");
@@ -183,9 +190,9 @@ describe("memory system store", () => {
     });
 
     expect(compiled.longTermMemory.some((entry) => entry.category === "episode")).toBe(true);
-    expect(
-      compiled.permanentMemory.children.some((child) => child.label === "projects"),
-    ).toBe(true);
+    expect(compiled.permanentMemory.children.some((child) => child.label === "projects")).toBe(
+      true,
+    );
     expect(Array.isArray(compiled.pendingSignificance)).toBe(true);
     expect(compiled.review.carryForwardSummary).toBeTruthy();
   });
@@ -260,7 +267,8 @@ describe("memory system store", () => {
               id: "ltm-artifact-base",
               kind: "memory",
               category: "strategy",
-              summary: "The main memory integration work lives in src/context-engine/memory-system.ts.",
+              summary:
+                "The main memory integration work lives in src/context-engine/memory-system.ts.",
               confidence: 0.8,
               activeStatus: "active",
               updatedAt: Date.now(),
@@ -269,7 +277,8 @@ describe("memory system store", () => {
               id: "ltm-artifact-related",
               kind: "memory",
               category: "episode",
-              summary: "Previous fix in src/context-engine/memory-system.ts preserved carry-forward behavior.",
+              summary:
+                "Previous fix in src/context-engine/memory-system.ts preserved carry-forward behavior.",
               confidence: 0.8,
               activeStatus: "active",
               updatedAt: Date.now(),
@@ -306,7 +315,9 @@ describe("memory system store", () => {
         permanentMemory: permanentRoot(),
       },
       messages: [
-        userMessage("Compaction should preserve unresolved loops and repo state while we integrate memory."),
+        userMessage(
+          "Compaction should preserve unresolved loops and repo state while we integrate memory.",
+        ),
       ],
     });
 
@@ -391,7 +402,11 @@ describe("memory system store", () => {
         graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
-      { messages: [userMessage("Continue memory-system context assembly and linked pattern review.")] },
+      {
+        messages: [
+          userMessage("Continue memory-system context assembly and linked pattern review."),
+        ],
+      },
     );
 
     expect(packet.text).toContain("Related memory expansion");
@@ -404,7 +419,9 @@ describe("memory system store", () => {
       {
         workingMemory: buildWorkingMemorySnapshot({
           sessionId: "support-a",
-          messages: [userMessage("Support ticket: confirm the customer install fix and next action.")],
+          messages: [
+            userMessage("Support ticket: confirm the customer install fix and next action."),
+          ],
         }),
         longTermMemory: [
           longTermEntry({
@@ -412,8 +429,18 @@ describe("memory system store", () => {
             category: "fact",
             text: "User issue remains unresolved after the initial install fix.",
             relations: [
-              { sourceMemoryId: "ltm-base", type: "confirmed_by", targetMemoryId: "ltm-confirmed", weight: 0.9 },
-              { sourceMemoryId: "ltm-base", type: "derived_from", targetMemoryId: "ltm-derived", weight: 0.95 },
+              {
+                sourceMemoryId: "ltm-base",
+                type: "confirmed_by",
+                targetMemoryId: "ltm-confirmed",
+                weight: 0.9,
+              },
+              {
+                sourceMemoryId: "ltm-base",
+                type: "derived_from",
+                targetMemoryId: "ltm-derived",
+                weight: 0.95,
+              },
             ],
           }),
           longTermEntry({
@@ -449,7 +476,11 @@ describe("memory system store", () => {
         graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
-      { messages: [userMessage("Customer support ticket: confirm the actual install fix and resolution.")] },
+      {
+        messages: [
+          userMessage("Customer support ticket: confirm the actual install fix and resolution."),
+        ],
+      },
     );
 
     expect(supportPacket.text).toContain("Related memory expansion");
@@ -507,6 +538,126 @@ describe("memory system store", () => {
     expect(packet.accessedLongTermIds[0]).toBe("ltm-scoped");
   });
 
+  it("surfaces artifact-anchored constraints, patterns, and outcomes", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "artifact-anchor-a",
+          messages: [
+            userMessage(
+              "Use src/context-engine/memory-system.ts to preserve the migration constraint and inspect the restored outcome.",
+            ),
+          ],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-constraint",
+            category: "decision",
+            text: "Use src/context-engine/memory-system.ts as the canonical integration path and preserve the migration constraint.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.94,
+          }),
+          longTermEntry({
+            id: "ltm-pattern",
+            category: "pattern",
+            text: "Pattern memory: repeated integration safeguards around src/context-engine/memory-system.ts preserve carry-forward behavior.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.9,
+          }),
+          longTermEntry({
+            id: "ltm-outcome",
+            category: "episode",
+            text: "The previous fix in src/context-engine/memory-system.ts restored carry-forward output after regression.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.88,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: {
+          nodes: [
+            {
+              id: "ltm-constraint",
+              kind: "memory",
+              category: "decision",
+              summary: "Use src/context-engine/memory-system.ts as the canonical integration path.",
+              confidence: 0.95,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-pattern",
+              kind: "memory",
+              category: "pattern",
+              summary: "Pattern memory for integration safeguards.",
+              confidence: 0.9,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-outcome",
+              kind: "memory",
+              category: "episode",
+              summary: "Previous fix restored carry-forward output.",
+              confidence: 0.88,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "artifact:src/context-engine/memory-system.ts",
+              kind: "artifact",
+              category: "entity",
+              summary: "src/context-engine/memory-system.ts",
+              artifactRef: "src/context-engine/memory-system.ts",
+              confidence: 0.95,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+          ],
+          edges: [
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-constraint",
+              type: "relevant_to",
+              weight: 0.9,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-pattern",
+              type: "derived_from",
+              weight: 0.92,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-outcome",
+              type: "confirmed_by",
+              weight: 0.88,
+              updatedAt: Date.now(),
+            },
+          ],
+          updatedAt: Date.now(),
+        },
+        permanentMemory: permanentRoot(),
+      },
+      {
+        messages: [
+          userMessage(
+            "Use src/context-engine/memory-system.ts to preserve the migration constraint and inspect the previous restored outcome.",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("Artifact-anchored constraints, patterns, and outcomes");
+    expect(packet.text).toContain("constraint:");
+    expect(packet.text).toContain("pattern:");
+    expect(packet.text).toContain("outcome:");
+    expect(packet.accessedLongTermIds).toContain("ltm-constraint");
+    expect(packet.accessedLongTermIds).toContain("ltm-pattern");
+    expect(packet.accessedLongTermIds).toContain("ltm-outcome");
+  });
+
   it("captures structured runtime scope during compilation", () => {
     const compiled = compileMemoryState({
       sessionId: "runtime-a",
@@ -548,11 +699,20 @@ describe("memory system store", () => {
 
     expect(compiled.graph.nodes.some((node) => node.kind === "artifact")).toBe(true);
     expect(
-      compiled.graph.nodes.some((node) => node.artifactRef === "src/context-engine/memory-system.ts"),
+      compiled.graph.nodes.some(
+        (node) => node.artifactRef === "src/context-engine/memory-system.ts",
+      ),
     ).toBe(true);
     expect(
       compiled.graph.edges.some(
         (edge) => edge.from.startsWith("artifact:") || edge.to.startsWith("artifact:"),
+      ),
+    ).toBe(true);
+    expect(
+      compiled.graph.edges.some(
+        (edge) =>
+          edge.to === "artifact:src/context-engine/memory-system.ts" &&
+          edge.type === "derived_from",
       ),
     ).toBe(true);
   });
@@ -571,7 +731,9 @@ describe("memory system store", () => {
     const currentBot = projects?.children.find((child) => child.label === "current-bot");
     const artifacts = currentBot?.children.find((child) => child.label === "artifacts");
 
-    expect(artifacts?.children.some((child) => child.summary === "src/context-engine/memory-system.ts")).toBe(true);
+    expect(
+      artifacts?.children.some((child) => child.summary === "src/context-engine/memory-system.ts"),
+    ).toBe(true);
     expect(
       artifacts?.children.some((child) => child.summary === "docs/memory-system-integration.md"),
     ).toBe(true);
@@ -598,9 +760,15 @@ describe("memory system store", () => {
         permanentMemory: permanentRoot(),
       },
       messages: [
-        userMessage("Memory-system context assembly should preserve compaction instructions across active sessions."),
-        userMessage("Memory-system context assembly should preserve compaction summaries across active sessions."),
-        userMessage("Use memory-system context assembly instead of legacy compaction instructions because the legacy path is now obsolete."),
+        userMessage(
+          "Memory-system context assembly should preserve compaction instructions across active sessions.",
+        ),
+        userMessage(
+          "Memory-system context assembly should preserve compaction summaries across active sessions.",
+        ),
+        userMessage(
+          "Use memory-system context assembly instead of legacy compaction instructions because the legacy path is now obsolete.",
+        ),
       ],
     });
 
@@ -610,9 +778,9 @@ describe("memory system store", () => {
     );
     expect(compiled.compilerNotes.some((note) => note.includes("generalized pattern"))).toBe(true);
     expect(
-      compiled.longTermMemory.find((entry) => entry.id === "ltm-old")?.relations.some(
-        (relation) => relation.type === "superseded_by",
-      ),
+      compiled.longTermMemory
+        .find((entry) => entry.id === "ltm-old")
+        ?.relations.some((relation) => relation.type === "superseded_by"),
     ).toBe(true);
     expect(compiled.graph.edges.length).toBeGreaterThan(0);
   });
@@ -636,16 +804,18 @@ describe("memory system store", () => {
             compressionState: "latent",
           }),
         ],
-        pendingSignificance: [pendingEntry({ id: "pending-review", text: "Review carry-forward heuristics." })],
+        pendingSignificance: [
+          pendingEntry({ id: "pending-review", text: "Review carry-forward heuristics." }),
+        ],
         permanentMemory: permanentRoot(),
         graph: emptyGraph(),
       },
     });
 
     expect(reviewed.workingMemory.carryForwardSummary).toBeTruthy();
-    expect(reviewed.longTermMemory.find((entry) => entry.id === "ltm-archivable")?.activeStatus).toBe(
-      "archived",
-    );
+    expect(
+      reviewed.longTermMemory.find((entry) => entry.id === "ltm-archivable")?.activeStatus,
+    ).toBe("archived");
     expect(reviewed.review.archivedMemoryIds).toContain("ltm-archivable");
   });
 });
@@ -658,7 +828,9 @@ describe("MemorySystemContextEngine", () => {
     const engine = new MemorySystemContextEngine();
     const messages = [
       userMessage("We are building a new bot on top of OpenClaw."),
-      userMessage("We will use three layers: short-term context, long-term memory, and a permanent node tree."),
+      userMessage(
+        "We will use three layers: short-term context, long-term memory, and a permanent node tree.",
+      ),
       userMessage("Revert to tag v2026.3.13-1, then remove .git and create a new git repo."),
     ];
 
@@ -704,7 +876,9 @@ describe("MemorySystemContextEngine", () => {
       sessionId: "sess-review",
       sessionKey: "agent:review",
       sessionFile: path.join(tempDir, "session.jsonl"),
-      messages: [userMessage("Continue the migration review next session and preserve unresolved items.")],
+      messages: [
+        userMessage("Continue the migration review next session and preserve unresolved items."),
+      ],
       prePromptMessageCount: 0,
       runtimeContext: { workspaceDir: tempDir },
     });

@@ -254,7 +254,10 @@ function clipText(text: string, max = 220): string {
 }
 
 function normalizeComparable(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function tokenize(text: string): string[] {
@@ -295,7 +298,10 @@ function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
   return {
     ...entry,
     evidence: [...entry.evidence],
-    provenance: entry.provenance.map((item) => ({ ...item, derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])] })),
+    provenance: entry.provenance.map((item) => ({
+      ...item,
+      derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])],
+    })),
     relatedMemoryIds: [...entry.relatedMemoryIds],
     relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
   };
@@ -305,7 +311,10 @@ function clonePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
   return {
     ...entry,
     evidence: [...entry.evidence],
-    provenance: entry.provenance.map((item) => ({ ...item, derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])] })),
+    provenance: entry.provenance.map((item) => ({
+      ...item,
+      derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])],
+    })),
     relatedMemoryIds: [...entry.relatedMemoryIds],
     relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
   };
@@ -322,7 +331,7 @@ function mergeRelations(existing: MemoryRelation[], incoming: MemoryRelation[]):
     }
     current.weight = Math.max(current.weight, relation.weight);
   }
-  return [...merged.values()].sort((a, b) => b.weight - a.weight).slice(0, MAX_WORKING_ITEMS);
+  return [...merged.values()].toSorted((a, b) => b.weight - a.weight).slice(0, MAX_WORKING_ITEMS);
 }
 
 function createEmptyGraph(): MemoryGraphSnapshot {
@@ -429,30 +438,30 @@ export function buildWorkingMemorySnapshot(params: {
   compactionSummary?: string;
 }): WorkingMemorySnapshot {
   const lines = gatherRelevantLines(params.messages);
-  const recentEvents = dedupeTexts(lines.slice(-MAX_WORKING_ITEMS).reverse()).reverse();
+  const recentEvents = dedupeTexts(lines.slice(-MAX_WORKING_ITEMS).toReversed()).toReversed();
   const activeFacts = dedupeTexts(
     filterByPattern(
       lines,
       /\b(my|our|we are|i am|this bot|the bot|memory system|context|long[- ]term|permanent)\b/i,
-    ).reverse(),
-  ).reverse();
+    ).toReversed(),
+  ).toReversed();
   const activeGoals = dedupeTexts(
     filterByPattern(
       lines,
       /\b(build|implement|need to|going to|plan to|want to|next|todo|integrate|adjust|revert|create)\b/i,
-    ).reverse(),
-  ).reverse();
+    ).toReversed(),
+  ).toReversed();
   const openLoops = dedupeTexts(
     lines
-      .filter((line) => /\?$/.test(line) || /\b(how|what|should|need to|next)\b/i.test(line))
-      .reverse(),
-  ).reverse();
+      .filter((line) => line.endsWith("?") || /\b(how|what|should|need to|next)\b/i.test(line))
+      .toReversed(),
+  ).toReversed();
   const recentDecisions = dedupeTexts(
     filterByPattern(
       lines,
       /\b(decided|will use|use .* as|revert|remove \.git|create a new git repo|slot|context-engine)\b/i,
-    ).reverse(),
-  ).reverse();
+    ).toReversed(),
+  ).toReversed();
   const rollingSummary = clipText(
     [
       activeGoals[activeGoals.length - 1],
@@ -534,9 +543,12 @@ function detectImportanceClass(category: MemoryCategory, text: string): MemoryIm
   return "temporary";
 }
 
-function detectTaskMode(messages: AgentMessage[], workingMemory?: WorkingMemorySnapshot): MemoryTaskMode {
+function detectTaskMode(
+  messages: AgentMessage[],
+  workingMemory?: WorkingMemorySnapshot,
+): MemoryTaskMode {
   const corpus = [
-    ...(messages.map((message) => extractMessageText(message)).filter(Boolean) as string[]),
+    ...messages.map((message) => extractMessageText(message)).filter(Boolean),
     workingMemory?.rollingSummary ?? "",
     ...(workingMemory?.activeGoals ?? []),
   ]
@@ -561,19 +573,21 @@ function detectTaskMode(messages: AgentMessage[], workingMemory?: WorkingMemoryS
 }
 
 function extractVersionScope(text: string): string | undefined {
-  const match = text.match(/\bv\d+(?:\.\d+)+(?:-\d+)?\b/i) ?? text.match(/\bversion\s+([0-9]+(?:\.[0-9]+)+)\b/i);
+  const match =
+    text.match(/\bv\d+(?:\.\d+)+(?:-\d+)?\b/i) ??
+    text.match(/\bversion\s+([0-9]+(?:\.[0-9]+)+)\b/i);
   return match?.[0]?.trim();
 }
 
 function extractInstallProfileScope(text: string): string | undefined {
-  const match = text.match(/\binstall profile\s+([a-z0-9._-]+)/i) ?? text.match(/\bprofile\s+([a-z0-9._-]+)/i);
+  const match =
+    text.match(/\binstall profile\s+([a-z0-9._-]+)/i) ?? text.match(/\bprofile\s+([a-z0-9._-]+)/i);
   return match?.[1]?.trim();
 }
 
 function extractCustomerScope(text: string): string | undefined {
   const match =
-    text.match(/\bcustomer\s+([a-z0-9._-]+)/i) ??
-    text.match(/\buser\s+([a-z0-9._-]+)/i);
+    text.match(/\bcustomer\s+([a-z0-9._-]+)/i) ?? text.match(/\buser\s+([a-z0-9._-]+)/i);
   return match?.[1]?.trim();
 }
 
@@ -619,7 +633,10 @@ function buildMemoryScopeContext(text: string): MemoryScopeContext {
   };
 }
 
-function mergeScopeContexts(primary: MemoryScopeContext, secondary?: Partial<MemoryScopeContext>): MemoryScopeContext {
+function mergeScopeContexts(
+  primary: MemoryScopeContext,
+  secondary?: Partial<MemoryScopeContext>,
+): MemoryScopeContext {
   return {
     versionScope: primary.versionScope ?? secondary?.versionScope,
     installProfileScope: primary.installProfileScope ?? secondary?.installProfileScope,
@@ -628,10 +645,7 @@ function mergeScopeContexts(primary: MemoryScopeContext, secondary?: Partial<Mem
       ...primary.environmentTags,
       ...(secondary?.environmentTags ?? []),
     ]),
-    artifactRefs: uniqueStrings([
-      ...primary.artifactRefs,
-      ...(secondary?.artifactRefs ?? []),
-    ]),
+    artifactRefs: uniqueStrings([...primary.artifactRefs, ...(secondary?.artifactRefs ?? [])]),
   };
 }
 
@@ -646,7 +660,9 @@ function buildRuntimeScopeContext(params?: {
   };
   const stringArray = (key: string): string[] => {
     const value = runtime?.[key];
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
   };
   const extraPrompt = stringValue("extraSystemPrompt") ?? "";
   return {
@@ -733,7 +749,10 @@ export function deriveLongTermMemoryCandidates(params: {
 
   const compactionSummary = params.compactionSummary?.trim();
   if (compactionSummary) {
-    const scope = mergeScopeContexts(buildMemoryScopeContext(compactionSummary), params.scopeContext);
+    const scope = mergeScopeContexts(
+      buildMemoryScopeContext(compactionSummary),
+      params.scopeContext,
+    );
     durable.push({
       id: `ltm-${Date.now().toString(36)}-compaction`,
       category: "episode",
@@ -800,7 +819,10 @@ export function mergeLongTermMemory(
       ...(current.environmentTags ?? []),
       ...(item.environmentTags ?? []),
     ]);
-    current.artifactRefs = uniqueStrings([...(current.artifactRefs ?? []), ...(item.artifactRefs ?? [])]);
+    current.artifactRefs = uniqueStrings([
+      ...(current.artifactRefs ?? []),
+      ...(item.artifactRefs ?? []),
+    ]);
     current.lastConfirmedAt = Date.now();
     current.trend = "rising";
     current.importanceClass =
@@ -820,7 +842,7 @@ export function mergeLongTermMemory(
     }
   }
   return [...byText.values()]
-    .sort((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
+    .toSorted((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
     .slice(0, MAX_LONG_TERM_ITEMS);
 }
 
@@ -856,11 +878,14 @@ export function mergePendingSignificance(
       ...(current.environmentTags ?? []),
       ...(item.environmentTags ?? []),
     ]);
-    current.artifactRefs = uniqueStrings([...(current.artifactRefs ?? []), ...(item.artifactRefs ?? [])]);
+    current.artifactRefs = uniqueStrings([
+      ...(current.artifactRefs ?? []),
+      ...(item.artifactRefs ?? []),
+    ]);
     current.lastConfirmedAt = Date.now();
   }
   return [...byText.values()]
-    .sort((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
+    .toSorted((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
     .slice(0, MAX_PENDING_ITEMS);
 }
 
@@ -901,9 +926,13 @@ function annotateContradictions(entries: LongTermMemoryEntry[]): LongTermMemoryE
       ...entry,
       contradictionCount,
       activeStatus:
-        contradictionCount > 0 && entry.activeStatus !== "superseded" ? "pending" : entry.activeStatus,
+        contradictionCount > 0 && entry.activeStatus !== "superseded"
+          ? "pending"
+          : entry.activeStatus,
       confidence:
-        contradictionCount > 0 ? Math.max(0.35, entry.confidence - contradictionCount * 0.08) : entry.confidence,
+        contradictionCount > 0
+          ? Math.max(0.35, entry.confidence - contradictionCount * 0.08)
+          : entry.confidence,
     };
   });
 }
@@ -919,7 +948,9 @@ function promotePendingMemories(params: {
 
   for (const item of params.pending) {
     const overlap = Math.max(
-      ...[item.text, ...lines].map((line) => computeOverlapScore(line, new Set(tokenize(item.text)))),
+      ...[item.text, ...lines].map((line) =>
+        computeOverlapScore(line, new Set(tokenize(item.text))),
+      ),
       0,
     );
     const shouldPromote =
@@ -1175,7 +1206,7 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       if (shared.length < 3) {
         continue;
       }
-      const key = shared.slice(0, 4).sort().join("-");
+      const key = shared.slice(0, 4).toSorted().join("-");
       const bucket = groups.get(key) ?? [];
       bucket.push(a, b);
       groups.set(key, bucket);
@@ -1202,7 +1233,10 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
         0.96,
         deduped.reduce((max, entry) => Math.max(max, entry.strength), 0.78) + 0.04,
       ),
-      evidence: dedupeTexts(deduped.flatMap((entry) => entry.evidence), MAX_WORKING_ITEMS),
+      evidence: dedupeTexts(
+        deduped.flatMap((entry) => entry.evidence),
+        MAX_WORKING_ITEMS,
+      ),
       provenance: [
         createProvenanceRecord(
           "derived",
@@ -1277,7 +1311,11 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
 
   for (let i = 0; i < next.length; i += 1) {
     const newer = next[i];
-    if (!/\b(replaced|replace|no longer|obsolete|superseded|fixed permanently|instead of)\b/i.test(newer.text)) {
+    if (
+      !/\b(replaced|replace|no longer|obsolete|superseded|fixed permanently|instead of)\b/i.test(
+        newer.text,
+      )
+    ) {
       continue;
     }
     for (let j = 0; j < next.length; j += 1) {
@@ -1328,7 +1366,9 @@ function reviewMemoryState(params: {
     .filter((entry) => entry.activeStatus === "stale" || entry.compressionState === "latent")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
-  const reviewedPendingIds = params.pendingSignificance.map((entry) => entry.id).slice(0, MAX_WORKING_ITEMS);
+  const reviewedPendingIds = params.pendingSignificance
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
   const carryForwardSummary = clipText(
     [
       params.workingMemory.rollingSummary,
@@ -1347,6 +1387,26 @@ function reviewMemoryState(params: {
     staleMemoryIds,
     reviewedPendingIds,
   };
+}
+
+function selectArtifactRelationType(entry: LongTermMemoryEntry): MemoryRelationType {
+  if (entry.category === "pattern" || entry.category === "strategy") {
+    return "derived_from";
+  }
+  if (
+    entry.category === "episode" ||
+    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(entry.text)
+  ) {
+    return "confirmed_by";
+  }
+  if (
+    entry.category === "decision" ||
+    entry.category === "preference" ||
+    /\b(must|required|always|never|constraint|preserve|keep|use)\b/i.test(entry.text)
+  ) {
+    return "relevant_to";
+  }
+  return "linked_to";
 }
 
 function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSnapshot {
@@ -1370,6 +1430,15 @@ function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSn
     }));
     const artifactEdges = (entry.artifactRefs ?? []).flatMap((ref) => {
       const artifactId = `artifact:${ref}`;
+      const relationType = selectArtifactRelationType(entry);
+      const relationWeight =
+        relationType === "derived_from"
+          ? 0.9
+          : relationType === "confirmed_by"
+            ? 0.88
+            : relationType === "relevant_to"
+              ? 0.86
+              : 0.82;
       if (!artifactNodes.has(artifactId)) {
         artifactNodes.set(artifactId, {
           id: artifactId,
@@ -1386,15 +1455,15 @@ function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSn
         {
           from: entry.id,
           to: artifactId,
-          type: "linked_to" as const,
-          weight: 0.82,
+          type: relationType,
+          weight: relationWeight,
           updatedAt: entry.updatedAt,
         },
         {
           from: artifactId,
           to: entry.id,
-          type: "linked_to" as const,
-          weight: 0.82,
+          type: relationType,
+          weight: relationWeight,
           updatedAt: entry.updatedAt,
         },
       ];
@@ -1411,7 +1480,7 @@ function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSn
   }
   return {
     nodes: [...nodes, ...artifactNodes.values()],
-    edges: [...uniqueEdges.values()].sort((a, b) => b.weight - a.weight),
+    edges: [...uniqueEdges.values()].toSorted((a, b) => b.weight - a.weight),
     updatedAt: Date.now(),
   };
 }
@@ -1586,7 +1655,9 @@ export function compileMemoryState(params: {
     compilerNotes.push(`held ${candidates.pending.length} memories pending significance`);
   }
   if (promotedPending.durable.length > 0) {
-    compilerNotes.push(`promoted ${promotedPending.durable.length} pending memories after recurrence`);
+    compilerNotes.push(
+      `promoted ${promotedPending.durable.length} pending memories after recurrence`,
+    );
   }
   if (patternCandidates.length > 0) {
     compilerNotes.push(`extracted ${patternCandidates.length} generalized pattern memories`);
@@ -1676,7 +1747,7 @@ function rankLongTermEntries(
     }
     return 0;
   };
-  return [...entries].sort((a, b) => {
+  return [...entries].toSorted((a, b) => {
     const scopeBonus = (entry: LongTermMemoryEntry): number => {
       let bonus = 0;
       if (scopeContext?.versionScope && entry.versionScope === scopeContext.versionScope) {
@@ -1691,7 +1762,9 @@ function rankLongTermEntries(
       if (scopeContext?.customerScope && entry.customerScope === scopeContext.customerScope) {
         bonus += 2;
       }
-      if ((entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))) {
+      if (
+        (entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))
+      ) {
         bonus += 1.5;
       }
       if ((entry.artifactRefs ?? []).some((ref) => scopeContext?.artifactRefs.includes(ref))) {
@@ -1711,7 +1784,8 @@ function rankLongTermEntries(
       }
       return 0;
     };
-    const contradictionPenalty = (entry: LongTermMemoryEntry): number => entry.contradictionCount * 1.2;
+    const contradictionPenalty = (entry: LongTermMemoryEntry): number =>
+      entry.contradictionCount * 1.2;
     const aScore =
       computeOverlapScore(a.text, queryTokens) +
       a.strength * 10 +
@@ -1732,6 +1806,78 @@ function rankLongTermEntries(
   });
 }
 
+function classifyArtifactAnchorBucket(
+  entry: LongTermMemoryEntry,
+): "constraint" | "pattern" | "outcome" | undefined {
+  if (entry.category === "pattern" || entry.category === "strategy") {
+    return "pattern";
+  }
+  if (
+    entry.category === "decision" ||
+    entry.category === "preference" ||
+    /\b(must|required|always|never|constraint|preserve|keep|use)\b/i.test(entry.text)
+  ) {
+    return "constraint";
+  }
+  if (
+    entry.category === "episode" ||
+    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(entry.text)
+  ) {
+    return "outcome";
+  }
+  return undefined;
+}
+
+function collectArtifactAnchoredMemories(params: {
+  selectedArtifactRefs: string[];
+  longTermMemory: LongTermMemoryEntry[];
+  graph?: MemoryGraphSnapshot;
+}): {
+  constraints: LongTermMemoryEntry[];
+  patterns: LongTermMemoryEntry[];
+  outcomes: LongTermMemoryEntry[];
+} {
+  if (params.selectedArtifactRefs.length === 0 || !params.graph) {
+    return { constraints: [], patterns: [], outcomes: [] };
+  }
+
+  const byId = new Map(params.longTermMemory.map((entry) => [entry.id, entry]));
+  const selectedArtifacts = new Set(params.selectedArtifactRefs.map((ref) => `artifact:${ref}`));
+  const buckets = {
+    constraint: [] as LongTermMemoryEntry[],
+    pattern: [] as LongTermMemoryEntry[],
+    outcome: [] as LongTermMemoryEntry[],
+  };
+  const seen = new Set<string>();
+
+  for (const edge of params.graph.edges) {
+    if (!selectedArtifacts.has(edge.from)) {
+      continue;
+    }
+    const related = byId.get(edge.to);
+    if (!related || related.activeStatus === "superseded" || seen.has(related.id)) {
+      continue;
+    }
+    const bucket = classifyArtifactAnchorBucket(related);
+    if (!bucket) {
+      continue;
+    }
+    seen.add(related.id);
+    buckets[bucket].push(related);
+  }
+
+  const sortEntries = (entries: LongTermMemoryEntry[]) =>
+    [...entries]
+      .toSorted((a, b) => b.confidence - a.confidence || b.strength - a.strength)
+      .slice(0, MAX_PACKET_ITEMS);
+
+  return {
+    constraints: sortEntries(buckets.constraint),
+    patterns: sortEntries(buckets.pattern),
+    outcomes: sortEntries(buckets.outcome),
+  };
+}
+
 function expandRelatedMemories(
   selected: LongTermMemoryEntry[],
   allEntries: LongTermMemoryEntry[],
@@ -1747,13 +1893,33 @@ function expandRelatedMemories(
   const allowedRelationTypes = (() => {
     switch (taskMode) {
       case "coding":
-        return new Set<MemoryRelationType>(["derived_from", "relevant_to", "confirmed_by", "linked_to"]);
+        return new Set<MemoryRelationType>([
+          "derived_from",
+          "relevant_to",
+          "confirmed_by",
+          "linked_to",
+        ]);
       case "support":
-        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "relevant_to", "linked_to"]);
+        return new Set<MemoryRelationType>([
+          "contradicts",
+          "confirmed_by",
+          "relevant_to",
+          "linked_to",
+        ]);
       case "planning":
-        return new Set<MemoryRelationType>(["relevant_to", "superseded_by", "derived_from", "linked_to"]);
+        return new Set<MemoryRelationType>([
+          "relevant_to",
+          "superseded_by",
+          "derived_from",
+          "linked_to",
+        ]);
       case "debugging":
-        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "derived_from", "linked_to"]);
+        return new Set<MemoryRelationType>([
+          "contradicts",
+          "confirmed_by",
+          "derived_from",
+          "linked_to",
+        ]);
       default:
         return new Set<MemoryRelationType>([
           "derived_from",
@@ -1797,10 +1963,10 @@ function expandRelatedMemories(
     if (relation.weight < 0.5 || seen.has(relation.targetMemoryId)) {
       continue;
     }
-      const related = byId.get(relation.targetMemoryId);
-      if (!related || related.activeStatus === "superseded") {
-        continue;
-      }
+    const related = byId.get(relation.targetMemoryId);
+    if (!related || related.activeStatus === "superseded") {
+      continue;
+    }
     seen.add(related.id);
     expanded.push(related);
     if (expanded.length >= MAX_PACKET_ITEMS) {
@@ -1864,7 +2030,7 @@ export function retrieveMemoryContextPacket(
     snapshot.workingMemory.rollingSummary,
     ...snapshot.workingMemory.activeGoals,
     ...snapshot.workingMemory.recentEvents,
-    ...((params?.messages ?? []).map((message) => extractMessageText(message)).filter(Boolean) as string[]),
+    ...(params?.messages ?? []).map((message) => extractMessageText(message)).filter(Boolean),
   ].join(" ");
   const queryTokens = new Set(tokenize(currentText));
   const taskMode = detectTaskMode(params?.messages ?? [], snapshot.workingMemory);
@@ -1876,15 +2042,15 @@ export function retrieveMemoryContextPacket(
   const workingItems = selectWorkingContext(snapshot);
   if (workingItems.length > 0) {
     retrievalItems.push(...workingItems);
-    sections.push(
-      `Current task summary:\n- ${workingItems.map((item) => item.text).join("\n- ")}`,
-    );
+    sections.push(`Current task summary:\n- ${workingItems.map((item) => item.text).join("\n- ")}`);
   }
 
-  const longTerm = rankLongTermEntries(snapshot.longTermMemory, queryTokens, taskMode, scopeContext).slice(
-    0,
-    MAX_PACKET_ITEMS,
-  );
+  const longTerm = rankLongTermEntries(
+    snapshot.longTermMemory,
+    queryTokens,
+    taskMode,
+    scopeContext,
+  ).slice(0, MAX_PACKET_ITEMS);
   if (longTerm.length > 0) {
     retrievalItems.push(
       ...longTerm.map((item) => ({
@@ -1906,6 +2072,35 @@ export function retrieveMemoryContextPacket(
     .slice(0, MAX_PACKET_ITEMS);
   if (artifactEntries.length > 0) {
     sections.push(`Relevant files and artifacts:\n- ${artifactEntries.join("\n- ")}`);
+  }
+  const artifactAnchors = collectArtifactAnchoredMemories({
+    selectedArtifactRefs: scopeContext.artifactRefs,
+    longTermMemory: snapshot.longTermMemory,
+    graph: snapshot.graph,
+  });
+  const artifactAnchorLines = [
+    ...artifactAnchors.constraints.map((item) => `constraint: ${item.text}`),
+    ...artifactAnchors.patterns.map((item) => `pattern: ${item.text}`),
+    ...artifactAnchors.outcomes.map((item) => `outcome: ${item.text}`),
+  ].slice(0, MAX_PACKET_ITEMS * 2);
+  if (artifactAnchorLines.length > 0) {
+    const anchoredEntries = [
+      ...artifactAnchors.constraints,
+      ...artifactAnchors.patterns,
+      ...artifactAnchors.outcomes,
+    ];
+    retrievalItems.push(
+      ...anchoredEntries.map((item) => ({
+        kind: "long-term" as const,
+        text: `[${item.category}] ${item.text}`,
+        reason: `artifact anchor for ${item.artifactRefs[0] ?? "current scope"}`,
+        memoryId: item.id,
+      })),
+    );
+    accessedLongTermIds.push(...anchoredEntries.map((item) => item.id));
+    sections.push(
+      `Artifact-anchored constraints, patterns, and outcomes:\n- ${artifactAnchorLines.join("\n- ")}`,
+    );
   }
   const relatedExpansion = expandRelatedMemories(
     longTerm,
@@ -1930,7 +2125,9 @@ export function retrieveMemoryContextPacket(
   }
 
   const pending = [...snapshot.pendingSignificance]
-    .sort((a, b) => computeOverlapScore(b.text, queryTokens) - computeOverlapScore(a.text, queryTokens))
+    .toSorted(
+      (a, b) => computeOverlapScore(b.text, queryTokens) - computeOverlapScore(a.text, queryTokens),
+    )
     .slice(0, MAX_PACKET_ITEMS);
   if (pending.length > 0) {
     retrievalItems.push(
@@ -1948,7 +2145,7 @@ export function retrieveMemoryContextPacket(
 
   const permanent = flattenPermanentNodes(snapshot.permanentMemory)
     .filter((node) => node.summary)
-    .sort(
+    .toSorted(
       (a, b) =>
         computeOverlapScore(b.summary ?? "", queryTokens) -
         computeOverlapScore(a.summary ?? "", queryTokens),
@@ -1963,7 +2160,9 @@ export function retrieveMemoryContextPacket(
         reason: "stable permanent node tree branch",
       })),
     );
-    sections.push(`Relevant entities, constraints, and structural memory:\n- ${permanent.join("\n- ")}`);
+    sections.push(
+      `Relevant entities, constraints, and structural memory:\n- ${permanent.join("\n- ")}`,
+    );
   }
 
   const contradictions = detectContradictions(snapshot.longTermMemory);
@@ -2065,7 +2264,9 @@ export function runMemorySleepReview(params: {
     permanentMemory: params.snapshot.permanentMemory,
     graph,
     compilerNotes: [
-      review.carryForwardSummary ? "sleep review refreshed carry-forward summary" : "sleep review completed",
+      review.carryForwardSummary
+        ? "sleep review refreshed carry-forward summary"
+        : "sleep review completed",
       review.archivedMemoryIds.length > 0
         ? `sleep review archived ${review.archivedMemoryIds.length} memories`
         : "sleep review found no archival candidates",
@@ -2143,7 +2344,8 @@ function sanitizeGraphSnapshot(graph: MemoryGraphSnapshot | undefined): MemoryGr
 function sanitizePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
   return {
     ...(sanitizeLongTermEntry(entry) as PendingMemoryEntry),
-    pendingReason: entry.pendingReason ?? "needs recurrence or stronger confirmation before durable promotion",
+    pendingReason:
+      entry.pendingReason ?? "needs recurrence or stronger confirmation before durable promotion",
   };
 }
 
@@ -2183,10 +2385,7 @@ export async function loadMemoryStoreSnapshot(params: {
   );
   const pendingSignificance = await readJsonFile<PendingMemoryEntry[]>(paths.pendingFile, []);
   const permanentMemory = sanitizePermanentNode(
-    await readJsonFile<PermanentMemoryNode>(
-    paths.permanentTreeFile,
-    createPermanentRoot(),
-    ),
+    await readJsonFile<PermanentMemoryNode>(paths.permanentTreeFile, createPermanentRoot()),
   );
   const graph = sanitizeGraphSnapshot(
     await readJsonFile<MemoryGraphSnapshot>(paths.graphFile, createEmptyGraph()),

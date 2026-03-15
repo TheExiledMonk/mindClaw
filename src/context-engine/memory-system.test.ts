@@ -11,6 +11,7 @@ import {
   deriveLongTermMemoryCandidates,
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
+  retrieveMemoryContextPacket,
 } from "./memory-system-store.js";
 
 const previousCwd = process.cwd();
@@ -36,8 +37,10 @@ describe("memory system store", () => {
       ],
     });
 
-    expect(candidates.map((candidate) => candidate.category)).toContain("decision");
-    expect(candidates.some((candidate) => candidate.text.includes("v2026.3.13-1"))).toBe(true);
+    expect(candidates.durable.map((candidate) => candidate.category)).toContain("decision");
+    expect(candidates.durable.some((candidate) => candidate.text.includes("v2026.3.13-1"))).toBe(
+      true,
+    );
   });
 
   it("builds a compact outward-facing memory packet", () => {
@@ -56,9 +59,17 @@ describe("memory system store", () => {
           text: "The memory system should sit between raw context and prompt assembly.",
           strength: 0.9,
           evidence: ["strategy"],
+          sourceType: "system_inferred",
+          confidence: 0.9,
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          accessCount: 0,
+          contradictionCount: 0,
           updatedAt: Date.now(),
         },
       ],
+      pendingSignificance: [],
       permanentMemory: {
         id: "root",
         label: "permanent-memory",
@@ -86,8 +97,8 @@ describe("memory system store", () => {
     });
 
     expect(packet).toContain("Integrated memory packet");
-    expect(packet).toContain("Long-term memory");
-    expect(packet).toContain("Permanent memory tree");
+    expect(packet).toContain("Relevant long-term facts and patterns");
+    expect(packet).toContain("Relevant entities, constraints, and structural memory");
   });
 
   it("compiler reconsolidates compaction summaries into long-term and permanent memory", () => {
@@ -102,6 +113,143 @@ describe("memory system store", () => {
     expect(
       compiled.permanentMemory.children.some((child) => child.label === "projects"),
     ).toBe(true);
+    expect(Array.isArray(compiled.pendingSignificance)).toBe(true);
+  });
+
+  it("promotes recurring pending-significance memories into durable long-term memory", () => {
+    const compiled = compileMemoryState({
+      sessionId: "session-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "session-a",
+          messages: [userMessage("Track the memory compiler plan.")],
+        }),
+        longTermMemory: [],
+        pendingSignificance: [
+          {
+            id: "pending-1",
+            category: "fact",
+            text: "The memory compiler should review pending significance during each integration pass.",
+            strength: 0.76,
+            evidence: ["first observation"],
+            sourceType: "user_stated",
+            confidence: 0.82,
+            importanceClass: "temporary",
+            compressionState: "active",
+            activeStatus: "pending",
+            accessCount: 0,
+            contradictionCount: 0,
+            updatedAt: Date.now(),
+            pendingReason: "needs recurrence or stronger confirmation before durable promotion",
+          },
+        ],
+        permanentMemory: {
+          id: "root",
+          label: "permanent-memory",
+          updatedAt: Date.now(),
+          evidence: [],
+          children: [],
+        },
+      },
+      messages: [
+        userMessage(
+          "The memory compiler should review pending significance during each integration pass and promote recurring items.",
+        ),
+      ],
+    });
+
+    expect(
+      compiled.longTermMemory.some((entry) =>
+        entry.text.includes("review pending significance during each integration pass"),
+      ),
+    ).toBe(true);
+    expect(compiled.pendingSignificance).toHaveLength(0);
+  });
+
+  it("reactivates latent memories when the current turn matches them again", () => {
+    const oldTimestamp = Date.now() - 1000 * 60 * 60 * 24 * 45;
+    const compiled = compileMemoryState({
+      sessionId: "session-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "session-a",
+          messages: [],
+        }),
+        longTermMemory: [
+          {
+            id: "ltm-latent",
+            category: "strategy",
+            text: "Memory compaction should preserve unresolved loops and repo-state facts.",
+            strength: 0.7,
+            evidence: ["prior project lesson"],
+            sourceType: "summary_derived",
+            confidence: 0.76,
+            importanceClass: "useful",
+            compressionState: "latent",
+            activeStatus: "active",
+            accessCount: 0,
+            contradictionCount: 0,
+            updatedAt: oldTimestamp,
+          },
+        ],
+        pendingSignificance: [],
+        permanentMemory: {
+          id: "root",
+          label: "permanent-memory",
+          updatedAt: Date.now(),
+          evidence: [],
+          children: [],
+        },
+      },
+      messages: [
+        userMessage("Compaction should preserve unresolved loops and repo state while we integrate memory."),
+      ],
+    });
+
+    const latent = compiled.longTermMemory.find((entry) => entry.id === "ltm-latent");
+    expect(latent?.compressionState).toBe("stable");
+    expect(compiled.compilerNotes.some((note) => note.includes("reactivated"))).toBe(true);
+  });
+
+  it("retrieval packet includes audit data and task-mode detection", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "session-a",
+          messages: [userMessage("We need to implement the context engine and fix tests.")],
+        }),
+        longTermMemory: [
+          {
+            id: "ltm-1",
+            category: "decision",
+            text: "Use memory-system as the default context engine.",
+            strength: 0.95,
+            evidence: ["decision"],
+            sourceType: "user_stated",
+            confidence: 0.95,
+            importanceClass: "critical",
+            compressionState: "stable",
+            activeStatus: "active",
+            accessCount: 0,
+            contradictionCount: 0,
+            updatedAt: Date.now(),
+          },
+        ],
+        pendingSignificance: [],
+        permanentMemory: {
+          id: "root",
+          label: "permanent-memory",
+          updatedAt: Date.now(),
+          evidence: [],
+          children: [],
+        },
+      },
+      { messages: [userMessage("Implement the context engine compiler and tests.")] },
+    );
+
+    expect(packet.taskMode).toBe("coding");
+    expect(packet.accessedLongTermIds).toContain("ltm-1");
+    expect(packet.text).toContain("Retrieval audit");
   });
 });
 
@@ -140,7 +288,9 @@ describe("MemorySystemContextEngine", () => {
       messages,
     });
     expect(assembled.systemPromptAddition).toContain("Integrated memory packet");
-    expect(assembled.systemPromptAddition).toContain("Permanent memory tree");
+    expect(assembled.systemPromptAddition).toContain(
+      "Relevant entities, constraints, and structural memory",
+    );
 
     const memoryRoot = path.join(tempDir, MEMORY_SYSTEM_DIRNAME);
     await expect(fs.stat(memoryRoot)).resolves.toBeTruthy();

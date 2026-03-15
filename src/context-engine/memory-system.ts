@@ -12,10 +12,11 @@ import type {
 import { registerContextEngine } from "./registry.js";
 import { LegacyContextEngine } from "./legacy.js";
 import {
-  buildMemoryContextPacket,
   compileMemoryState,
   loadMemoryStoreSnapshot,
   persistMemoryStoreSnapshot,
+  retrieveMemoryContextPacket,
+  touchRetrievedMemories,
 } from "./memory-system-store.js";
 
 function resolveWorkspaceDir(runtimeContext?: ContextEngineRuntimeContext): string {
@@ -87,11 +88,21 @@ export class MemorySystemContextEngine implements ContextEngine {
       workspaceDir: process.cwd(),
       sessionId: params.sessionKey ?? params.sessionId,
     });
-    const memoryPacket = buildMemoryContextPacket(snapshot);
+    const packet = retrieveMemoryContextPacket(snapshot, { messages: params.messages });
+    if (packet.accessedLongTermIds.length > 0) {
+      await persistMemoryStoreSnapshot({
+        workspaceDir: process.cwd(),
+        sessionId: params.sessionKey ?? params.sessionId,
+        workingMemory: snapshot.workingMemory,
+        longTermMemory: touchRetrievedMemories(snapshot.longTermMemory, packet.accessedLongTermIds),
+        pendingSignificance: snapshot.pendingSignificance,
+        permanentMemory: snapshot.permanentMemory,
+      });
+    }
     return {
       messages: params.messages,
-      estimatedTokens: memoryPacket ? Math.ceil(memoryPacket.length / 4) : 0,
-      systemPromptAddition: memoryPacket,
+      estimatedTokens: packet.text ? Math.ceil(packet.text.length / 4) : 0,
+      systemPromptAddition: packet.text,
     };
   }
 
@@ -132,6 +143,7 @@ export class MemorySystemContextEngine implements ContextEngine {
       sessionId,
       workingMemory: incremental.workingMemory,
       longTermMemory: incremental.longTermMemory,
+      pendingSignificance: incremental.pendingSignificance,
       permanentMemory: incremental.permanentMemory,
     });
   }
@@ -176,6 +188,7 @@ export class MemorySystemContextEngine implements ContextEngine {
         sessionId,
         workingMemory: compiled.workingMemory,
         longTermMemory: compiled.longTermMemory,
+        pendingSignificance: compiled.pendingSignificance,
         permanentMemory: compiled.permanentMemory,
       });
     }

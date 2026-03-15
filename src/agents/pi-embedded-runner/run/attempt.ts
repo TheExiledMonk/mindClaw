@@ -1494,6 +1494,7 @@ export function buildAfterTurnRuntimeContext(params: {
     messages: params.messages ?? [],
     activeArtifacts,
     workspaceTags,
+    workspaceState,
     toolSignals,
     diffSignals,
     checkpointSignals,
@@ -1515,6 +1516,8 @@ export function buildAfterTurnRuntimeContext(params: {
     plannerState: agenticState.plannerState,
     governanceState: agenticState.governanceState,
     orchestrationState: agenticState.orchestrationState,
+    environmentState: agenticState.environmentState,
+    failureLearningState: agenticState.failureLearningState,
     toolSignals,
     diffSignals,
   });
@@ -1549,6 +1552,8 @@ export function buildAfterTurnRuntimeContext(params: {
     plannerState: agenticState.plannerState,
     governanceState: agenticState.governanceState,
     orchestrationState: agenticState.orchestrationState,
+    environmentState: agenticState.environmentState,
+    failureLearningState: agenticState.failureLearningState,
     proceduralExecution,
   };
 }
@@ -2396,6 +2401,7 @@ export async function runEmbeddedAttempt(
               .join(" ");
             return buildAgenticExecutionState({
               messages: activeSession.messages,
+              workspaceTags: [],
               availableSkills,
               availableSkillInfo:
                 params.skillsSnapshot?.skills.map((skill) => ({

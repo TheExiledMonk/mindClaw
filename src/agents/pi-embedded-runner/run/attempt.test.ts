@@ -1322,6 +1322,13 @@ describe("buildAfterTurnRuntimeContext", () => {
       primarySkill: "typescript-build-fix",
       skillChain: expect.arrayContaining(["typescript-build-fix"]),
     });
+    expect(runtimeContext.environmentState).toMatchObject({
+      workspaceKind: "temporary",
+      capabilitySignals: expect.arrayContaining(["can_execute_commands"]),
+    });
+    expect(runtimeContext.failureLearningState).toMatchObject({
+      failurePattern: "clean_success",
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       availableSkills: expect.arrayContaining(["typescript-build-fix"]),
       toolChain: expect.arrayContaining(["exec"]),
@@ -1329,6 +1336,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       retryClass: "same_path_retry",
       autonomyMode: "continue",
       primarySkill: "typescript-build-fix",
+      workspaceKind: "temporary",
+      failurePattern: "clean_success",
     });
   });
 
@@ -1387,6 +1396,10 @@ describe("buildAfterTurnRuntimeContext", () => {
       primarySkill: "memory-diagnostics",
       fallbackSkills: expect.arrayContaining(["acceptance-report"]),
     });
+    expect(runtimeContext.failureLearningState).toMatchObject({
+      failurePattern: "near_miss",
+      learnFromFailure: true,
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       nearMissCandidate: true,
       retryClass: "skill_fallback",
@@ -1395,6 +1408,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       autonomyMode: "fallback",
       primarySkill: "memory-diagnostics",
       fallbackSkills: expect.arrayContaining(["acceptance-report"]),
+      failurePattern: "near_miss",
     });
   });
 

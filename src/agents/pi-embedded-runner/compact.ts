@@ -202,6 +202,22 @@ export type CompactEmbeddedPiSessionParams = {
     capabilityGaps: string[];
     rationale?: string;
   };
+  environmentState?: {
+    version: 1;
+    workspaceKind: "project" | "temporary" | "unknown";
+    gitBranch?: string;
+    gitCommit?: string;
+    capabilitySignals: string[];
+    preferredValidationTools: string[];
+    skillEnvironments: string[];
+  };
+  failureLearningState?: {
+    version: 1;
+    failurePattern: "clean_success" | "near_miss" | "blocked_path" | "hard_failure";
+    learnFromFailure: boolean;
+    failureReasons: string[];
+    missingCapabilities: string[];
+  };
   proceduralExecution?: ProceduralExecutionRecord;
 };
 

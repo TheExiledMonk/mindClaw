@@ -83,6 +83,8 @@ export type AgenticExecutionState = {
   plannerState: AgenticPlannerState;
   governanceState: AgenticGovernanceState;
   orchestrationState: AgenticOrchestrationState;
+  environmentState: AgenticEnvironmentState;
+  failureLearningState: AgenticFailureLearningState;
 };
 
 export type AgenticGovernanceState = {
@@ -102,6 +104,24 @@ export type AgenticOrchestrationState = {
   skillChain: string[];
   capabilityGaps: string[];
   rationale?: string;
+};
+
+export type AgenticEnvironmentState = {
+  version: 1;
+  workspaceKind: "project" | "temporary" | "unknown";
+  gitBranch?: string;
+  gitCommit?: string;
+  capabilitySignals: string[];
+  preferredValidationTools: string[];
+  skillEnvironments: string[];
+};
+
+export type AgenticFailureLearningState = {
+  version: 1;
+  failurePattern: "clean_success" | "near_miss" | "blocked_path" | "hard_failure";
+  learnFromFailure: boolean;
+  failureReasons: string[];
+  missingCapabilities: string[];
 };
 
 export type ProceduralExecutionRecord = {
@@ -127,6 +147,13 @@ export type ProceduralExecutionRecord = {
   fallbackSkills: string[];
   skillChain: string[];
   capabilityGaps: string[];
+  workspaceKind: "project" | "temporary" | "unknown";
+  capabilitySignals: string[];
+  preferredValidationTools: string[];
+  skillEnvironments: string[];
+  failurePattern: "clean_success" | "near_miss" | "blocked_path" | "hard_failure";
+  learnFromFailure: boolean;
+  failureReasons: string[];
   nextImprovement?: string;
 };
 
@@ -161,6 +188,14 @@ type SkillInfo = {
   name: string;
   primaryEnv?: string;
   requiredEnv?: string[];
+};
+
+type WorkspaceState = {
+  workspaceName?: string;
+  sessionRelativePath?: string;
+  gitBranch?: string;
+  gitCommit?: string;
+  transcriptExists?: boolean;
 };
 
 function extractMessageText(message: AgentMessage): string {
@@ -613,10 +648,85 @@ function buildOrchestrationState(params: {
   };
 }
 
+function buildEnvironmentState(params: {
+  workspaceTags?: string[];
+  workspaceState?: WorkspaceState;
+  toolSignals?: ToolSignal[];
+  availableSkills?: SkillInfo[];
+}): AgenticEnvironmentState {
+  const workspaceKind: AgenticEnvironmentState["workspaceKind"] = (
+    params.workspaceTags ?? []
+  ).includes("tmp-workspace")
+    ? "temporary"
+    : (params.workspaceTags ?? []).includes("workspace")
+      ? "project"
+      : "unknown";
+  const toolNames = new Set((params.toolSignals ?? []).map((signal) => signal.toolName));
+  const capabilitySignals = uniqueCompact(
+    [
+      toolNames.has("exec") ? "can_execute_commands" : undefined,
+      toolNames.has("read") ? "can_read_files" : undefined,
+      toolNames.has("write") ? "can_write_files" : undefined,
+      (params.workspaceTags ?? []).includes("git-worktree") ? "git_worktree" : undefined,
+      params.workspaceState?.transcriptExists ? "transcript_present" : undefined,
+    ],
+    8,
+  );
+  const preferredValidationTools = uniqueCompact(
+    (params.toolSignals ?? [])
+      .filter((signal) =>
+        /\b(test|typecheck|lint|build|compile|verify|check)\b/i.test(signal.summary),
+      )
+      .map((signal) => signal.toolName),
+    4,
+  );
+  const skillEnvironments = uniqueCompact(
+    (params.availableSkills ?? []).map((skill) => skill.primaryEnv).filter(Boolean),
+    6,
+  );
+  return {
+    version: 1,
+    workspaceKind,
+    gitBranch: params.workspaceState?.gitBranch,
+    gitCommit: params.workspaceState?.gitCommit,
+    capabilitySignals,
+    preferredValidationTools,
+    skillEnvironments,
+  };
+}
+
+function buildFailureLearningState(params: {
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+  orchestrationState: AgenticOrchestrationState;
+}): AgenticFailureLearningState {
+  const failurePattern: AgenticFailureLearningState["failurePattern"] =
+    params.verificationState.outcome === "verified"
+      ? "clean_success"
+      : params.plannerState.retryClass === "skill_fallback" ||
+          params.verificationState.outcome === "partial"
+        ? "near_miss"
+        : params.plannerState.shouldEscalate || params.verificationState.outcome === "blocked"
+          ? "blocked_path"
+          : "hard_failure";
+  const failureReasons = uniqueCompact(
+    [...params.verificationState.failureClasses, params.plannerState.escalationReason],
+    6,
+  );
+  return {
+    version: 1,
+    failurePattern,
+    learnFromFailure: failurePattern === "near_miss" || failurePattern === "blocked_path",
+    failureReasons,
+    missingCapabilities: params.orchestrationState.capabilityGaps,
+  };
+}
+
 export function buildAgenticExecutionState(params: {
   messages: AgentMessage[];
   activeArtifacts?: string[];
   workspaceTags?: string[];
+  workspaceState?: WorkspaceState;
   toolSignals?: ToolSignal[];
   diffSignals?: DiffSignal[];
   checkpointSignals?: CheckpointSignal[];
@@ -722,6 +832,17 @@ export function buildAgenticExecutionState(params: {
     alternativeSkills: plannerState.alternativeSkills,
     toolSignals: params.toolSignals,
   });
+  const environmentState = buildEnvironmentState({
+    workspaceTags: params.workspaceTags,
+    workspaceState: params.workspaceState,
+    toolSignals: params.toolSignals,
+    availableSkills: params.availableSkillInfo,
+  });
+  const failureLearningState = buildFailureLearningState({
+    verificationState,
+    plannerState,
+    orchestrationState,
+  });
 
   return {
     taskState,
@@ -729,6 +850,8 @@ export function buildAgenticExecutionState(params: {
     plannerState,
     governanceState,
     orchestrationState,
+    environmentState,
+    failureLearningState,
   };
 }
 
@@ -765,6 +888,12 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.orchestrationState.capabilityGaps.length > 0
       ? `Capability gaps: ${state.orchestrationState.capabilityGaps.join(", ")}`
       : undefined;
+  const environmentGuidance = `Environment: ${state.environmentState.workspaceKind}${state.environmentState.gitBranch ? ` branch=${state.environmentState.gitBranch}` : ""}`;
+  const capabilitySignalsGuidance =
+    state.environmentState.capabilitySignals.length > 0
+      ? `Capabilities: ${state.environmentState.capabilitySignals.join(", ")}`
+      : undefined;
+  const failureLearningGuidance = `Failure pattern: ${state.failureLearningState.failurePattern}`;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -787,6 +916,9 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     orchestrationGuidance,
     fallbackChainGuidance,
     capabilityGapGuidance,
+    environmentGuidance,
+    capabilitySignalsGuidance,
+    failureLearningGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
     fallbackSkillGuidance,
     antiRepeatGuidance,
@@ -802,6 +934,8 @@ export function buildProceduralExecutionRecord(params: {
   plannerState: AgenticPlannerState;
   governanceState: AgenticGovernanceState;
   orchestrationState: AgenticOrchestrationState;
+  environmentState: AgenticEnvironmentState;
+  failureLearningState: AgenticFailureLearningState;
   toolSignals?: ToolSignal[];
   diffSignals?: DiffSignal[];
 }): ProceduralExecutionRecord {
@@ -889,6 +1023,13 @@ export function buildProceduralExecutionRecord(params: {
     fallbackSkills: resolvedFallbackSkills,
     skillChain: resolvedSkillChain,
     capabilityGaps: params.orchestrationState.capabilityGaps,
+    workspaceKind: params.environmentState.workspaceKind,
+    capabilitySignals: params.environmentState.capabilitySignals,
+    preferredValidationTools: params.environmentState.preferredValidationTools,
+    skillEnvironments: params.environmentState.skillEnvironments,
+    failurePattern: params.failureLearningState.failurePattern,
+    learnFromFailure: params.failureLearningState.learnFromFailure,
+    failureReasons: params.failureLearningState.failureReasons,
     nextImprovement,
   };
 }

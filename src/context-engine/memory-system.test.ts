@@ -2323,6 +2323,22 @@ describe("MemorySystemContextEngine", () => {
         ),
       ],
       runtimeContext: {
+        environmentState: {
+          version: 1,
+          workspaceKind: "project",
+          gitBranch: "feature/memory",
+          gitCommit: "abcdef0",
+          capabilitySignals: ["can_execute_commands", "can_read_files", "git_worktree"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+        },
+        failureLearningState: {
+          version: 1,
+          failurePattern: "near_miss",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          missingCapabilities: [],
+        },
         governanceState: {
           version: 1,
           autonomyMode: "fallback",
@@ -2357,6 +2373,13 @@ describe("MemorySystemContextEngine", () => {
           fallbackSkills: ["acceptance-report"],
           skillChain: ["memory-diagnostics", "acceptance-report"],
           capabilityGaps: [],
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands", "can_read_files", "git_worktree"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "near_miss",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
           nextImprovement:
             "Consider parameterizing memory-diagnostics so it can cover acceptance reporting without duplication.",
         },
@@ -2370,9 +2393,9 @@ describe("MemorySystemContextEngine", () => {
     expect(
       proceduralEntries.some(
         (entry) =>
-          entry.text.includes("Procedural workflow") &&
-          entry.text.includes("memory-diagnostics") &&
-          entry.text.includes("retry class skill_fallback") &&
+          (entry.environmentTags ?? []).includes("procedural:retry:skill_fallback") &&
+          (entry.environmentTags ?? []).includes("procedural:primary-skill:memory-diagnostics") &&
+          (entry.environmentTags ?? []).includes("procedural:failure-pattern:near_miss") &&
           entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
       ),
     ).toBe(true);
@@ -2391,10 +2414,8 @@ describe("MemorySystemContextEngine", () => {
     expect(
       packet.retrievalItems.some(
         (item) =>
-          item.text.includes("Procedural workflow") &&
+          item.text.includes("Available skill surface for current execution") &&
           item.text.includes("memory-diagnostics") &&
-          item.text.includes("primary skill memory-diagnostics") &&
-          item.text.includes("suggested fallback acceptance-report") &&
           item.reason.includes("source=direct_observation"),
       ),
     ).toBe(true);

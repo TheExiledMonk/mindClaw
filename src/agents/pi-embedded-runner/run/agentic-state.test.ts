@@ -52,6 +52,8 @@ describe("agentic-state", () => {
     expect(state.plannerState.status).toBe("complete");
     expect(state.governanceState.autonomyMode).toBe("continue");
     expect(state.orchestrationState.primarySkill).toBeUndefined();
+    expect(state.environmentState.workspaceKind).toBe("project");
+    expect(state.failureLearningState.failurePattern).toBe("clean_success");
     expect(buildAgenticSystemPromptAddition(state)).toContain("## Execution State");
   });
 
@@ -147,6 +149,7 @@ describe("agentic-state", () => {
     );
     expect(buildAgenticSystemPromptAddition(state)).toContain("Autonomy mode: fallback");
     expect(buildAgenticSystemPromptAddition(state)).toContain("Primary skill: memory-diagnostics");
+    expect(state.failureLearningState.failurePattern).toBe("near_miss");
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {
@@ -217,6 +220,7 @@ describe("agentic-state", () => {
         "missing_validation_execution",
       ]),
     );
+    expect(state.failureLearningState.failurePattern).toBe("hard_failure");
     expect(buildAgenticSystemPromptAddition(state)).toContain("Capability gaps:");
   });
 
@@ -266,6 +270,8 @@ describe("agentic-state", () => {
       plannerState: state.plannerState,
       governanceState: state.governanceState,
       orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
       toolSignals: [
         {
           toolName: "read",
@@ -308,6 +314,8 @@ describe("agentic-state", () => {
     expect(record.shouldEscalate).toBe(false);
     expect(record.autonomyMode).toBe("continue");
     expect(record.skillChain).toEqual(expect.arrayContaining(["memory-diagnostics"]));
+    expect(record.workspaceKind).toBe("unknown");
+    expect(record.failurePattern).toBe("near_miss");
   });
 
   it("marks failed procedural workflows as near-miss candidates", () => {
@@ -336,6 +344,8 @@ describe("agentic-state", () => {
       plannerState: state.plannerState,
       governanceState: state.governanceState,
       orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
       toolSignals: [
         {
           toolName: "exec",
@@ -354,6 +364,7 @@ describe("agentic-state", () => {
     expect(record.autonomyMode).toBe("fallback");
     expect(record.primarySkill).toBe("memory-diagnostics");
     expect(record.fallbackSkills).toEqual(expect.arrayContaining(["acceptance-report"]));
+    expect(record.failurePattern).toBe("near_miss");
     expect(record.nextImprovement).toContain("alternative skills");
   });
 });

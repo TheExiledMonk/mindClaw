@@ -2803,6 +2803,140 @@ function deriveRuntimeSignalCandidates(params: {
     });
   }
 
+  const environmentState =
+    runtime.environmentState && typeof runtime.environmentState === "object"
+      ? (runtime.environmentState as {
+          workspaceKind?: unknown;
+          gitBranch?: unknown;
+          gitCommit?: unknown;
+          capabilitySignals?: unknown;
+          preferredValidationTools?: unknown;
+          skillEnvironments?: unknown;
+        })
+      : undefined;
+  if (environmentState) {
+    const workspaceKind =
+      environmentState.workspaceKind === "project" ||
+      environmentState.workspaceKind === "temporary" ||
+      environmentState.workspaceKind === "unknown"
+        ? environmentState.workspaceKind
+        : "unknown";
+    const capabilitySignals = uniqueStrings(
+      Array.isArray(environmentState.capabilitySignals)
+        ? environmentState.capabilitySignals.filter(
+            (signal): signal is string => typeof signal === "string" && signal.trim().length > 0,
+          )
+        : [],
+    );
+    const preferredValidationTools = uniqueStrings(
+      Array.isArray(environmentState.preferredValidationTools)
+        ? environmentState.preferredValidationTools.filter(
+            (tool): tool is string => typeof tool === "string" && tool.trim().length > 0,
+          )
+        : [],
+    );
+    const skillEnvironments = uniqueStrings(
+      Array.isArray(environmentState.skillEnvironments)
+        ? environmentState.skillEnvironments.filter(
+            (env): env is string => typeof env === "string" && env.trim().length > 0,
+          )
+        : [],
+    );
+    pushRuntimeCandidate({
+      category: "fact",
+      text: [
+        `Execution environment is ${workspaceKind}`,
+        typeof environmentState.gitBranch === "string"
+          ? `branch ${environmentState.gitBranch}`
+          : "",
+        typeof environmentState.gitCommit === "string"
+          ? `commit ${environmentState.gitCommit}`
+          : "",
+        capabilitySignals.length > 0 ? `capabilities ${capabilitySignals.join(", ")}` : "",
+        preferredValidationTools.length > 0
+          ? `preferred validation ${preferredValidationTools.join(", ")}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      evidence: uniqueStrings([
+        ...capabilitySignals,
+        ...preferredValidationTools.map((tool) => `validate:${tool}`),
+        ...skillEnvironments.map((env) => `env:${env}`),
+      ]),
+      environmentTags: uniqueStrings([
+        "runtime:environment",
+        `environment:workspace:${workspaceKind}`,
+        ...(capabilitySignals.map((signal) => `environment:${signal}`) ?? []),
+        ...(skillEnvironments.map((env) => `environment:skill-env:${env}`) ?? []),
+      ]),
+      confidence: 0.86,
+      strength: 0.78,
+      importanceClass: "useful",
+      trend: "stable",
+    });
+  }
+
+  const failureLearningState =
+    runtime.failureLearningState && typeof runtime.failureLearningState === "object"
+      ? (runtime.failureLearningState as {
+          failurePattern?: unknown;
+          learnFromFailure?: unknown;
+          failureReasons?: unknown;
+          missingCapabilities?: unknown;
+        })
+      : undefined;
+  if (failureLearningState) {
+    const failurePattern =
+      failureLearningState.failurePattern === "clean_success" ||
+      failureLearningState.failurePattern === "near_miss" ||
+      failureLearningState.failurePattern === "blocked_path" ||
+      failureLearningState.failurePattern === "hard_failure"
+        ? failureLearningState.failurePattern
+        : "hard_failure";
+    const failureReasons = uniqueStrings(
+      Array.isArray(failureLearningState.failureReasons)
+        ? failureLearningState.failureReasons.filter(
+            (reason): reason is string => typeof reason === "string" && reason.trim().length > 0,
+          )
+        : [],
+    );
+    const missingCapabilities = uniqueStrings(
+      Array.isArray(failureLearningState.missingCapabilities)
+        ? failureLearningState.missingCapabilities.filter(
+            (gap): gap is string => typeof gap === "string" && gap.trim().length > 0,
+          )
+        : [],
+    );
+    pushRuntimeCandidate({
+      category: "pattern",
+      text: [
+        `Failure learning state: ${failurePattern}`,
+        failureReasons.length > 0 ? `reasons ${failureReasons.join(", ")}` : "",
+        missingCapabilities.length > 0
+          ? `missing capabilities ${missingCapabilities.join(", ")}`
+          : "",
+        failureLearningState.learnFromFailure === true ? "retain for retry adaptation" : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      evidence: uniqueStrings([...failureReasons, ...missingCapabilities]),
+      environmentTags: uniqueStrings([
+        "runtime:failure-learning",
+        `failure-pattern:${failurePattern}`,
+        failureLearningState.learnFromFailure === true ? "failure-learning:retain" : "",
+        ...(missingCapabilities.map((gap) => `failure-gap:${gap}`) ?? []),
+      ]),
+      confidence: failurePattern === "clean_success" ? 0.7 : 0.9,
+      strength: failurePattern === "clean_success" ? 0.6 : 0.88,
+      importanceClass:
+        failurePattern === "blocked_path" || failurePattern === "near_miss"
+          ? "useful"
+          : "temporary",
+      trend: failureLearningState.learnFromFailure === true ? "rising" : "stable",
+    });
+  }
+
   const proceduralExecution =
     runtime.proceduralExecution && typeof runtime.proceduralExecution === "object"
       ? (runtime.proceduralExecution as {
@@ -2827,6 +2961,13 @@ function deriveRuntimeSignalCandidates(params: {
           fallbackSkills?: unknown;
           skillChain?: unknown;
           capabilityGaps?: unknown;
+          workspaceKind?: unknown;
+          capabilitySignals?: unknown;
+          preferredValidationTools?: unknown;
+          skillEnvironments?: unknown;
+          failurePattern?: unknown;
+          learnFromFailure?: unknown;
+          failureReasons?: unknown;
           nextImprovement?: unknown;
         })
       : undefined;
@@ -2957,6 +3098,47 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const workspaceKind =
+      proceduralExecution.workspaceKind === "project" ||
+      proceduralExecution.workspaceKind === "temporary" ||
+      proceduralExecution.workspaceKind === "unknown"
+        ? proceduralExecution.workspaceKind
+        : "unknown";
+    const capabilitySignals = uniqueStrings(
+      Array.isArray(proceduralExecution.capabilitySignals)
+        ? proceduralExecution.capabilitySignals.filter(
+            (signal): signal is string => typeof signal === "string" && signal.trim().length > 0,
+          )
+        : [],
+    );
+    const preferredValidationTools = uniqueStrings(
+      Array.isArray(proceduralExecution.preferredValidationTools)
+        ? proceduralExecution.preferredValidationTools.filter(
+            (tool): tool is string => typeof tool === "string" && tool.trim().length > 0,
+          )
+        : [],
+    );
+    const skillEnvironments = uniqueStrings(
+      Array.isArray(proceduralExecution.skillEnvironments)
+        ? proceduralExecution.skillEnvironments.filter(
+            (env): env is string => typeof env === "string" && env.trim().length > 0,
+          )
+        : [],
+    );
+    const failurePattern =
+      proceduralExecution.failurePattern === "clean_success" ||
+      proceduralExecution.failurePattern === "near_miss" ||
+      proceduralExecution.failurePattern === "blocked_path" ||
+      proceduralExecution.failurePattern === "hard_failure"
+        ? proceduralExecution.failurePattern
+        : "hard_failure";
+    const failureReasons = uniqueStrings(
+      Array.isArray(proceduralExecution.failureReasons)
+        ? proceduralExecution.failureReasons.filter(
+            (reason): reason is string => typeof reason === "string" && reason.trim().length > 0,
+          )
+        : [],
+    );
     const proceduralEvidence = uniqueStrings([
       likelySkills.length > 0 ? `skills=${likelySkills.join(",")}` : "",
       alternativeSkills.length > 0 ? `alt_skills=${alternativeSkills.join(",")}` : "",
@@ -2966,12 +3148,20 @@ function deriveRuntimeSignalCandidates(params: {
       fallbackSkills.length > 0 ? `fallback_skills=${fallbackSkills.join(",")}` : "",
       skillChain.length > 0 ? `skill_chain=${skillChain.join(",")}` : "",
       capabilityGaps.length > 0 ? `capability_gaps=${capabilityGaps.join(",")}` : "",
+      `workspace_kind=${workspaceKind}`,
+      capabilitySignals.length > 0 ? `capabilities=${capabilitySignals.join(",")}` : "",
+      preferredValidationTools.length > 0
+        ? `preferred_validation=${preferredValidationTools.join(",")}`
+        : "",
+      skillEnvironments.length > 0 ? `skill_envs=${skillEnvironments.join(",")}` : "",
       `retry=${retryClass}`,
       `autonomy=${autonomyMode}`,
       `risk=${riskLevel}`,
+      `failure_pattern=${failurePattern}`,
       suggestedSkill ? `suggested_skill=${suggestedSkill}` : "",
       shouldEscalate ? `escalate=${escalationReason ?? "unknown"}` : "",
       governanceReasons.length > 0 ? `governance=${governanceReasons.join(",")}` : "",
+      failureReasons.length > 0 ? `failure_reasons=${failureReasons.join(",")}` : "",
       nextImprovement ?? "",
     ]).filter(Boolean);
     const proceduralText = [
@@ -2981,9 +3171,15 @@ function deriveRuntimeSignalCandidates(params: {
       primarySkill ? `primary skill ${primarySkill}` : "",
       fallbackSkills.length > 0 ? `fallback chain ${fallbackSkills.join(" -> ")}` : "",
       capabilityGaps.length > 0 ? `capability gaps ${capabilityGaps.join(", ")}` : "",
+      `workspace ${workspaceKind}`,
+      capabilitySignals.length > 0 ? `capabilities ${capabilitySignals.join(", ")}` : "",
+      preferredValidationTools.length > 0
+        ? `preferred validation ${preferredValidationTools.join(", ")}`
+        : "",
       toolChain.length > 0 ? `tool chain ${toolChain.join(" -> ")}` : "",
       changedArtifacts.length > 0 ? `on ${changedArtifacts.join(", ")}` : "",
       `with outcome ${outcome}`,
+      `failure pattern ${failurePattern}`,
       `retry class ${retryClass}`,
       `autonomy mode ${autonomyMode}`,
       `risk ${riskLevel}`,
@@ -3012,7 +3208,12 @@ function deriveRuntimeSignalCandidates(params: {
         ...(alternativeSkills.map((skill) => `skill:${skill}`) ?? []),
         ...(fallbackSkills.map((skill) => `skill:${skill}`) ?? []),
         ...(capabilityGaps.map((gap) => `procedural:capability-gap:${gap}`) ?? []),
+        ...(capabilitySignals.map((signal) => `procedural:capability:${signal}`) ?? []),
+        ...(preferredValidationTools.map((tool) => `procedural:validation-tool:${tool}`) ?? []),
+        ...(skillEnvironments.map((env) => `procedural:skill-env:${env}`) ?? []),
         primarySkill ? `procedural:primary-skill:${primarySkill}` : "",
+        `procedural:workspace:${workspaceKind}`,
+        `procedural:failure-pattern:${failurePattern}`,
         suggestedSkill ? `procedural:suggested-skill:${suggestedSkill}` : "",
         shouldEscalate ? `procedural:escalate:${escalationReason ?? "unknown"}` : "",
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",

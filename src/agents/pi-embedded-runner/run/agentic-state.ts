@@ -301,6 +301,18 @@ export type AgenticSoakReport = {
   summary: string;
 };
 
+export type AgenticQualityGateReport = {
+  passed: boolean;
+  acceptancePassed: boolean;
+  soakPassed: boolean;
+  diagnosticsPassed: boolean;
+  failReasons: string[];
+  acceptance: AgenticAcceptanceReport;
+  soak: AgenticSoakReport;
+  diagnostics: AgenticExecutionObservabilityReport;
+  summary: string;
+};
+
 type ToolSignal = {
   toolName: string;
   status: "success" | "error";
@@ -3216,6 +3228,85 @@ export function formatAgenticSoakReport(
       ),
       "",
     ]),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+export function runAgenticQualityGate(params?: {
+  messages?: AgentMessage[];
+  failOnEscalation?: boolean;
+  failOnMissingFallback?: boolean;
+}): AgenticQualityGateReport {
+  const acceptance = runAgenticAcceptanceSuite();
+  const soak = runAgenticSoakSuite();
+  const diagnosticsState = buildAgenticExecutionState({
+    messages: params?.messages ?? [],
+  });
+  const diagnostics = inspectAgenticExecutionObservability(diagnosticsState);
+  const failReasons = [
+    !acceptance.passed ? "acceptance_failed" : undefined,
+    !soak.passed ? "soak_failed" : undefined,
+    params?.failOnEscalation && diagnostics.escalationRequired
+      ? "diagnostics_escalation"
+      : undefined,
+    params?.failOnMissingFallback && !diagnostics.hasViableFallback
+      ? "diagnostics_missing_fallback"
+      : undefined,
+  ].filter((reason): reason is string => Boolean(reason));
+  const diagnosticsPassed =
+    (!params?.failOnEscalation || !diagnostics.escalationRequired) &&
+    (!params?.failOnMissingFallback || diagnostics.hasViableFallback);
+  const passed = acceptance.passed && soak.passed && diagnosticsPassed;
+  return {
+    passed,
+    acceptancePassed: acceptance.passed,
+    soakPassed: soak.passed,
+    diagnosticsPassed,
+    failReasons,
+    acceptance,
+    soak,
+    diagnostics,
+    summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"}`,
+  };
+}
+
+export function formatAgenticQualityGateReport(
+  report: AgenticQualityGateReport,
+  format: "json" | "summary" | "markdown" = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [
+      report.summary,
+      `acceptance=${report.acceptance.summary}`,
+      `soak=${report.soak.summary}`,
+      `diagnostics=${report.diagnostics.summary}`,
+      `fail_reasons=${report.failReasons.length > 0 ? report.failReasons.join(",") : "none"}`,
+    ];
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Agentic Quality Gate Report",
+    "",
+    `Summary: ${report.summary}`,
+    `Passed: ${report.passed ? "yes" : "no"}`,
+    `Fail reasons: ${report.failReasons.length > 0 ? report.failReasons.join(", ") : "none"}`,
+    "",
+    "## Acceptance",
+    `- Summary: ${report.acceptance.summary}`,
+    `- Passed: ${report.acceptancePassed ? "yes" : "no"}`,
+    "",
+    "## Soak",
+    `- Summary: ${report.soak.summary}`,
+    `- Passed: ${report.soakPassed ? "yes" : "no"}`,
+    "",
+    "## Diagnostics",
+    `- Summary: ${report.diagnostics.summary}`,
+    `- Passed: ${report.diagnosticsPassed ? "yes" : "no"}`,
+    `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
+    `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
   ];
   return `${lines.join("\n")}\n`;
 }

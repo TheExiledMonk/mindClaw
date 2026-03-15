@@ -79,7 +79,34 @@ describe("agentic-state", () => {
       state.taskState.blockers.some((entry) => entry.includes("Planner initialization failed")),
     ).toBe(true);
     expect(["failed", "blocked"]).toContain(state.verificationState.outcome);
+    expect(state.verificationState.failureClasses).toContain("prompt_failure");
     expect(state.plannerState.status).toBe("blocked");
+    expect(state.plannerState.rationale).toContain("prompt_failure");
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Do not repeat the same failing path.",
+    );
+  });
+
+  it("classifies validation failures and tells the planner to change strategy", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the broken typecheck and rerun validation.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "pnpm exec tsc -p tsconfig.json --noEmit failed with TypeScript errors.",
+        },
+      ],
+    });
+
+    expect(state.verificationState.failureClasses).toContain("verification_failure");
+    expect(state.plannerState.status).toBe("needs_replan");
+    expect(state.plannerState.nextAction).toContain(
+      "Do not repeat the same failing validation path",
+    );
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Failure classes: verification_failure",
+    );
   });
 
   it("builds procedural execution records for skill and workflow learning", () => {

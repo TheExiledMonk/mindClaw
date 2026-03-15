@@ -18,6 +18,15 @@ export type AgenticVerificationOutcome =
   | "failed"
   | "blocked";
 export type AgenticPlannerStatus = "continue" | "needs_replan" | "blocked" | "complete";
+export type AgenticFailureClass =
+  | "tool_failure"
+  | "verification_failure"
+  | "prompt_failure"
+  | "compaction_failure"
+  | "overflow_recovery_failure"
+  | "missing_information"
+  | "environment_mismatch"
+  | "unknown";
 
 export type AgenticTaskState = {
   version: 1;
@@ -38,6 +47,7 @@ export type AgenticVerificationState = {
   evidence: string[];
   checksRun: string[];
   failingChecks: string[];
+  failureClasses: AgenticFailureClass[];
 };
 
 export type AgenticPlannerState = {
@@ -199,9 +209,65 @@ function summarizeStrategy(params: {
   return `Working directly on ${artifacts.join(", ")}.`;
 }
 
+function classifyFailureSignals(params: {
+  toolSignals?: ToolSignal[];
+  retrySignals?: RetrySignal[];
+  promptErrorSummary?: string;
+}): AgenticFailureClass[] {
+  const classes = new Set<AgenticFailureClass>();
+  const promptError = params.promptErrorSummary?.toLowerCase() ?? "";
+  if (promptError) {
+    if (/\bcompaction\b/.test(promptError)) {
+      classes.add("compaction_failure");
+    } else if (/\boverflow\b/.test(promptError)) {
+      classes.add("overflow_recovery_failure");
+    } else if (
+      /\bprompt\b/.test(promptError) ||
+      /\b(initialization|initialisation|before execution)\b/.test(promptError)
+    ) {
+      classes.add("prompt_failure");
+    } else {
+      classes.add("prompt_failure");
+    }
+  }
+  for (const signal of params.retrySignals ?? []) {
+    if (signal.outcome !== "failed") {
+      continue;
+    }
+    if (signal.phase === "compaction") {
+      classes.add("compaction_failure");
+    } else if (signal.phase === "overflow") {
+      classes.add("overflow_recovery_failure");
+    } else {
+      classes.add("prompt_failure");
+    }
+  }
+  for (const signal of params.toolSignals ?? []) {
+    if (signal.status !== "error") {
+      continue;
+    }
+    const text = `${signal.toolName} ${signal.summary}`.toLowerCase();
+    if (
+      /\b(test|typecheck|lint|build|compile|verify|check|tsc|typescript errors?|validation)\b/.test(
+        text,
+      )
+    ) {
+      classes.add("verification_failure");
+    } else if (/\b(permission|forbidden|denied|sandbox|workspace only|not allowed)\b/.test(text)) {
+      classes.add("environment_mismatch");
+    } else if (/\bmissing|not found|unknown file|no such file|required|needs\b/.test(text)) {
+      classes.add("missing_information");
+    } else {
+      classes.add("tool_failure");
+    }
+  }
+  return [...classes];
+}
+
 function buildVerificationState(params: {
   toolSignals?: ToolSignal[];
   checkpointSignals?: CheckpointSignal[];
+  retrySignals?: RetrySignal[];
   promptErrorSummary?: string;
 }): AgenticVerificationState {
   const toolSignals = params.toolSignals ?? [];
@@ -231,6 +297,11 @@ function buildVerificationState(params: {
     ],
     8,
   );
+  const failureClasses = classifyFailureSignals({
+    toolSignals,
+    retrySignals: params.retrySignals,
+    promptErrorSummary: params.promptErrorSummary,
+  });
 
   let outcome: AgenticVerificationOutcome = "unverified";
   if (params.promptErrorSummary || checkpointSignals.some((signal) => signal.kind === "failure")) {
@@ -255,6 +326,7 @@ function buildVerificationState(params: {
     evidence,
     checksRun,
     failingChecks,
+    failureClasses,
   };
 }
 
@@ -278,14 +350,19 @@ function buildPlannerState(params: {
   }
   if (params.blockers.length > 0) {
     const retryFailures = retrySignals.filter((signal) => signal.outcome === "failed");
+    const dominantFailureClass = params.verificationState.failureClasses[0];
     return {
       version: 1,
       status: retryFailures.length > 0 ? "blocked" : "needs_replan",
       nextAction:
         retryFailures.length > 0
           ? "Escalate or unblock the current failure before continuing."
-          : "Replan around the current blocker and try a different execution path.",
-      rationale: params.blockers[0],
+          : dominantFailureClass === "verification_failure"
+            ? "Do not repeat the same failing validation path; change the implementation strategy before retrying."
+            : "Replan around the current blocker and try a different execution path.",
+      rationale: dominantFailureClass
+        ? `${dominantFailureClass}: ${params.blockers[0]}`
+        : params.blockers[0],
     };
   }
   if (params.activeArtifacts.length > 0) {
@@ -370,6 +447,7 @@ export function buildAgenticExecutionState(params: {
   const verificationState = buildVerificationState({
     toolSignals: params.toolSignals,
     checkpointSignals: params.checkpointSignals,
+    retrySignals: params.retrySignals,
     promptErrorSummary: params.promptErrorSummary,
   });
   const taskState: AgenticTaskState = {
@@ -409,6 +487,14 @@ export function buildAgenticExecutionState(params: {
 }
 
 export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): string | undefined {
+  const failureGuidance =
+    state.verificationState.failureClasses.length > 0
+      ? `Failure classes: ${state.verificationState.failureClasses.join(", ")}`
+      : undefined;
+  const antiRepeatGuidance =
+    state.plannerState.status === "needs_replan" || state.plannerState.status === "blocked"
+      ? "Do not repeat the same failing path. Change strategy, narrow scope, or escalate."
+      : undefined;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -423,7 +509,9 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
       ? `Current blockers: ${state.taskState.blockers.join(" | ")}`
       : undefined,
     `Verification state: ${state.verificationState.outcome}`,
+    failureGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
+    antiRepeatGuidance,
   ].filter((line): line is string => Boolean(line));
 
   return lines.length > 2 ? lines.join("\n") : undefined;

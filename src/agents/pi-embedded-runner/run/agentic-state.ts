@@ -777,6 +777,16 @@ function deriveQualityEnvironmentRollups(
   };
 }
 
+function deriveQualityHandoffRollups(params: {
+  acceptance: AgenticAcceptanceReport;
+  soak: AgenticSoakReport;
+}): Pick<AgenticQualityGateReport, "handoffResumabilityStatus" | "soakResumeBarrierProfile"> {
+  return {
+    handoffResumabilityStatus: params.acceptance.handoffResumabilityStatus ?? "unknown",
+    soakResumeBarrierProfile: params.soak.dominantResumeBarrierProfile ?? "none",
+  };
+}
+
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   if (!memoryText) {
     return [];
@@ -7898,8 +7908,7 @@ export function runAgenticQualityGate(params?: {
     clarificationTrendPolicyAlignment,
   );
   const qualityEnvironmentRollups = deriveQualityEnvironmentRollups(diagnostics);
-  const handoffResumabilityStatus = acceptance.handoffResumabilityStatus ?? "unknown";
-  const soakResumeBarrierProfile = soak.dominantResumeBarrierProfile ?? "none";
+  const qualityHandoffRollups = deriveQualityHandoffRollups({ acceptance, soak });
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -8000,8 +8009,8 @@ export function runAgenticQualityGate(params?: {
     crossLayerTrendPolicyStatus,
     protectedBranchGovernanceStatus: qualityEnvironmentRollups.protectedBranchGovernanceStatus,
     validationReadinessStatus: qualityEnvironmentRollups.validationReadinessStatus,
-    handoffResumabilityStatus,
-    soakResumeBarrierProfile,
+    handoffResumabilityStatus: qualityHandoffRollups.handoffResumabilityStatus,
+    soakResumeBarrierProfile: qualityHandoffRollups.soakResumeBarrierProfile,
     acceptance,
     soak,
     diagnostics,

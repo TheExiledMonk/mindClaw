@@ -191,6 +191,19 @@ export type AgenticExecutionObservabilityReport = {
   recommendations: string[];
 };
 
+export type AgenticHandoffReport = {
+  summary: string;
+  objective?: string;
+  completedSteps: string[];
+  pendingSteps: string[];
+  blockedSteps: string[];
+  activeArtifacts: string[];
+  blockers: string[];
+  nextAction?: string;
+  suggestedSkill?: string;
+  resumePrompt?: string;
+};
+
 export type AgenticAcceptanceScenarioId =
   | "memory_guided_fallback"
   | "verified_memory_preferred"
@@ -199,7 +212,9 @@ export type AgenticAcceptanceScenarioId =
   | "observability_escalation_alignment"
   | "fallback_guidance_alignment"
   | "plan_step_completion_alignment"
-  | "plan_step_blocking_alignment";
+  | "plan_step_blocking_alignment"
+  | "recovered_retry_reopens_verification"
+  | "handoff_checkpoint_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -416,8 +431,11 @@ function buildPlanSteps(params: {
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
   checkpointSignals?: CheckpointSignal[];
+  retrySignals?: RetrySignal[];
 }): AgenticPlanStep[] {
   const checkpointSignals = params.checkpointSignals ?? [];
+  const retrySignals = params.retrySignals ?? [];
+  const retryRecovered = retrySignals.some((signal) => signal.outcome === "recovered");
   const implementationSeeds = uniqueCompact(
     [
       ...params.subtasks.map((item) => truncate(item, 100)),
@@ -471,6 +489,8 @@ function buildPlanSteps(params: {
     params.verificationState.checksRun.length > 0 ||
     params.verificationState.outcome === "partial"
   ) {
+    verificationStatus = "in_progress";
+  } else if (retryRecovered) {
     verificationStatus = "in_progress";
   }
 
@@ -1303,6 +1323,7 @@ export function buildAgenticExecutionState(params: {
       verificationState,
       plannerState,
       checkpointSignals: params.checkpointSignals,
+      retrySignals: params.retrySignals,
     }),
     activeArtifacts,
     currentStrategy: summarizeStrategy({
@@ -1680,6 +1701,99 @@ export function formatAgenticExecutionObservabilityReport(
   return `${lines.join("\n")}\n`;
 }
 
+export function buildAgenticHandoffReport(state: AgenticExecutionState): AgenticHandoffReport {
+  const completedSteps = state.taskState.planSteps
+    .filter((step) => step.status === "completed")
+    .map((step) => step.title);
+  const pendingSteps = state.taskState.planSteps
+    .filter((step) => step.status === "pending" || step.status === "in_progress")
+    .map((step) => `${step.status === "in_progress" ? "active" : "pending"}: ${step.title}`);
+  const blockedSteps = state.taskState.planSteps
+    .filter((step) => step.status === "blocked")
+    .map((step) => step.title);
+  const resumePrompt = state.taskState.objective
+    ? `Resume by continuing: ${state.taskState.objective}`
+    : state.plannerState.nextAction
+      ? `Resume with next action: ${state.plannerState.nextAction}`
+      : undefined;
+  const summaryParts = uniqueCompact(
+    [
+      state.taskState.objective
+        ? `objective=${truncate(state.taskState.objective, 80)}`
+        : undefined,
+      completedSteps.length > 0 ? `completed=${completedSteps.length}` : undefined,
+      pendingSteps.length > 0 ? `pending=${pendingSteps.length}` : undefined,
+      blockedSteps.length > 0 ? `blocked=${blockedSteps.length}` : undefined,
+      state.plannerState.suggestedSkill
+        ? `suggested=${state.plannerState.suggestedSkill}`
+        : undefined,
+    ],
+    6,
+  );
+  return {
+    summary: summaryParts.join(" "),
+    objective: state.taskState.objective,
+    completedSteps,
+    pendingSteps,
+    blockedSteps,
+    activeArtifacts: state.taskState.activeArtifacts,
+    blockers: state.taskState.blockers,
+    nextAction: state.plannerState.nextAction,
+    suggestedSkill: state.plannerState.suggestedSkill,
+    resumePrompt,
+  };
+}
+
+export function formatAgenticHandoffReport(
+  report: AgenticHandoffReport,
+  format: "json" | "summary" | "markdown" = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [
+      report.summary || "handoff=empty",
+      report.nextAction ? `next=${report.nextAction}` : "next=none",
+      report.pendingSteps.length > 0
+        ? `pending=${report.pendingSteps.join(" | ")}`
+        : "pending=none",
+      report.blockedSteps.length > 0
+        ? `blocked=${report.blockedSteps.join(" | ")}`
+        : "blocked=none",
+      report.resumePrompt ? `resume=${report.resumePrompt}` : "resume=none",
+    ];
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Agentic Handoff Report",
+    "",
+    `- Summary: ${report.summary || "none"}`,
+    `- Objective: ${report.objective ?? "none"}`,
+    `- Next action: ${report.nextAction ?? "none"}`,
+    `- Suggested skill: ${report.suggestedSkill ?? "none"}`,
+    `- Resume prompt: ${report.resumePrompt ?? "none"}`,
+    `- Active artifacts: ${report.activeArtifacts.length > 0 ? report.activeArtifacts.join(", ") : "none"}`,
+    `- Blockers: ${report.blockers.length > 0 ? report.blockers.join(" | ") : "none"}`,
+    "",
+    "## Completed Steps",
+    ...(report.completedSteps.length > 0
+      ? report.completedSteps.map((step) => `- ${step}`)
+      : ["- none"]),
+    "",
+    "## Pending Steps",
+    ...(report.pendingSteps.length > 0
+      ? report.pendingSteps.map((step) => `- ${step}`)
+      : ["- none"]),
+    "",
+    "## Blocked Steps",
+    ...(report.blockedSteps.length > 0
+      ? report.blockedSteps.map((step) => `- ${step}`)
+      : ["- none"]),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   const scenarios: AgenticAcceptanceScenarioResult[] = [];
 
@@ -1998,6 +2112,81 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
       details: state.taskState.planSteps
         .map((step) => `${step.kind}:${step.status}:${step.title}`)
         .join("|"),
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow, retry validation, and prepare the report.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 3,
+          summary: "Recovered after a retry and resumed validation.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Re-opened the diagnostics workflow files after retry recovery.",
+        },
+      ],
+    });
+    const verificationStep = state.taskState.planSteps.find((step) => step.kind === "verification");
+    const passed = verificationStep?.status === "in_progress";
+    scenarios.push({
+      id: "recovered_retry_reopens_verification",
+      passed,
+      summary: passed
+        ? "Recovered retries reopen verification work instead of leaving it idle."
+        : "Recovered retries did not reopen verification work.",
+      details: state.taskState.planSteps
+        .map((step) => `${step.kind}:${step.status}:${step.title}`)
+        .join("|"),
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "1. Finalize the diagnostics report\n2. Hand off the next validation step to the next operator",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Handoff prepared for the next operator with the remaining validation step.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+    });
+    const report = buildAgenticHandoffReport(state);
+    const handoffStep = state.taskState.planSteps.find((step) => step.kind === "handoff");
+    const passed =
+      handoffStep?.status === "completed" &&
+      report.pendingSteps.length > 0 &&
+      report.resumePrompt !== undefined;
+    scenarios.push({
+      id: "handoff_checkpoint_alignment",
+      passed,
+      summary: passed
+        ? "Handoff checkpoints produce resumable operator handoff state."
+        : "Handoff checkpoints did not produce a resumable handoff summary.",
+      details: `${report.summary} resume=${report.resumePrompt ?? "none"}`,
     });
   }
 

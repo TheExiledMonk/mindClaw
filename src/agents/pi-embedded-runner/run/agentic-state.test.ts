@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  buildAgenticHandoffReport,
   buildAgenticExecutionState,
   buildAgenticSystemPromptAddition,
   buildProceduralExecutionRecord,
+  formatAgenticHandoffReport,
   formatAgenticExecutionObservabilityReport,
   inspectAgenticExecutionObservability,
 } from "./agentic-state.js";
@@ -399,6 +401,59 @@ describe("agentic-state", () => {
       "blocked",
     );
     expect(buildAgenticSystemPromptAddition(state)).toContain("Plan steps:");
+  });
+
+  it("reopens verification steps after recovered retries", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Fix the diagnostics workflow, retry validation, and prepare the report."),
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 3,
+          summary: "Recovered after a retry and resumed validation.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Re-opened the diagnostics workflow files after retry recovery.",
+        },
+      ],
+    });
+
+    expect(state.taskState.planSteps.find((step) => step.kind === "verification")?.status).toBe(
+      "in_progress",
+    );
+  });
+
+  it("builds and formats a resumable handoff report", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "1. Finalize the diagnostics report\n2. Hand off the next validation step to the next operator",
+        ),
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Handoff prepared for the next operator with the remaining validation step.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+    });
+
+    const report = buildAgenticHandoffReport(state);
+    expect(report.resumePrompt).toContain("Resume");
+    expect(report.pendingSteps.length).toBeGreaterThan(0);
+    expect(formatAgenticHandoffReport(report, "summary")).toContain("resume=");
+    expect(formatAgenticHandoffReport(report, "markdown")).toContain("# Agentic Handoff Report");
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {

@@ -7,6 +7,7 @@ const SESSIONS_DIRNAME = "sessions";
 const LONG_TERM_FILENAME = "long-term.json";
 const PENDING_FILENAME = "pending-significance.json";
 const PERMANENT_TREE_FILENAME = "permanent-tree.json";
+const GRAPH_FILENAME = "memory-graph.json";
 const MAX_WORKING_ITEMS = 6;
 const MAX_LONG_TERM_ITEMS = 48;
 const MAX_PENDING_ITEMS = 64;
@@ -74,9 +75,33 @@ export type MemoryProvenanceRecord = {
 };
 
 export type MemoryRelation = {
+  sourceMemoryId?: string;
   type: MemoryRelationType;
   targetMemoryId: string;
   weight: number;
+};
+
+export type MemoryGraphNode = {
+  id: string;
+  category: MemoryCategory;
+  summary: string;
+  confidence: number;
+  activeStatus: MemoryActiveStatus;
+  updatedAt: number;
+};
+
+export type MemoryGraphEdge = {
+  from: string;
+  to: string;
+  type: MemoryRelationType;
+  weight: number;
+  updatedAt: number;
+};
+
+export type MemoryGraphSnapshot = {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  updatedAt: number;
 };
 
 export type WorkingMemorySnapshot = {
@@ -141,6 +166,7 @@ export type MemoryStoreSnapshot = {
   longTermMemory: LongTermMemoryEntry[];
   pendingSignificance: PendingMemoryEntry[];
   permanentMemory: PermanentMemoryNode;
+  graph: MemoryGraphSnapshot;
 };
 
 export type MemoryCompileResult = MemoryStoreSnapshot & {
@@ -177,6 +203,7 @@ type MemoryStorePaths = {
   longTermFile: string;
   pendingFile: string;
   permanentTreeFile: string;
+  graphFile: string;
 };
 
 function resolveStorePaths(workspaceDir: string, sessionId: string): MemoryStorePaths {
@@ -190,6 +217,7 @@ function resolveStorePaths(workspaceDir: string, sessionId: string): MemoryStore
     longTermFile: path.join(rootDir, LONG_TERM_FILENAME),
     pendingFile: path.join(rootDir, PENDING_FILENAME),
     permanentTreeFile: path.join(rootDir, PERMANENT_TREE_FILENAME),
+    graphFile: path.join(rootDir, GRAPH_FILENAME),
   };
 }
 
@@ -275,7 +303,7 @@ function clonePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
 function mergeRelations(existing: MemoryRelation[], incoming: MemoryRelation[]): MemoryRelation[] {
   const merged = new Map<string, MemoryRelation>();
   for (const relation of [...existing, ...incoming]) {
-    const key = `${relation.type}:${relation.targetMemoryId}`;
+    const key = `${relation.sourceMemoryId ?? ""}:${relation.type}:${relation.targetMemoryId}`;
     const current = merged.get(key);
     if (!current) {
       merged.set(key, { ...relation });
@@ -284,6 +312,14 @@ function mergeRelations(existing: MemoryRelation[], incoming: MemoryRelation[]):
     current.weight = Math.max(current.weight, relation.weight);
   }
   return [...merged.values()].sort((a, b) => b.weight - a.weight).slice(0, MAX_WORKING_ITEMS);
+}
+
+function createEmptyGraph(): MemoryGraphSnapshot {
+  return {
+    nodes: [],
+    edges: [],
+    updatedAt: Date.now(),
+  };
 }
 
 function createProvenanceRecord(
@@ -1007,8 +1043,9 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       `Pattern memory: repeated ${sharedTokens.join(" ")} signals across ${deduped.length} related memories.`,
       220,
     );
+    const patternId = `pattern-${Date.now().toString(36)}-${patterns.length.toString(36)}`;
     patterns.push({
-      id: `pattern-${Date.now().toString(36)}-${patterns.length.toString(36)}`,
+      id: patternId,
       category: "pattern",
       text: summary,
       strength: Math.min(
@@ -1039,6 +1076,7 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       contradictionCount: 0,
       relatedMemoryIds: deduped.map((entry) => entry.id),
       relations: deduped.map((entry) => ({
+        sourceMemoryId: patternId,
         type: "derived_from" as const,
         targetMemoryId: entry.id,
         weight: 0.88,
@@ -1062,8 +1100,12 @@ function annotateRelations(entries: LongTermMemoryEntry[]): LongTermMemoryEntry[
       }
       const relationType = isContradictoryPair(a, b) ? "contradicts" : "relevant_to";
       const weight = Math.min(0.95, 0.45 + overlap * 0.08);
-      a.relations = mergeRelations(a.relations, [{ type: relationType, targetMemoryId: b.id, weight }]);
-      b.relations = mergeRelations(b.relations, [{ type: relationType, targetMemoryId: a.id, weight }]);
+      a.relations = mergeRelations(a.relations, [
+        { sourceMemoryId: a.id, type: relationType, targetMemoryId: b.id, weight },
+      ]);
+      b.relations = mergeRelations(b.relations, [
+        { sourceMemoryId: b.id, type: relationType, targetMemoryId: a.id, weight },
+      ]);
       a.relatedMemoryIds = uniqueIds([...a.relatedMemoryIds, b.id]);
       b.relatedMemoryIds = uniqueIds([...b.relatedMemoryIds, a.id]);
     }
@@ -1102,10 +1144,10 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
       ]);
       older.relatedMemoryIds = uniqueIds([...older.relatedMemoryIds, newer.id]);
       older.relations = mergeRelations(older.relations, [
-        { type: "superseded_by", targetMemoryId: newer.id, weight: 0.96 },
+        { sourceMemoryId: older.id, type: "superseded_by", targetMemoryId: newer.id, weight: 0.96 },
       ]);
       newer.relations = mergeRelations(newer.relations, [
-        { type: "confirmed_by", targetMemoryId: older.id, weight: 0.62 },
+        { sourceMemoryId: newer.id, type: "confirmed_by", targetMemoryId: older.id, weight: 0.62 },
       ]);
       supersededCount += 1;
     }
@@ -1122,8 +1164,8 @@ function reviewMemoryState(params: {
   const archivedMemoryIds = params.longTermMemory
     .filter(
       (entry) =>
-        entry.activeStatus === "superseded" &&
-        entry.compressionState === "latent" &&
+        ((entry.activeStatus === "superseded" && entry.compressionState === "latent") ||
+          entry.activeStatus === "archived") &&
         entry.accessCount === 0,
     )
     .map((entry) => entry.id);
@@ -1149,6 +1191,39 @@ function reviewMemoryState(params: {
     archivedMemoryIds,
     staleMemoryIds,
     reviewedPendingIds,
+  };
+}
+
+function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSnapshot {
+  const nodes: MemoryGraphNode[] = entries.map((entry) => ({
+    id: entry.id,
+    category: entry.category,
+    summary: clipText(entry.text, 180),
+    confidence: entry.confidence,
+    activeStatus: entry.activeStatus,
+    updatedAt: entry.updatedAt,
+  }));
+  const edges = entries.flatMap((entry) =>
+    entry.relations.map((relation) => ({
+      from: relation.sourceMemoryId ?? entry.id,
+      to: relation.targetMemoryId,
+      type: relation.type,
+      weight: relation.weight,
+      updatedAt: entry.updatedAt,
+    })),
+  );
+  const uniqueEdges = new Map<string, MemoryGraphEdge>();
+  for (const edge of edges) {
+    const key = `${edge.from}:${edge.type}:${edge.to}`;
+    const current = uniqueEdges.get(key);
+    if (!current || current.weight < edge.weight) {
+      uniqueEdges.set(key, edge);
+    }
+  }
+  return {
+    nodes,
+    edges: [...uniqueEdges.values()].sort((a, b) => b.weight - a.weight),
+    updatedAt: Date.now(),
   };
 }
 
@@ -1259,6 +1334,7 @@ export function compileMemoryState(params: {
     ...promotedPending.durable,
     ...patternCandidates,
   ]);
+  const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
 
   const compilerNotes: string[] = [];
   if (candidates.durable.length > 0) {
@@ -1294,6 +1370,7 @@ export function compileMemoryState(params: {
     longTermMemory: nextLongTerm,
     pendingSignificance: nextPending,
     permanentMemory: nextPermanent,
+    graph: nextGraph,
     compilerNotes,
     review,
   };
@@ -1391,10 +1468,12 @@ function rankLongTermEntries(
 function expandRelatedMemories(
   selected: LongTermMemoryEntry[],
   allEntries: LongTermMemoryEntry[],
+  graph?: MemoryGraphSnapshot,
 ): LongTermMemoryEntry[] {
   const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
   const expanded: LongTermMemoryEntry[] = [];
   const seen = new Set<string>(selected.map((entry) => entry.id));
+  const selectedIds = new Set(selected.map((entry) => entry.id));
 
   for (const entry of selected) {
     for (const relation of entry.relations) {
@@ -1410,6 +1489,25 @@ function expandRelatedMemories(
       if (expanded.length >= MAX_PACKET_ITEMS) {
         return expanded;
       }
+    }
+  }
+
+  if (expanded.length >= MAX_PACKET_ITEMS || !graph) {
+    return expanded;
+  }
+
+  for (const edge of graph.edges) {
+    if (!selectedIds.has(edge.from) || seen.has(edge.to) || edge.weight < 0.5) {
+      continue;
+    }
+    const related = byId.get(edge.to);
+    if (!related || related.activeStatus === "superseded") {
+      continue;
+    }
+    seen.add(related.id);
+    expanded.push(related);
+    if (expanded.length >= MAX_PACKET_ITEMS) {
+      break;
     }
   }
 
@@ -1458,7 +1556,7 @@ export function retrieveMemoryContextPacket(
       `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
     );
   }
-  const relatedExpansion = expandRelatedMemories(longTerm, snapshot.longTermMemory);
+  const relatedExpansion = expandRelatedMemories(longTerm, snapshot.longTermMemory, snapshot.graph);
   if (relatedExpansion.length > 0) {
     retrievalItems.push(
       ...relatedExpansion.map((item) => ({
@@ -1570,6 +1668,46 @@ export function buildMemoryContextPacket(
   return retrieveMemoryContextPacket(snapshot, params).text;
 }
 
+export function runMemorySleepReview(params: {
+  sessionId: string;
+  snapshot: MemoryStoreSnapshot;
+}): MemoryCompileResult {
+  const archivedLongTerm = params.snapshot.longTermMemory.map((entry) =>
+    params.snapshot.longTermMemory.some(
+      (candidate) =>
+        candidate.id === entry.id &&
+        candidate.activeStatus === "superseded" &&
+        candidate.compressionState === "latent",
+    )
+      ? { ...entry, activeStatus: "archived" as const, trend: "fading" as const }
+      : entry,
+  );
+  const review = reviewMemoryState({
+    workingMemory: params.snapshot.workingMemory,
+    longTermMemory: archivedLongTerm,
+    pendingSignificance: params.snapshot.pendingSignificance,
+  });
+  const workingMemory: WorkingMemorySnapshot = {
+    ...params.snapshot.workingMemory,
+    carryForwardSummary: review.carryForwardSummary,
+  };
+  const graph = buildMemoryGraphSnapshot(archivedLongTerm);
+  return {
+    workingMemory,
+    longTermMemory: archivedLongTerm,
+    pendingSignificance: params.snapshot.pendingSignificance,
+    permanentMemory: params.snapshot.permanentMemory,
+    graph,
+    compilerNotes: [
+      review.carryForwardSummary ? "sleep review refreshed carry-forward summary" : "sleep review completed",
+      review.archivedMemoryIds.length > 0
+        ? `sleep review archived ${review.archivedMemoryIds.length} memories`
+        : "sleep review found no archival candidates",
+    ],
+    review,
+  };
+}
+
 export function touchRetrievedMemories(
   entries: LongTermMemoryEntry[],
   ids: string[],
@@ -1612,6 +1750,23 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
     relatedMemoryIds: [...(entry.relatedMemoryIds ?? [])],
     relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
     updatedAt: entry.updatedAt ?? Date.now(),
+  };
+}
+
+function sanitizeGraphSnapshot(graph: MemoryGraphSnapshot | undefined): MemoryGraphSnapshot {
+  return {
+    nodes: (graph?.nodes ?? []).map((node) => ({
+      ...node,
+      confidence: node.confidence ?? 0.7,
+      activeStatus: node.activeStatus ?? "active",
+      updatedAt: node.updatedAt ?? Date.now(),
+    })),
+    edges: (graph?.edges ?? []).map((edge) => ({
+      ...edge,
+      weight: edge.weight ?? 0.5,
+      updatedAt: edge.updatedAt ?? Date.now(),
+    })),
+    updatedAt: graph?.updatedAt ?? Date.now(),
   };
 }
 
@@ -1663,11 +1818,15 @@ export async function loadMemoryStoreSnapshot(params: {
     createPermanentRoot(),
     ),
   );
+  const graph = sanitizeGraphSnapshot(
+    await readJsonFile<MemoryGraphSnapshot>(paths.graphFile, createEmptyGraph()),
+  );
   return {
     workingMemory,
     longTermMemory,
     pendingSignificance: pendingSignificance.map((entry) => sanitizePendingEntry(entry)),
     permanentMemory,
+    graph,
   };
 }
 
@@ -1678,6 +1837,7 @@ export async function persistMemoryStoreSnapshot(params: {
   longTermMemory: LongTermMemoryEntry[];
   pendingSignificance: PendingMemoryEntry[];
   permanentMemory: PermanentMemoryNode;
+  graph: MemoryGraphSnapshot;
 }): Promise<void> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
   await ensureStoreDirs(paths);
@@ -1686,5 +1846,6 @@ export async function persistMemoryStoreSnapshot(params: {
     writeJsonFile(paths.longTermFile, params.longTermMemory),
     writeJsonFile(paths.pendingFile, params.pendingSignificance),
     writeJsonFile(paths.permanentTreeFile, params.permanentMemory),
+    writeJsonFile(paths.graphFile, params.graph),
   ]);
 }

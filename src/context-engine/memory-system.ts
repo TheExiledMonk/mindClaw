@@ -16,6 +16,7 @@ import {
   loadMemoryStoreSnapshot,
   persistMemoryStoreSnapshot,
   retrieveMemoryContextPacket,
+  runMemorySleepReview,
   touchRetrievedMemories,
 } from "./memory-system-store.js";
 
@@ -97,6 +98,7 @@ export class MemorySystemContextEngine implements ContextEngine {
         longTermMemory: touchRetrievedMemories(snapshot.longTermMemory, packet.accessedLongTermIds),
         pendingSignificance: snapshot.pendingSignificance,
         permanentMemory: snapshot.permanentMemory,
+        graph: snapshot.graph,
       });
     }
     return {
@@ -145,6 +147,7 @@ export class MemorySystemContextEngine implements ContextEngine {
       longTermMemory: incremental.longTermMemory,
       pendingSignificance: incremental.pendingSignificance,
       permanentMemory: incremental.permanentMemory,
+      graph: incremental.graph,
     });
   }
 
@@ -190,8 +193,22 @@ export class MemorySystemContextEngine implements ContextEngine {
         longTermMemory: compiled.longTermMemory,
         pendingSignificance: compiled.pendingSignificance,
         permanentMemory: compiled.permanentMemory,
+        graph: compiled.graph,
       });
     }
+    const reviewed = runMemorySleepReview({
+      sessionId,
+      snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId }),
+    });
+    await persistMemoryStoreSnapshot({
+      workspaceDir,
+      sessionId,
+      workingMemory: reviewed.workingMemory,
+      longTermMemory: reviewed.longTermMemory,
+      pendingSignificance: reviewed.pendingSignificance,
+      permanentMemory: reviewed.permanentMemory,
+      graph: reviewed.graph,
+    });
     return result;
   }
 

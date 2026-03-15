@@ -12,6 +12,7 @@ import {
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
   retrieveMemoryContextPacket,
+  runMemorySleepReview,
 } from "./memory-system-store.js";
 import type { LongTermMemoryEntry, PendingMemoryEntry, PermanentMemoryNode } from "./memory-system-store.js";
 
@@ -89,6 +90,14 @@ function permanentRoot(children: PermanentMemoryNode[] = []): PermanentMemoryNod
   };
 }
 
+function emptyGraph() {
+  return {
+    nodes: [],
+    edges: [],
+    updatedAt: Date.now(),
+  };
+}
+
 describe("memory system store", () => {
   it("derives durable long-term memory candidates from user instructions", () => {
     const candidates = deriveLongTermMemoryCandidates({
@@ -124,6 +133,7 @@ describe("memory system store", () => {
         }),
       ],
       pendingSignificance: [],
+      graph: emptyGraph(),
       permanentMemory: permanentRoot([
           {
             id: "projects",
@@ -196,6 +206,7 @@ describe("memory system store", () => {
             compressionState: "active",
           }),
         ],
+        graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
       messages: [
@@ -238,6 +249,7 @@ describe("memory system store", () => {
           }),
         ],
         pendingSignificance: [],
+        graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
       messages: [
@@ -270,6 +282,7 @@ describe("memory system store", () => {
           }),
         ],
         pendingSignificance: [],
+        graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
       { messages: [userMessage("Implement the context engine compiler and tests.")] },
@@ -322,6 +335,7 @@ describe("memory system store", () => {
           }),
         ],
         pendingSignificance: [],
+        graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
       { messages: [userMessage("Continue memory-system context assembly and linked pattern review.")] },
@@ -349,6 +363,7 @@ describe("memory system store", () => {
           }),
         ],
         pendingSignificance: [],
+        graph: emptyGraph(),
         permanentMemory: permanentRoot(),
       },
       messages: [
@@ -368,6 +383,39 @@ describe("memory system store", () => {
         (relation) => relation.type === "superseded_by",
       ),
     ).toBe(true);
+    expect(compiled.graph.edges.length).toBeGreaterThan(0);
+  });
+
+  it("sleep review prepares carry-forward output and archives latent superseded memory", () => {
+    const reviewed = runMemorySleepReview({
+      sessionId: "session-a",
+      snapshot: {
+        workingMemory: {
+          ...buildWorkingMemorySnapshot({
+            sessionId: "session-a",
+            messages: [userMessage("Continue the memory review work tomorrow.")],
+          }),
+          carryForwardSummary: undefined,
+        },
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-archivable",
+            text: "Legacy workaround is obsolete after the permanent fix.",
+            activeStatus: "superseded",
+            compressionState: "latent",
+          }),
+        ],
+        pendingSignificance: [pendingEntry({ id: "pending-review", text: "Review carry-forward heuristics." })],
+        permanentMemory: permanentRoot(),
+        graph: emptyGraph(),
+      },
+    });
+
+    expect(reviewed.workingMemory.carryForwardSummary).toBeTruthy();
+    expect(reviewed.longTermMemory.find((entry) => entry.id === "ltm-archivable")?.activeStatus).toBe(
+      "archived",
+    );
+    expect(reviewed.review.archivedMemoryIds).toContain("ltm-archivable");
   });
 });
 
@@ -399,6 +447,7 @@ describe("MemorySystemContextEngine", () => {
     expect(snapshot.workingMemory.activeGoals.length).toBeGreaterThan(0);
     expect(snapshot.workingMemory.carryForwardSummary).toBeTruthy();
     expect(snapshot.longTermMemory.length).toBeGreaterThan(0);
+    expect(snapshot.graph.nodes.length).toBeGreaterThan(0);
     expect(snapshot.permanentMemory.children.length).toBeGreaterThan(0);
 
     const assembled = await engine.assemble({

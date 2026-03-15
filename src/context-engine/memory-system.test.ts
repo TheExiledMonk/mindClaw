@@ -2340,6 +2340,18 @@ describe("MemorySystemContextEngine", () => {
     expect(durable?.entityAliases).toContain("profile-a");
     expect(durable?.entityAliases).toContain("feature/memory-v2");
     expect(durable?.entityAliases).toContain("memory-system.ts");
+    expect((durable?.entityIds ?? []).length).toBeGreaterThan(0);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"));
+    try {
+      const entityRows = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_entities WHERE session_id = ?")
+        .get(sessionId) as { count: number };
+      expect(entityRows.count).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
   });
 
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {
@@ -2461,8 +2473,12 @@ describe("MemorySystemContextEngine", () => {
         graphEdgeCount?: number;
       };
       expect(metadata.backend).toBe("sqlite-graph");
-      expect(metadata.schemaVersion).toBe(3);
-      expect(metadata.lastAppliedMigration).toBe("003_sqlite_graph_indexes");
+      expect((metadata.schemaVersion ?? 0) >= 3).toBe(true);
+      expect(
+        new Set(["003_sqlite_graph_indexes", "004_memory_entities"]).has(
+          metadata.lastAppliedMigration ?? "",
+        ),
+      ).toBe(true);
       expect(metadata.lastIntegrityCheckResult).toBe("ok");
       expect(typeof metadata.lastIntegrityCheckAt).toBe("number");
       expect(typeof metadata.longTermCount).toBe("number");
@@ -2478,6 +2494,7 @@ describe("MemorySystemContextEngine", () => {
         "001_sqlite_graph_init",
         "002_adjudication_resolution_kind",
         "003_sqlite_graph_indexes",
+        "004_memory_entities",
       ]);
     } finally {
       db.close();

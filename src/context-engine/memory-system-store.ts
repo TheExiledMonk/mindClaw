@@ -143,6 +143,7 @@ export type LongTermMemoryEntry = {
   canonicalText: string;
   conceptAliases: string[];
   entityAliases?: string[];
+  entityIds?: string[];
   ontologyKind: MemoryOntologyKind;
   category: MemoryCategory;
   text: string;
@@ -826,6 +827,7 @@ function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
     ...entry,
     conceptAliases: [...(entry.conceptAliases ?? [])],
     entityAliases: [...(entry.entityAliases ?? [])],
+    entityIds: [...(entry.entityIds ?? [])],
     evidence: [...entry.evidence],
     permanenceReasons: [...(entry.permanenceReasons ?? [])],
     provenance: entry.provenance.map((item) => ({
@@ -887,6 +889,7 @@ function dedupeLongTermCandidates(entries: LongTermMemoryEntry[]): LongTermMemor
       ...(entry.entityAliases ?? []),
       ...buildResolvedEntityAliases(entry),
     ]);
+    current.entityIds = uniqueIds([...(current.entityIds ?? []), ...(entry.entityIds ?? [])]);
     current.updatedAt = Math.max(current.updatedAt, entry.updatedAt);
   }
   return [...bySemanticKey.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
@@ -1754,6 +1757,68 @@ function buildResolvedEntityAliases(params: {
   ]);
 }
 
+type MemoryEntityKind =
+  | "artifact"
+  | "branch"
+  | "profile"
+  | "version"
+  | "customer"
+  | "environment"
+  | "generic";
+
+type PersistedMemoryEntity = {
+  id: string;
+  sessionId: string;
+  kind: MemoryEntityKind;
+  canonicalName: string;
+  aliases: string[];
+  conceptIds: string[];
+  updatedAt: number;
+};
+
+function classifyResolvedEntityAlias(alias: string): {
+  kind: MemoryEntityKind;
+  canonicalName: string;
+} {
+  const trimmed = alias.trim();
+  const normalized = normalizeComparable(trimmed);
+  if (!normalized) {
+    return { kind: "generic", canonicalName: trimmed };
+  }
+  if (/^git branch[:/ -]|^feature\/|^main$|^develop$|^release\//i.test(trimmed)) {
+    return {
+      kind: "branch",
+      canonicalName: trimmed
+        .replace(/^git-branch:/i, "")
+        .replace(/^branch\s+/i, "")
+        .trim(),
+    };
+  }
+  if (/^profile[-_/a-z0-9.]+$/i.test(trimmed) || /^profile\s+/i.test(trimmed)) {
+    return {
+      kind: "profile",
+      canonicalName: trimmed.replace(/^profile\s+/i, "").trim(),
+    };
+  }
+  if (/^v\d+(?:\.\d+)+(?:-\d+)?$/i.test(trimmed)) {
+    return { kind: "version", canonicalName: trimmed };
+  }
+  if (
+    new Set(["linux", "macos", "windows", "docker", "pnpm", "npm", "node", "typescript"]).has(
+      normalized,
+    )
+  ) {
+    return { kind: "environment", canonicalName: normalized };
+  }
+  if (trimmed.includes("/") || /\.[a-z0-9]+$/i.test(trimmed)) {
+    return { kind: "artifact", canonicalName: trimmed };
+  }
+  if (/^customer[-_/a-z0-9.]+$/i.test(trimmed)) {
+    return { kind: "customer", canonicalName: trimmed.replace(/^customer[-_\s]*/i, "").trim() };
+  }
+  return { kind: "generic", canonicalName: trimmed };
+}
+
 function countEntitySignatureOverlap(
   left: MemoryEntitySignature,
   right: MemoryEntitySignature,
@@ -2352,6 +2417,7 @@ export function mergeLongTermMemory(
           ...(item.entityAliases ?? []),
           ...buildResolvedEntityAliases(item),
         ]),
+        entityIds: uniqueIds(item.entityIds ?? []),
         evidence: dedupeTexts(item.evidence, MAX_WORKING_ITEMS),
         permanenceStatus: permanence.status,
         permanenceReasons: permanence.reasons,
@@ -2386,6 +2452,7 @@ export function mergeLongTermMemory(
       ...buildResolvedEntityAliases(current),
       ...buildResolvedEntityAliases(item),
     ]);
+    current.entityIds = uniqueIds([...(current.entityIds ?? []), ...(item.entityIds ?? [])]);
     current.ontologyKind = item.ontologyKind ?? current.ontologyKind;
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.03);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
@@ -5489,6 +5556,7 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
       ...(entry.entityAliases ?? []),
       ...buildResolvedEntityAliases(entry),
     ]),
+    entityIds: uniqueIds(entry.entityIds ?? []),
     ontologyKind: entry.ontologyKind ?? inferOntologyKind(entry.category, entry.text),
     evidence: [...(entry.evidence ?? [])],
     provenance: (entry.provenance ?? []).map((item) => ({
@@ -5656,6 +5724,14 @@ const SQLITE_GRAPH_MIGRATIONS: SqliteGraphMigration[] = [
           updated_at INTEGER NOT NULL,
           PRIMARY KEY (session_id, concept_id, alias)
         );
+        CREATE TABLE IF NOT EXISTS memory_entities (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          entity_kind TEXT NOT NULL,
+          canonical_name TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS memory_revisions (
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -5750,6 +5826,24 @@ const SQLITE_GRAPH_MIGRATIONS: SqliteGraphMigration[] = [
       `);
     },
   },
+  {
+    id: "004_memory_entities",
+    version: 4,
+    apply: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_entities (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          entity_kind TEXT NOT NULL,
+          canonical_name TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_entities_session_updated
+          ON memory_entities (session_id, updated_at DESC);
+      `);
+    },
+  },
 ];
 
 function applySqliteGraphMigrations(db: import("node:sqlite").DatabaseSync): {
@@ -5801,6 +5895,7 @@ type PersistedMemoryConcept = {
   memoryIds: string[];
   aliases: string[];
   entityAliases: string[];
+  entityIds: string[];
   updatedAt: number;
 };
 
@@ -5929,6 +6024,7 @@ function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): Persisted
           ...(entry.entityAliases ?? []),
           ...buildResolvedEntityAliases(entry),
         ]),
+        entityIds: uniqueIds(entry.entityIds ?? []),
         updatedAt: entry.updatedAt,
       });
       continue;
@@ -5944,6 +6040,7 @@ function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): Persisted
       ...(entry.entityAliases ?? []),
       ...buildResolvedEntityAliases(entry),
     ]);
+    existing.entityIds = uniqueIds([...existing.entityIds, ...(entry.entityIds ?? [])]);
     if (entry.updatedAt >= existing.updatedAt) {
       existing.canonicalText = entry.canonicalText || existing.canonicalText;
       existing.category = entry.category;
@@ -5954,6 +6051,38 @@ function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): Persisted
     }
   }
   return [...byConcept.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function buildPersistedMemoryEntities(
+  sessionId: string,
+  concepts: PersistedMemoryConcept[],
+): PersistedMemoryEntity[] {
+  const byEntity = new Map<string, PersistedMemoryEntity>();
+  for (const concept of concepts) {
+    for (const alias of concept.entityAliases ?? []) {
+      const classified = classifyResolvedEntityAlias(alias);
+      const entityId = `entity-${stableHash(
+        [sessionId, classified.kind, normalizeComparable(classified.canonicalName)].join("::"),
+      )}`;
+      const existing = byEntity.get(entityId);
+      if (!existing) {
+        byEntity.set(entityId, {
+          id: entityId,
+          sessionId,
+          kind: classified.kind,
+          canonicalName: classified.canonicalName,
+          aliases: uniqueStrings([alias]),
+          conceptIds: [concept.id],
+          updatedAt: concept.updatedAt,
+        });
+        continue;
+      }
+      existing.aliases = uniqueStrings([...existing.aliases, alias]);
+      existing.conceptIds = uniqueIds([...existing.conceptIds, concept.id]);
+      existing.updatedAt = Math.max(existing.updatedAt, concept.updatedAt);
+    }
+  }
+  return [...byEntity.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function buildPersistedMemoryRevisions(params: {
@@ -6203,6 +6332,9 @@ export async function loadMemoryStoreSnapshot(params: {
           "SELECT concept_id, alias FROM memory_concept_aliases WHERE session_id = ? ORDER BY updated_at DESC",
         )
         .all(params.sessionId) as Array<{ concept_id: string; alias: string }>;
+      const entityRows = db
+        .prepare("SELECT json FROM memory_entities WHERE session_id = ? ORDER BY updated_at DESC")
+        .all(params.sessionId) as Array<{ json: string }>;
       const revisionRows = db
         .prepare(
           "SELECT concept_id, json FROM memory_revisions WHERE session_id = ? ORDER BY updated_at DESC",
@@ -6241,6 +6373,15 @@ export async function loadMemoryStoreSnapshot(params: {
         bucket.push(row.alias);
         aliasesByConcept.set(row.concept_id, bucket);
       }
+      const entityIdsByConcept = new Map<string, string[]>();
+      for (const row of entityRows) {
+        const entity = JSON.parse(row.json) as PersistedMemoryEntity;
+        for (const conceptId of entity.conceptIds ?? []) {
+          const bucket = entityIdsByConcept.get(conceptId) ?? [];
+          bucket.push(entity.id);
+          entityIdsByConcept.set(conceptId, bucket);
+        }
+      }
       const conceptByKey = new Map<string, PersistedMemoryConcept>();
       for (const row of conceptRows) {
         const concept = JSON.parse(row.json) as PersistedMemoryConcept;
@@ -6254,6 +6395,10 @@ export async function loadMemoryStoreSnapshot(params: {
           ...(concept.aliases ?? []),
         ]);
         concept.entityAliases = uniqueStrings(concept.entityAliases ?? []);
+        concept.entityIds = uniqueIds([
+          ...(concept.entityIds ?? []),
+          ...(entityIdsByConcept.get(row.id) ?? []),
+        ]);
         if (revisionKinds.has("contested")) {
           concept.adjudicationStatus = "contested";
         } else if (revisionKinds.has("updated") || revisionKinds.has("narrowed")) {
@@ -6296,6 +6441,7 @@ export async function loadMemoryStoreSnapshot(params: {
               ...(entry.entityAliases ?? []),
               ...(concept.entityAliases ?? []),
             ]),
+            entityIds: uniqueIds([...(entry.entityIds ?? []), ...(concept.entityIds ?? [])]),
             permanenceStatus: concept.permanenceStatus ?? entry.permanenceStatus,
             adjudicationStatus:
               adjudication?.status ?? concept.adjudicationStatus ?? entry.adjudicationStatus,
@@ -6470,6 +6616,7 @@ export async function persistMemoryStoreSnapshot(params: {
       db.prepare("DELETE FROM long_term_memory WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_concepts WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_concept_aliases WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_entities WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_revisions WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_adjudications WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM pending_memory WHERE session_id = ?").run(params.sessionId);
@@ -6478,6 +6625,21 @@ export async function persistMemoryStoreSnapshot(params: {
       db.prepare("DELETE FROM memory_graph_edges WHERE session_id = ?").run(params.sessionId);
 
       const concepts = buildPersistedMemoryConcepts(params.longTermMemory);
+      const entities = buildPersistedMemoryEntities(params.sessionId, concepts);
+      const entityIdsByConcept = new Map<string, string[]>();
+      for (const entity of entities) {
+        for (const conceptId of entity.conceptIds) {
+          const bucket = entityIdsByConcept.get(conceptId) ?? [];
+          bucket.push(entity.id);
+          entityIdsByConcept.set(conceptId, bucket);
+        }
+      }
+      for (const concept of concepts) {
+        concept.entityIds = uniqueIds([
+          ...(concept.entityIds ?? []),
+          ...(entityIdsByConcept.get(concept.id) ?? []),
+        ]);
+      }
       const revisions = buildPersistedMemoryRevisions({
         sessionId: params.sessionId,
         entries: params.longTermMemory,
@@ -6514,6 +6676,11 @@ export async function persistMemoryStoreSnapshot(params: {
       const insertAlias = db.prepare(
         "INSERT INTO memory_concept_aliases (session_id, concept_id, alias, updated_at) VALUES (?, ?, ?, ?)",
       );
+      const insertEntity = db.prepare(
+        `INSERT INTO memory_entities (
+          id, session_id, entity_kind, canonical_name, updated_at, json
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      );
       for (const concept of concepts) {
         insertConcept.run(
           concept.id,
@@ -6530,6 +6697,16 @@ export async function persistMemoryStoreSnapshot(params: {
         for (const alias of concept.aliases) {
           insertAlias.run(params.sessionId, concept.id, alias, concept.updatedAt);
         }
+      }
+      for (const entity of entities) {
+        insertEntity.run(
+          entity.id,
+          entity.sessionId,
+          entity.kind,
+          entity.canonicalName,
+          entity.updatedAt,
+          JSON.stringify(entity),
+        );
       }
       const insertRevision = db.prepare(
         `INSERT INTO memory_revisions (

@@ -2460,6 +2460,140 @@ describe("MemorySystemContextEngine", () => {
     ).toBe(true);
   });
 
+  it("ingests agentic observability, soak, and quality gate runtime records", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:agentic-quality-memory",
+      messages: [
+        userMessage(
+          "Track the agentic release gate quality and keep fallback regressions visible.",
+        ),
+      ],
+      runtimeContext: {
+        agenticObservability: {
+          version: 1,
+          summary:
+            "retry=escalate autonomy=escalate risk=high failure=blocked_path fallback=missing",
+          retryClass: "escalate",
+          autonomyMode: "escalate",
+          riskLevel: "high",
+          failurePattern: "blocked_path",
+          suggestedSkill: undefined,
+          rankedSkills: ["memory-diagnostics"],
+          capabilityGaps: ["no_viable_fallback"],
+          overlappingSkills: [],
+          skillFamilies: [],
+          consolidationAction: "none",
+          workflowSteps: [],
+          hasViableFallback: false,
+          escalationRequired: true,
+          planSteps: [],
+          goalSatisfaction: "uncertain",
+          unresolvedCriteria: ["find a viable fallback"],
+          recommendations: ["Add or learn a viable fallback workflow before retrying."],
+        },
+        agenticSoak: {
+          passed: false,
+          totalScenarios: 2,
+          passedScenarios: 1,
+          failedScenarioIds: ["retry_replan_recover_complete"],
+          scenarios: [
+            {
+              id: "retry_replan_recover_complete",
+              passed: false,
+              summary: "Retry path regressed during recovery.",
+              phases: [],
+            },
+          ],
+          summary: "agentic soak 1/2 passed",
+        },
+        agenticQualityGate: {
+          passed: false,
+          acceptancePassed: true,
+          soakPassed: false,
+          diagnosticsPassed: false,
+          failReasons: ["soak_failed", "diagnostics_missing_fallback"],
+          acceptance: {
+            passed: true,
+            totalScenarios: 16,
+            passedScenarios: 16,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic acceptance 16/16 passed",
+          },
+          soak: {
+            passed: false,
+            totalScenarios: 2,
+            passedScenarios: 1,
+            failedScenarioIds: ["retry_replan_recover_complete"],
+            scenarios: [],
+            summary: "agentic soak 1/2 passed",
+          },
+          diagnostics: {
+            summary:
+              "retry=escalate autonomy=escalate risk=high failure=blocked_path fallback=missing",
+            retryClass: "escalate",
+            autonomyMode: "escalate",
+            riskLevel: "high",
+            failurePattern: "blocked_path",
+            suggestedSkill: undefined,
+            rankedSkills: ["memory-diagnostics"],
+            capabilityGaps: ["no_viable_fallback"],
+            overlappingSkills: [],
+            skillFamilies: [],
+            consolidationAction: "none",
+            workflowSteps: [],
+            hasViableFallback: false,
+            escalationRequired: true,
+            planSteps: [],
+            goalSatisfaction: "uncertain",
+            unresolvedCriteria: ["find a viable fallback"],
+            recommendations: ["Add or learn a viable fallback workflow before retrying."],
+          },
+          summary: "agentic quality gate acceptance=pass soak=fail diagnostics=fail",
+        },
+      } as never,
+    });
+
+    const agenticEntries = compiled.longTermMemory.filter((entry) =>
+      (entry.environmentTags ?? []).some((tag) => tag.startsWith("runtime:agentic-")),
+    );
+    expect(agenticEntries.length).toBeGreaterThanOrEqual(3);
+    expect(
+      agenticEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("runtime:agentic-observability"),
+      ),
+    ).toBe(true);
+    expect(
+      agenticEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("agentic:missing-fallback"),
+      ),
+    ).toBe(true);
+    expect(
+      agenticEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("runtime:agentic-soak"),
+      ),
+    ).toBe(true);
+    expect(
+      agenticEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes(
+          "agentic:soak-failure:retry_replan_recover_complete",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      agenticEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("runtime:agentic-quality-gate"),
+      ),
+    ).toBe(true);
+    expect(
+      agenticEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes(
+          "agentic:quality-failure:diagnostics_missing_fallback",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("generates a diagnostics report with health, retrieval, and acceptance summaries", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-"));
     const sessionId = "agent:diagnostics";

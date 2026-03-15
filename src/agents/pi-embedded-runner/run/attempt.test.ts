@@ -1255,6 +1255,11 @@ describe("buildAfterTurnRuntimeContext", () => {
       version: 1,
       status: expect.any(String),
     });
+    expect(runtimeContext.agenticObservability).toMatchObject({
+      retryClass: expect.any(String),
+      autonomyMode: expect.any(String),
+      goalSatisfaction: expect.any(String),
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       version: 1,
       outcome: expect.any(String),
@@ -1329,6 +1334,11 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
     expect(runtimeContext.failureLearningState).toMatchObject({
       failurePattern: "clean_success",
+    });
+    expect(runtimeContext.agenticObservability).toMatchObject({
+      retryClass: "same_path_retry",
+      autonomyMode: "continue",
+      goalSatisfaction: "satisfied",
     });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       availableSkills: expect.arrayContaining(["typescript-build-fix"]),

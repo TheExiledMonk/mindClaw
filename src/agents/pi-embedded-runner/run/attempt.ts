@@ -136,6 +136,7 @@ import {
   extractAgenticMemoryRecommendations,
   buildAgenticSystemPromptAddition,
   buildProceduralExecutionRecord,
+  inspectAgenticExecutionObservability,
 } from "./agentic-state.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
@@ -1522,6 +1523,7 @@ export function buildAfterTurnRuntimeContext(params: {
     toolSignals,
     diffSignals,
   });
+  const agenticObservability = inspectAgenticExecutionObservability(agenticState);
   return {
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
@@ -1555,6 +1557,7 @@ export function buildAfterTurnRuntimeContext(params: {
     orchestrationState: agenticState.orchestrationState,
     environmentState: agenticState.environmentState,
     failureLearningState: agenticState.failureLearningState,
+    agenticObservability,
     proceduralExecution,
   };
 }

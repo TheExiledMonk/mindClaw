@@ -90,7 +90,10 @@ import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import type {
   ProceduralExecutionRecord,
+  AgenticExecutionObservabilityReport,
   AgenticPlannerState,
+  AgenticQualityGateReport,
+  AgenticSoakReport,
   AgenticTaskState,
   AgenticVerificationState,
 } from "./run/agentic-state.js";
@@ -230,6 +233,9 @@ export type CompactEmbeddedPiSessionParams = {
     failureReasons: string[];
     missingCapabilities: string[];
   };
+  agenticObservability?: AgenticExecutionObservabilityReport;
+  agenticSoak?: AgenticSoakReport;
+  agenticQualityGate?: AgenticQualityGateReport;
   proceduralExecution?: ProceduralExecutionRecord;
 };
 

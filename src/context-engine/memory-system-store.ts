@@ -2937,6 +2937,235 @@ function deriveRuntimeSignalCandidates(params: {
     });
   }
 
+  const agenticObservability =
+    runtime.agenticObservability && typeof runtime.agenticObservability === "object"
+      ? (runtime.agenticObservability as {
+          retryClass?: unknown;
+          autonomyMode?: unknown;
+          riskLevel?: unknown;
+          failurePattern?: unknown;
+          suggestedSkill?: unknown;
+          rankedSkills?: unknown;
+          capabilityGaps?: unknown;
+          hasViableFallback?: unknown;
+          escalationRequired?: unknown;
+          goalSatisfaction?: unknown;
+          recommendations?: unknown;
+        })
+      : undefined;
+  if (agenticObservability) {
+    const retryClass =
+      agenticObservability.retryClass === "same_path_retry" ||
+      agenticObservability.retryClass === "skill_fallback" ||
+      agenticObservability.retryClass === "environment_fix" ||
+      agenticObservability.retryClass === "clarify" ||
+      agenticObservability.retryClass === "escalate"
+        ? agenticObservability.retryClass
+        : "same_path_retry";
+    const autonomyMode =
+      agenticObservability.autonomyMode === "continue" ||
+      agenticObservability.autonomyMode === "fallback" ||
+      agenticObservability.autonomyMode === "approval_required" ||
+      agenticObservability.autonomyMode === "escalate"
+        ? agenticObservability.autonomyMode
+        : "continue";
+    const riskLevel =
+      agenticObservability.riskLevel === "low" ||
+      agenticObservability.riskLevel === "medium" ||
+      agenticObservability.riskLevel === "high"
+        ? agenticObservability.riskLevel
+        : "low";
+    const failurePattern =
+      agenticObservability.failurePattern === "clean_success" ||
+      agenticObservability.failurePattern === "near_miss" ||
+      agenticObservability.failurePattern === "blocked_path" ||
+      agenticObservability.failurePattern === "hard_failure"
+        ? agenticObservability.failurePattern
+        : "hard_failure";
+    const goalSatisfaction =
+      agenticObservability.goalSatisfaction === "satisfied" ||
+      agenticObservability.goalSatisfaction === "uncertain" ||
+      agenticObservability.goalSatisfaction === "unsatisfied"
+        ? agenticObservability.goalSatisfaction
+        : "uncertain";
+    const suggestedSkill =
+      typeof agenticObservability.suggestedSkill === "string" &&
+      agenticObservability.suggestedSkill.trim().length > 0
+        ? agenticObservability.suggestedSkill.trim()
+        : undefined;
+    const rankedSkills = uniqueStrings(
+      Array.isArray(agenticObservability.rankedSkills)
+        ? agenticObservability.rankedSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const capabilityGaps = uniqueStrings(
+      Array.isArray(agenticObservability.capabilityGaps)
+        ? agenticObservability.capabilityGaps.filter(
+            (gap): gap is string => typeof gap === "string" && gap.trim().length > 0,
+          )
+        : [],
+    );
+    const recommendations = uniqueStrings(
+      Array.isArray(agenticObservability.recommendations)
+        ? agenticObservability.recommendations.filter(
+            (item): item is string => typeof item === "string" && item.trim().length > 0,
+          )
+        : [],
+    );
+    const hasViableFallback = agenticObservability.hasViableFallback !== false;
+    const escalationRequired = agenticObservability.escalationRequired === true;
+    pushRuntimeCandidate({
+      category: "pattern",
+      text: [
+        "Agentic observability",
+        `retry ${retryClass}`,
+        `autonomy ${autonomyMode}`,
+        `risk ${riskLevel}`,
+        `goal satisfaction ${goalSatisfaction}`,
+        `failure pattern ${failurePattern}`,
+        suggestedSkill ? `suggested skill ${suggestedSkill}` : "",
+        rankedSkills.length > 0 ? `ranked skills ${rankedSkills.join(" > ")}` : "",
+        capabilityGaps.length > 0 ? `capability gaps ${capabilityGaps.join(", ")}` : "",
+        !hasViableFallback ? "missing viable fallback" : "",
+        escalationRequired ? "escalation required" : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      evidence: uniqueStrings([
+        `retry=${retryClass}`,
+        `autonomy=${autonomyMode}`,
+        `risk=${riskLevel}`,
+        `goal=${goalSatisfaction}`,
+        `failure=${failurePattern}`,
+        ...recommendations,
+      ]),
+      environmentTags: uniqueStrings([
+        "runtime:agentic-observability",
+        `agentic:retry:${retryClass}`,
+        `agentic:autonomy:${autonomyMode}`,
+        `agentic:risk:${riskLevel}`,
+        `agentic:goal:${goalSatisfaction}`,
+        `agentic:failure:${failurePattern}`,
+        hasViableFallback ? "agentic:viable-fallback" : "agentic:missing-fallback",
+        escalationRequired ? "agentic:escalation-required" : "",
+        ...(capabilityGaps.map((gap) => `agentic:capability-gap:${gap}`) ?? []),
+      ]),
+      confidence: escalationRequired || !hasViableFallback ? 0.9 : 0.78,
+      strength: escalationRequired || !hasViableFallback ? 0.88 : 0.72,
+      importanceClass: escalationRequired || !hasViableFallback ? "useful" : "temporary",
+      trend: escalationRequired || !hasViableFallback ? "rising" : "stable",
+    });
+  }
+
+  const agenticSoak =
+    runtime.agenticSoak && typeof runtime.agenticSoak === "object"
+      ? (runtime.agenticSoak as {
+          passed?: unknown;
+          failedScenarioIds?: unknown;
+          totalScenarios?: unknown;
+          passedScenarios?: unknown;
+          scenarios?: unknown;
+          summary?: unknown;
+        })
+      : undefined;
+  if (agenticSoak) {
+    const passed = agenticSoak.passed === true;
+    const failedScenarioIds = uniqueStrings(
+      Array.isArray(agenticSoak.failedScenarioIds)
+        ? agenticSoak.failedScenarioIds.filter(
+            (id): id is string => typeof id === "string" && id.trim().length > 0,
+          )
+        : [],
+    );
+    const scenarioIds = Array.isArray(agenticSoak.scenarios)
+      ? agenticSoak.scenarios
+          .map((scenario) =>
+            scenario &&
+            typeof scenario === "object" &&
+            typeof (scenario as { id?: unknown }).id === "string"
+              ? (scenario as { id: string }).id
+              : undefined,
+          )
+          .filter((id): id is string => Boolean(id))
+      : [];
+    const summary =
+      typeof agenticSoak.summary === "string" && agenticSoak.summary.trim().length > 0
+        ? agenticSoak.summary.trim()
+        : `agentic soak ${passed ? "passed" : "failed"}`;
+    pushRuntimeCandidate({
+      category: "episode",
+      text: `Agentic soak report: ${summary}`,
+      evidence: uniqueStrings([
+        `total=${typeof agenticSoak.totalScenarios === "number" ? agenticSoak.totalScenarios : scenarioIds.length}`,
+        `passed=${typeof agenticSoak.passedScenarios === "number" ? agenticSoak.passedScenarios : scenarioIds.length - failedScenarioIds.length}`,
+        ...scenarioIds,
+        ...failedScenarioIds,
+      ]),
+      environmentTags: uniqueStrings([
+        "runtime:agentic-soak",
+        passed ? "agentic:soak:pass" : "agentic:soak:fail",
+        ...(failedScenarioIds.map((id) => `agentic:soak-failure:${id}`) ?? []),
+      ]),
+      confidence: passed ? 0.8 : 0.92,
+      strength: passed ? 0.74 : 0.9,
+      importanceClass: passed ? "useful" : "critical",
+      trend: passed ? "stable" : "rising",
+    });
+  }
+
+  const agenticQualityGate =
+    runtime.agenticQualityGate && typeof runtime.agenticQualityGate === "object"
+      ? (runtime.agenticQualityGate as {
+          passed?: unknown;
+          acceptancePassed?: unknown;
+          soakPassed?: unknown;
+          diagnosticsPassed?: unknown;
+          failReasons?: unknown;
+          summary?: unknown;
+        })
+      : undefined;
+  if (agenticQualityGate) {
+    const passed = agenticQualityGate.passed === true;
+    const acceptancePassed = agenticQualityGate.acceptancePassed !== false;
+    const soakPassed = agenticQualityGate.soakPassed !== false;
+    const diagnosticsPassed = agenticQualityGate.diagnosticsPassed !== false;
+    const failReasons = uniqueStrings(
+      Array.isArray(agenticQualityGate.failReasons)
+        ? agenticQualityGate.failReasons.filter(
+            (reason): reason is string => typeof reason === "string" && reason.trim().length > 0,
+          )
+        : [],
+    );
+    const summary =
+      typeof agenticQualityGate.summary === "string" && agenticQualityGate.summary.trim().length > 0
+        ? agenticQualityGate.summary.trim()
+        : `agentic quality gate ${passed ? "passed" : "failed"}`;
+    pushRuntimeCandidate({
+      category: "decision",
+      text: `Agentic quality gate: ${summary}`,
+      evidence: uniqueStrings([
+        `acceptance=${acceptancePassed ? "pass" : "fail"}`,
+        `soak=${soakPassed ? "pass" : "fail"}`,
+        `diagnostics=${diagnosticsPassed ? "pass" : "fail"}`,
+        ...failReasons,
+      ]),
+      environmentTags: uniqueStrings([
+        "runtime:agentic-quality-gate",
+        passed ? "agentic:quality:pass" : "agentic:quality:fail",
+        acceptancePassed ? "agentic:quality:acceptance-pass" : "agentic:quality:acceptance-fail",
+        soakPassed ? "agentic:quality:soak-pass" : "agentic:quality:soak-fail",
+        diagnosticsPassed ? "agentic:quality:diagnostics-pass" : "agentic:quality:diagnostics-fail",
+        ...(failReasons.map((reason) => `agentic:quality-failure:${reason}`) ?? []),
+      ]),
+      confidence: passed ? 0.84 : 0.94,
+      strength: passed ? 0.8 : 0.92,
+      importanceClass: passed ? "useful" : "critical",
+      trend: passed ? "stable" : "rising",
+    });
+  }
+
   const proceduralExecution =
     runtime.proceduralExecution && typeof runtime.proceduralExecution === "object"
       ? (runtime.proceduralExecution as {

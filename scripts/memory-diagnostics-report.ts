@@ -10,6 +10,8 @@ type CliArgs = {
   acceptanceBackendKinds?: Array<"fs-json" | "sqlite-doc" | "sqlite-graph">;
   failOnIssues: boolean;
   failOnAcceptance: boolean;
+  runRepair: boolean;
+  runRecover: boolean;
   outputPath?: string;
   messages: AgentMessage[];
 };
@@ -21,6 +23,8 @@ function parseArgs(argv: string[]): CliArgs {
   let includeAcceptance = false;
   let failOnIssues = false;
   let failOnAcceptance = false;
+  let runRepair = false;
+  let runRecover = false;
   let outputPath: string | undefined;
   const acceptanceBackendKinds: Array<"fs-json" | "sqlite-doc" | "sqlite-graph"> = [];
   const messages: AgentMessage[] = [];
@@ -57,6 +61,14 @@ function parseArgs(argv: string[]): CliArgs {
       failOnAcceptance = true;
       continue;
     }
+    if (arg === "--run-repair") {
+      runRepair = true;
+      continue;
+    }
+    if (arg === "--run-recover") {
+      runRecover = true;
+      continue;
+    }
     if (arg === "--acceptance-backend" && next) {
       if (next === "fs-json" || next === "sqlite-doc" || next === "sqlite-graph") {
         acceptanceBackendKinds.push(next);
@@ -88,6 +100,8 @@ function parseArgs(argv: string[]): CliArgs {
     acceptanceBackendKinds: acceptanceBackendKinds.length > 0 ? acceptanceBackendKinds : undefined,
     failOnIssues,
     failOnAcceptance,
+    runRepair,
+    runRecover,
     outputPath,
     messages,
   };
@@ -102,6 +116,8 @@ async function main(): Promise<void> {
     messages: args.messages.length > 0 ? args.messages : undefined,
     includeAcceptance: args.includeAcceptance,
     acceptanceBackendKinds: args.acceptanceBackendKinds,
+    runRepair: args.runRepair,
+    runRecover: args.runRecover,
   });
   const payload = `${JSON.stringify(report, null, 2)}\n`;
   if (args.outputPath) {

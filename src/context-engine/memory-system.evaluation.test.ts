@@ -526,6 +526,118 @@ describe("memory system evaluation scenarios", () => {
     ).toBe(false);
   });
 
+  it("stays stable through a mixed lifecycle soak without profile bleed or concept explosion", () => {
+    const turns = [
+      {
+        text: "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a on branch feature/memory-v1.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v1",
+          },
+        },
+      },
+      {
+        text: "Continue using the permanent path in memory-system.ts for install profile profile-b on branch feature/memory-v2.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v2",
+          },
+          retrySignals: [
+            {
+              phase: "prompt",
+              outcome: "recovered",
+              summary: "Recovered while continuing the permanent path update.",
+              attempt: 2,
+              maxAttempts: 3,
+            },
+          ],
+        },
+      },
+      {
+        text: "For install profile profile-a, confirm the permanent memory-system path during handoff.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v2",
+          },
+          checkpointSignals: [
+            {
+              kind: "handoff",
+              summary: "Hand off the permanent path state for profile-a.",
+              artifactRefs: ["src/context-engine/memory-system.ts"],
+            },
+          ],
+        },
+      },
+      {
+        text: "I observed directly that install profile profile-b still uses the permanent memory-system path in src/context-engine/memory-system.ts.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v2",
+          },
+        },
+      },
+      {
+        text: "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-b.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v2",
+          },
+          checkpointSignals: [
+            {
+              kind: "completion",
+              summary: "Completed the profile-b permanent path migration.",
+              artifactRefs: ["src/context-engine/memory-system.ts"],
+            },
+          ],
+        },
+      },
+    ] as const;
+
+    let compiled = compileMemoryState({
+      sessionId: "eval-mixed-lifecycle-soak",
+      messages: [userMessage(turns[0].text)],
+      runtimeContext: turns[0].runtimeContext as never,
+    });
+    for (const turn of turns.slice(1)) {
+      compiled = compileMemoryState({
+        sessionId: "eval-mixed-lifecycle-soak",
+        previous: compiled,
+        messages: [userMessage(turn.text)],
+        runtimeContext: turn.runtimeContext as never,
+      });
+    }
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "For install profile profile-b on branch feature/memory-v2, what should we use in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+    const conceptCount = new Set(
+      compiled.longTermMemory
+        .filter(
+          (entry) =>
+            entry.ontologyKind === "constraint" &&
+            entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+        )
+        .map((entry) => entry.conceptKey),
+    ).size;
+
+    expect(conceptCount).toBeLessThanOrEqual(2);
+    expect(compiled.review.contestedRevisionConceptIds.length).toBeLessThanOrEqual(2);
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.includes("profile=profile-b") && item.text.includes("profile-b"),
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.includes("profile=profile-a") && item.text.includes("profile-a"),
+      ),
+    ).toBe(false);
+  });
+
   it("converges memories through entity aliases like branch and artifact basename", () => {
     const first = compileMemoryState({
       sessionId: "eval-entity-alias-convergence",

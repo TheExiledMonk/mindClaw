@@ -18,7 +18,9 @@ import {
   MEMORY_SYSTEM_DIRNAME,
   persistMemoryStoreSnapshot,
   recoverMemoryStoreFromBackup,
+  recoverMemoryStoreFromBackupWithReport,
   repairMemoryStoreSnapshot,
+  repairMemoryStoreSnapshotWithReport,
   retrieveMemoryContextPacket,
   runMemorySleepReview,
 } from "./memory-system-store.js";
@@ -2230,6 +2232,51 @@ describe("MemorySystemContextEngine", () => {
     expect(health.backupAvailable).toBe(true);
   });
 
+  it("produces maintenance reports for repair and recovery actions", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-maintenance-"));
+    const sessionId = "agent:maintenance";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const repaired = await repairMemoryStoreSnapshotWithReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+    expect(repaired.report.action).toBe("repair");
+    expect(repaired.report.summary).toContain("repair backend=sqlite-graph");
+
+    await fs.writeFile(
+      path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"),
+      "broken",
+      "utf8",
+    );
+
+    const recovered = await recoverMemoryStoreFromBackupWithReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+    expect(recovered.report.action).toBe("recovery");
+    expect(recovered.report.summary).toContain("recovery backend=sqlite-graph");
+    expect(recovered.snapshot.longTermMemory.length).toBeGreaterThan(0);
+  });
+
   it("reports explicit compiler stages and retrieval observability", () => {
     const compiled = compileMemoryState({
       sessionId: "agent:compiler-observability",
@@ -2301,9 +2348,42 @@ describe("MemorySystemContextEngine", () => {
     expect(report.summary).toContain("backend=sqlite-graph");
     expect(report.health.summary).toContain("backend=sqlite-graph");
     expect(report.retrieval?.summary).toContain("task=");
-    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(10);
+    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(11);
     expect(report.failedAcceptanceScenarios).toEqual([]);
+    expect(report.maintenance).toBeUndefined();
     expect(report.recommendations.length).toBeGreaterThan(0);
+  });
+
+  it("includes maintenance details when diagnostics runs repair", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-repair-"));
+    const sessionId = "agent:diagnostics-repair";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      runRepair: true,
+    });
+
+    expect(report.maintenance?.repair?.action).toBe("repair");
+    expect(report.maintenance?.repair?.summary).toContain("repair backend=sqlite-graph");
   });
 
   it("materializes entity aliases from scope, artifact, and branch context", async () => {

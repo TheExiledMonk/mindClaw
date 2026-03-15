@@ -333,7 +333,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "backend_parity"
     | "runtime_lifecycle"
     | "permanence_invalidation"
-    | "store_recovery";
+    | "store_recovery"
+    | "mixed_lifecycle_soak";
   passed: boolean;
   summary: string;
   details: string[];
@@ -357,7 +358,25 @@ export type MemoryDiagnosticsReport = {
   retrieval?: MemoryRetrievalObservabilityReport;
   acceptance?: MemoryAcceptanceReport;
   failedAcceptanceScenarios: string[];
+  maintenance?: {
+    repair?: MemoryStoreMaintenanceReport;
+    recovery?: MemoryStoreMaintenanceReport;
+  };
   recommendations: string[];
+  summary: string;
+};
+
+export type MemoryStoreMaintenanceReport = {
+  action: "repair" | "recovery";
+  backendKind: MemoryStoreBackendKind;
+  sessionId: string;
+  success: boolean;
+  issuesBefore: string[];
+  issuesAfter: string[];
+  backupAvailableBefore: boolean;
+  backupAvailableAfter: boolean;
+  longTermCountBefore?: number;
+  longTermCountAfter?: number;
   summary: string;
 };
 
@@ -405,6 +424,25 @@ async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function removeDirectoryRobustly(dirPath: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(dirPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        !["ENOTEMPTY", "EBUSY", "EPERM"].includes(String((error as NodeJS.ErrnoException).code))
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+  await fs.rm(dirPath, { recursive: true, force: true });
 }
 
 type MemoryStoreBackend = {
@@ -5260,6 +5298,15 @@ export async function runMemoryAcceptanceSuite(params: {
   const sessionIdPrefix = params.sessionIdPrefix ?? "acceptance";
   const backendKinds = params.backendKinds ?? ["fs-json", "sqlite-graph"];
   const scenarios: MemoryAcceptanceScenarioResult[] = [];
+  for (const dirname of [
+    `${MEMORY_SYSTEM_DIRNAME}-acceptance-${sessionIdPrefix}-fs-json`,
+    `${MEMORY_SYSTEM_DIRNAME}-acceptance-${sessionIdPrefix}-sqlite-graph`,
+    `${MEMORY_SYSTEM_DIRNAME}-recovery-${sessionIdPrefix}`,
+    `${MEMORY_SYSTEM_DIRNAME}-handoff-${sessionIdPrefix}`,
+    `${MEMORY_SYSTEM_DIRNAME}-handoff-target-${sessionIdPrefix}`,
+  ]) {
+    await removeDirectoryRobustly(path.join(params.workspaceDir, dirname));
+  }
   const findPermanentNodeByText = (
     node: PermanentMemoryNode,
     pattern: string,
@@ -5517,10 +5564,13 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
-  const handoffWorkspaceDir = path.join(params.workspaceDir, `${MEMORY_SYSTEM_DIRNAME}-handoff`);
+  const handoffWorkspaceDir = path.join(
+    params.workspaceDir,
+    `${MEMORY_SYSTEM_DIRNAME}-handoff-${sessionIdPrefix}`,
+  );
   const handoffTargetWorkspaceDir = path.join(
     params.workspaceDir,
-    `${MEMORY_SYSTEM_DIRNAME}-handoff-target`,
+    `${MEMORY_SYSTEM_DIRNAME}-handoff-target-${sessionIdPrefix}`,
   );
   await fs.mkdir(handoffWorkspaceDir, { recursive: true });
   await fs.mkdir(handoffTargetWorkspaceDir, { recursive: true });
@@ -5606,7 +5656,7 @@ export async function runMemoryAcceptanceSuite(params: {
   for (const backendKind of backendKinds) {
     const backendWorkspaceDir = path.join(
       params.workspaceDir,
-      `${MEMORY_SYSTEM_DIRNAME}-acceptance-${backendKind}`,
+      `${MEMORY_SYSTEM_DIRNAME}-acceptance-${sessionIdPrefix}-${backendKind}`,
     );
     await fs.mkdir(backendWorkspaceDir, { recursive: true });
     await persistMemoryStoreSnapshot({
@@ -5768,7 +5818,10 @@ export async function runMemoryAcceptanceSuite(params: {
     ],
   });
 
-  const recoveryWorkspaceDir = path.join(params.workspaceDir, `${MEMORY_SYSTEM_DIRNAME}-recovery`);
+  const recoveryWorkspaceDir = path.join(
+    params.workspaceDir,
+    `${MEMORY_SYSTEM_DIRNAME}-recovery-${sessionIdPrefix}`,
+  );
   await fs.mkdir(recoveryWorkspaceDir, { recursive: true });
   const recoveryCompiled = compileMemoryState({
     sessionId: `${sessionIdPrefix}:recovery`,
@@ -5815,6 +5868,119 @@ export async function runMemoryAcceptanceSuite(params: {
     ].filter(Boolean),
   });
 
+  const soakTurns = [
+    {
+      text: "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a on branch feature/memory-v1.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v1",
+        },
+      },
+    },
+    {
+      text: "Continue using the permanent path in memory-system.ts for install profile profile-b on branch feature/memory-v2.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+        retrySignals: [
+          {
+            phase: "prompt",
+            outcome: "recovered",
+            summary: "Recovered while continuing the permanent path update.",
+            attempt: 2,
+            maxAttempts: 3,
+          },
+        ],
+      },
+    },
+    {
+      text: "For install profile profile-a, confirm the permanent memory-system path during handoff.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+        checkpointSignals: [
+          {
+            kind: "handoff",
+            summary: "Hand off the permanent path state for profile-a.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+    {
+      text: "I observed directly that install profile profile-b still uses the permanent memory-system path in src/context-engine/memory-system.ts.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      },
+    },
+    {
+      text: "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-b.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+        checkpointSignals: [
+          {
+            kind: "completion",
+            summary: "Completed the profile-b permanent path migration.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+  ] as const;
+  let soakCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:soak`,
+    messages: [userMessageForSuite(soakTurns[0].text)],
+    runtimeContext: soakTurns[0].runtimeContext as never,
+  });
+  for (const turn of soakTurns.slice(1)) {
+    soakCompiled = compileMemoryState({
+      sessionId: `${sessionIdPrefix}:soak`,
+      previous: soakCompiled,
+      messages: [userMessageForSuite(turn.text)],
+      runtimeContext: turn.runtimeContext as never,
+    });
+  }
+  const soakPacket = retrieveMemoryContextPacket(soakCompiled, {
+    messages: [
+      userMessageForSuite(
+        "For install profile profile-b on branch feature/memory-v2, what should we use in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const soakConstraintConceptCount = new Set(
+    soakCompiled.longTermMemory
+      .filter(
+        (entry) =>
+          entry.ontologyKind === "constraint" &&
+          entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+      )
+      .map((entry) => entry.conceptKey),
+  ).size;
+  const soakProfileBVisible = soakPacket.retrievalItems.some(
+    (item) => item.reason.includes("profile=profile-b") && item.text.includes("profile-b"),
+  );
+  const soakProfileALeaked = soakPacket.retrievalItems.some(
+    (item) => item.reason.includes("profile=profile-a") && item.text.includes("profile-a"),
+  );
+  scenarios.push({
+    scenario: "mixed_lifecycle_soak",
+    passed:
+      soakConstraintConceptCount <= 2 &&
+      soakProfileBVisible &&
+      !soakProfileALeaked &&
+      soakCompiled.review.contestedRevisionConceptIds.length <= 2,
+    summary: `soak constraints=${soakConstraintConceptCount} profile-b-visible=${soakProfileBVisible} profile-a-leaked=${soakProfileALeaked} contested=${soakCompiled.review.contestedRevisionConceptIds.length}`,
+    details: soakPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const passedCount = scenarios.filter((scenario) => scenario.passed).length;
   const failedCount = scenarios.length - passedCount;
   return {
@@ -5845,8 +6011,29 @@ export async function generateMemoryDiagnosticsReport(params: {
   messages?: AgentMessage[];
   includeAcceptance?: boolean;
   acceptanceBackendKinds?: MemoryStoreBackendKind[];
+  runRepair?: boolean;
+  runRecover?: boolean;
 }): Promise<MemoryDiagnosticsReport> {
   const backendKind = params.backendKind ?? "fs-json";
+  const maintenance: MemoryDiagnosticsReport["maintenance"] = {};
+  if (params.runRepair) {
+    maintenance.repair = (
+      await repairMemoryStoreSnapshotWithReport({
+        workspaceDir: params.workspaceDir,
+        sessionId: params.sessionId,
+        backendKind,
+      })
+    ).report;
+  }
+  if (params.runRecover) {
+    maintenance.recovery = (
+      await recoverMemoryStoreFromBackupWithReport({
+        workspaceDir: params.workspaceDir,
+        sessionId: params.sessionId,
+        backendKind,
+      })
+    ).report;
+  }
   const snapshot = await loadMemoryStoreSnapshot({
     workspaceDir: params.workspaceDir,
     sessionId: params.sessionId,
@@ -5885,6 +6072,8 @@ export async function generateMemoryDiagnosticsReport(params: {
       `health=${health.summary}`,
       retrieval ? `retrieval=${retrieval.summary}` : "",
       acceptance ? `acceptance=${acceptance.summary}` : "",
+      maintenance.repair ? `repair=${maintenance.repair.summary}` : "",
+      maintenance.recovery ? `recovery=${maintenance.recovery.summary}` : "",
       recommendations.length > 0 ? `recommendations=${recommendations.length}` : "",
     ]
       .filter(Boolean)
@@ -5900,6 +6089,7 @@ export async function generateMemoryDiagnosticsReport(params: {
     retrieval,
     acceptance,
     failedAcceptanceScenarios,
+    maintenance: maintenance.repair || maintenance.recovery ? maintenance : undefined,
     recommendations,
     summary,
   };
@@ -7471,7 +7661,21 @@ export async function repairMemoryStoreSnapshot(params: {
   sessionId: string;
   backendKind?: MemoryStoreBackendKind;
 }): Promise<MemoryStoreSnapshot> {
+  const repaired = await repairMemoryStoreSnapshotWithReport(params);
+  return repaired.snapshot;
+}
+
+export async function repairMemoryStoreSnapshotWithReport(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<{ snapshot: MemoryStoreSnapshot; report: MemoryStoreMaintenanceReport }> {
   const backendKind = params.backendKind ?? "fs-json";
+  const healthBefore = await inspectMemoryStoreHealth({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
   const snapshot = await loadMemoryStoreSnapshot({
     workspaceDir: params.workspaceDir,
     sessionId: params.sessionId,
@@ -7487,12 +7691,36 @@ export async function repairMemoryStoreSnapshot(params: {
     permanentMemory: snapshot.permanentMemory,
     graph: snapshot.graph,
   });
-  return loadMemoryStoreSnapshot({
+  const repairedSnapshot = await loadMemoryStoreSnapshot({
     workspaceDir: params.workspaceDir,
     sessionId: params.sessionId,
     backendKind,
     allowBackupRecovery: false,
   });
+  const healthAfter = await inspectMemoryStoreHealth({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  return {
+    snapshot: repairedSnapshot,
+    report: {
+      action: "repair",
+      backendKind,
+      sessionId: params.sessionId,
+      success: true,
+      issuesBefore: healthBefore.issues,
+      issuesAfter: healthAfter.issues,
+      backupAvailableBefore: healthBefore.backupAvailable,
+      backupAvailableAfter: healthAfter.backupAvailable,
+      longTermCountBefore: snapshot.longTermMemory.length,
+      longTermCountAfter: repairedSnapshot.longTermMemory.length,
+      summary: clipText(
+        `repair backend=${backendKind} issues-before=${healthBefore.issues.length} issues-after=${healthAfter.issues.length} long-term=${snapshot.longTermMemory.length}->${repairedSnapshot.longTermMemory.length}`,
+        220,
+      ),
+    },
+  };
 }
 
 export async function recoverMemoryStoreFromBackup(params: {
@@ -7501,7 +7729,31 @@ export async function recoverMemoryStoreFromBackup(params: {
   targetSessionId?: string;
   backendKind?: MemoryStoreBackendKind;
 }): Promise<MemoryStoreSnapshot> {
+  const recovered = await recoverMemoryStoreFromBackupWithReport(params);
+  return recovered.snapshot;
+}
+
+export async function recoverMemoryStoreFromBackupWithReport(params: {
+  workspaceDir: string;
+  sessionId: string;
+  targetSessionId?: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<{ snapshot: MemoryStoreSnapshot; report: MemoryStoreMaintenanceReport }> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  let healthBeforeLongTermCount: number | undefined;
+  const healthBefore = await inspectMemoryStoreHealth({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+  })
+    .then((report) => {
+      healthBeforeLongTermCount = report.metadata.longTermCount;
+      return report;
+    })
+    .catch(() => ({
+      issues: ["store unreadable before recovery"],
+      backupAvailable: false,
+    }));
   const bundle = await readJsonFile<MemoryStoreExportBundle | null>(paths.backupFile, null);
   if (!bundle) {
     throw new Error(`memory store backup not found for session ${params.sessionId}`);
@@ -7516,12 +7768,36 @@ export async function recoverMemoryStoreFromBackup(params: {
     targetSessionId: params.targetSessionId,
     backendKind: targetBackend,
   });
-  return loadMemoryStoreSnapshot({
+  const recoveredSnapshot = await loadMemoryStoreSnapshot({
     workspaceDir: params.workspaceDir,
     sessionId: params.targetSessionId ?? params.sessionId,
     backendKind: targetBackend,
     allowBackupRecovery: false,
   });
+  const healthAfter = await inspectMemoryStoreHealth({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.targetSessionId ?? params.sessionId,
+    backendKind: targetBackend,
+  });
+  return {
+    snapshot: recoveredSnapshot,
+    report: {
+      action: "recovery",
+      backendKind: targetBackend,
+      sessionId: params.targetSessionId ?? params.sessionId,
+      success: true,
+      issuesBefore: healthBefore.issues,
+      issuesAfter: healthAfter.issues,
+      backupAvailableBefore: Boolean(healthBefore.backupAvailable),
+      backupAvailableAfter: healthAfter.backupAvailable,
+      longTermCountBefore: healthBeforeLongTermCount,
+      longTermCountAfter: recoveredSnapshot.longTermMemory.length,
+      summary: clipText(
+        `recovery backend=${targetBackend} issues-before=${healthBefore.issues.length} issues-after=${healthAfter.issues.length} long-term=${recoveredSnapshot.longTermMemory.length}`,
+        220,
+      ),
+    },
+  };
 }
 
 export async function inspectMemoryStoreHealth(params: {
@@ -7530,21 +7806,67 @@ export async function inspectMemoryStoreHealth(params: {
   backendKind?: MemoryStoreBackendKind;
 }): Promise<MemoryStoreHealthReport> {
   const backendKind = params.backendKind ?? "fs-json";
-  const snapshot = await loadMemoryStoreSnapshot({
-    workspaceDir: params.workspaceDir,
-    sessionId: params.sessionId,
-    backendKind,
-  });
-  const metadata = await loadPersistedStoreMetadata({
-    workspaceDir: params.workspaceDir,
-    sessionId: params.sessionId,
-    backendKind,
-  });
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
   const backupAvailable = await fs
     .stat(paths.backupFile)
     .then(() => true)
     .catch(() => false);
+  const metadata = await loadPersistedStoreMetadata({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  }).catch(() => defaultMemoryStoreMetadata(backendKind));
+  let snapshot: MemoryStoreSnapshot | undefined;
+  let unreadableIssue: string | undefined;
+  try {
+    snapshot = await loadMemoryStoreSnapshot({
+      workspaceDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      backendKind,
+      allowBackupRecovery: false,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? clipText(error.message, 160) : "unknown store read failure";
+    unreadableIssue = `store unreadable: ${message}`;
+  }
+  if (!snapshot) {
+    const issues = [unreadableIssue ?? "store unreadable"];
+    if (metadata.lastIntegrityCheckResult && metadata.lastIntegrityCheckResult !== "ok") {
+      issues.push(`integrity status: ${String(metadata.lastIntegrityCheckResult)}`);
+    }
+    if (!backupAvailable) {
+      issues.push("backup bundle missing");
+    }
+    const recommendations = backupAvailable
+      ? ["run store recovery from backup before normal diagnostics or retrieval"]
+      : ["store is unreadable and no backup bundle is available"];
+    return {
+      backendKind,
+      sessionId: params.sessionId,
+      metadata,
+      issues,
+      recommendations,
+      summary: clipText(
+        [
+          `backend=${backendKind}`,
+          `long-term=${metadata.longTermCount ?? 0}`,
+          `concepts=${metadata.conceptCount ?? 0}`,
+          `backup=${backupAvailable ? "yes" : "no"}`,
+          `issues=${issues.join("; ")}`,
+        ].join(" | "),
+        320,
+      ),
+      contestedConceptCount: 0,
+      scopedAlternativeConceptCount: 0,
+      entityLinkedConceptCount: 0,
+      supersededMemoryCount: 0,
+      permanentEligibleCount: 0,
+      staleMemoryCount: 0,
+      backupAvailable,
+      recoveryRecommended: true,
+    };
+  }
   const adjudications = buildPersistedMemoryAdjudications({
     sessionId: params.sessionId,
     entries: snapshot.longTermMemory,

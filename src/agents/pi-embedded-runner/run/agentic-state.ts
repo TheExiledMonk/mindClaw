@@ -357,6 +357,7 @@ type WorkspaceState = {
 type ProceduralMemorySkillSignal = {
   recommendedSkills: string[];
   weightedSkills: Map<string, number>;
+  weightedFamilies: Map<string, number>;
   workflowChains: string[][];
   multiSkillHint: boolean;
 };
@@ -438,6 +439,7 @@ function extractProceduralMemorySkillSignals(params: {
   const recommendedSkills = extractRecommendedProceduralSkills(params.memoryText);
   const workflowHints = extractProceduralWorkflowChains(params);
   const weightedSkills = new Map<string, number>();
+  const weightedFamilies = new Map<string, number>();
   for (const skill of recommendedSkills) {
     weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + 2.5);
   }
@@ -445,6 +447,7 @@ function extractProceduralMemorySkillSignals(params: {
     return {
       recommendedSkills,
       weightedSkills,
+      weightedFamilies,
       workflowChains: workflowHints.chains,
       multiSkillHint: workflowHints.multiSkillHint,
     };
@@ -454,6 +457,7 @@ function extractProceduralMemorySkillSignals(params: {
     return {
       recommendedSkills,
       weightedSkills,
+      weightedFamilies,
       workflowChains: workflowHints.chains,
       multiSkillHint: workflowHints.multiSkillHint,
     };
@@ -502,9 +506,30 @@ function extractProceduralMemorySkillSignals(params: {
       weightedSkills.set(skill, score);
     }
   }
+  const effectivenessMatch = params.memoryText.match(
+    /Skill effectiveness guidance:\s*((?:\n-\s+[^\n]+)+)/i,
+  );
+  const effectivenessLines = effectivenessMatch
+    ? effectivenessMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
+  for (const line of effectivenessLines) {
+    const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const family = line.match(/family=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const score = Number(line.match(/score=(-?\d+(?:\.\d+)?)/i)?.[1] ?? Number.NaN);
+    if (skill && Number.isFinite(score) && params.availableSkills.includes(skill)) {
+      weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
+    }
+    if (family && Number.isFinite(score)) {
+      weightedFamilies.set(family, (weightedFamilies.get(family) ?? 0) + score);
+    }
+  }
   return {
     recommendedSkills,
     weightedSkills,
+    weightedFamilies,
     workflowChains: workflowHints.chains,
     multiSkillHint: workflowHints.multiSkillHint,
   };
@@ -1274,6 +1299,7 @@ function buildOrchestrationState(params: {
   likelySkills?: string[];
   memoryRecommendedSkills?: string[];
   memoryWeightedSkills?: Map<string, number>;
+  memoryWeightedFamilies?: Map<string, number>;
   memoryWorkflowChains?: string[][];
   memoryMultiSkillHint?: boolean;
   memoryRegressionSignals?: AgenticRegressionMemorySignal;
@@ -1285,6 +1311,7 @@ function buildOrchestrationState(params: {
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
   const memoryRecommendedSkills = uniqueCompact(params.memoryRecommendedSkills ?? [], 6);
   const memoryWeightedSkills = params.memoryWeightedSkills ?? new Map<string, number>();
+  const memoryWeightedFamilies = params.memoryWeightedFamilies ?? new Map<string, number>();
   const memoryWorkflowChains = params.memoryWorkflowChains ?? [];
   const memoryMultiSkillHint = params.memoryMultiSkillHint === true;
   const memoryRegressionSignals = params.memoryRegressionSignals ?? {
@@ -1323,6 +1350,11 @@ function buildOrchestrationState(params: {
       if (memoryWeightedSkills.has(skill.name)) {
         score += memoryWeightedSkills.get(skill.name) ?? 0;
         reasons.push("memory-quality");
+      }
+      const skillFamily = inferSkillFamily(skill.name);
+      if (memoryWeightedFamilies.has(skillFamily)) {
+        score += memoryWeightedFamilies.get(skillFamily) ?? 0;
+        reasons.push(`family-quality:${skillFamily}`);
       }
       if (alternativeSkills.includes(skill.name)) {
         score += 1.5;
@@ -1391,7 +1423,7 @@ function buildOrchestrationState(params: {
         }
       }
       if (
-        memoryRegressionSignals.regressingSkillFamilies.includes(inferSkillFamily(skill.name)) &&
+        memoryRegressionSignals.regressingSkillFamilies.includes(skillFamily) &&
         (params.plannerState?.status === "needs_replan" ||
           params.plannerState?.status === "blocked")
       ) {
@@ -1828,6 +1860,7 @@ export function buildAgenticExecutionState(params: {
     likelySkills: params.likelySkills,
     memoryRecommendedSkills: memorySkillSignals.recommendedSkills,
     memoryWeightedSkills: memorySkillSignals.weightedSkills,
+    memoryWeightedFamilies: memorySkillSignals.weightedFamilies,
     memoryWorkflowChains: memorySkillSignals.workflowChains,
     memoryMultiSkillHint: memorySkillSignals.multiSkillHint,
     memoryRegressionSignals,

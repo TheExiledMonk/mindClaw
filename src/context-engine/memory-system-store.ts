@@ -811,6 +811,107 @@ function deriveSkillFamilyGuidanceLine(entry: LongTermMemoryEntry): string | und
     .join(" ");
 }
 
+function inferSkillFamilyFromName(skill: string): string {
+  const normalized = skill.toLowerCase();
+  if (normalized.includes("diagnostic")) {
+    return "diagnostics";
+  }
+  if (
+    normalized.includes("acceptance") ||
+    normalized.includes("validation") ||
+    normalized.includes("report")
+  ) {
+    return "verification";
+  }
+  if (normalized.includes("release") || normalized.includes("deploy")) {
+    return "release";
+  }
+  if (normalized.includes("migration")) {
+    return "migration";
+  }
+  const parts = normalized.split(/[^a-z0-9]+/).filter((part) => part.length >= 4);
+  return parts[0] ?? normalized;
+}
+
+function deriveSkillEffectivenessGuidance(
+  entries: LongTermMemoryEntry[],
+): Array<{ skill: string; family: string; score: number; evidenceCount: number }> {
+  const scores = new Map<string, { family: string; score: number; evidenceCount: number }>();
+  for (const entry of entries) {
+    const rankedSkills = (entry.environmentTags ?? [])
+      .filter((tag) => tag.startsWith("procedural:ranked-skill:"))
+      .map((tag) => tag.split(":").at(-1)?.trim())
+      .filter((skill): skill is string => Boolean(skill));
+    const primarySkill =
+      (entry.environmentTags ?? [])
+        .find((tag) => tag.startsWith("procedural:primary-skill:"))
+        ?.replace("procedural:primary-skill:", "")
+        .trim() || rankedSkills[0];
+    const suggestedSkill =
+      (entry.environmentTags ?? [])
+        .find((tag) => tag.startsWith("procedural:suggested-skill:"))
+        ?.replace("procedural:suggested-skill:", "")
+        .trim() || undefined;
+    const candidateSkills = uniqueStrings(
+      [primarySkill, suggestedSkill, ...rankedSkills].filter(
+        (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+      ),
+    );
+    if (candidateSkills.length === 0) {
+      continue;
+    }
+    const outcomeWeight = (entry.environmentTags ?? []).includes("procedural:outcome:verified")
+      ? 2
+      : (entry.environmentTags ?? []).includes("procedural:outcome:partial")
+        ? 0.9
+        : (entry.environmentTags ?? []).includes("procedural:outcome:failed") ||
+            (entry.environmentTags ?? []).includes("procedural:outcome:blocked")
+          ? -1
+          : 0;
+    const goalWeight = (entry.environmentTags ?? []).includes(
+      "procedural:goal-satisfaction:satisfied",
+    )
+      ? 1
+      : (entry.environmentTags ?? []).includes("procedural:goal-satisfaction:partial")
+        ? 0.35
+        : (entry.environmentTags ?? []).includes("procedural:goal-satisfaction:uncertain")
+          ? -0.2
+          : 0;
+    const fallbackPenalty = (entry.environmentTags ?? []).includes("procedural:no-viable-fallback")
+      ? -0.6
+      : 0;
+    const escalationPenalty = (entry.environmentTags ?? []).some((tag) =>
+      tag.startsWith("procedural:escalate:"),
+    )
+      ? -0.5
+      : 0;
+    const nearMissPenalty = (entry.environmentTags ?? []).includes("procedural:near-miss")
+      ? -0.25
+      : 0;
+    const baseScore =
+      outcomeWeight + goalWeight + fallbackPenalty + escalationPenalty + nearMissPenalty;
+    for (const skill of candidateSkills) {
+      const family = inferSkillFamilyFromName(skill);
+      const bucket = scores.get(skill) ?? { family, score: 0, evidenceCount: 0 };
+      bucket.score += baseScore;
+      bucket.evidenceCount += 1;
+      scores.set(skill, bucket);
+    }
+  }
+  return [...scores.entries()]
+    .map(([skill, value]) => ({
+      skill,
+      family: value.family,
+      score: Math.round(value.score * 100) / 100,
+      evidenceCount: value.evidenceCount,
+    }))
+    .toSorted(
+      (a, b) =>
+        b.score - a.score || b.evidenceCount - a.evidenceCount || a.skill.localeCompare(b.skill),
+    )
+    .slice(0, 5);
+}
+
 function normalizeComparable(text: string): string {
   return text
     .toLowerCase()
@@ -6202,8 +6303,19 @@ export function retrieveMemoryContextPacket(
   );
   if (proceduralGuidance.length > 0) {
     const recommendedSkills = recommendProceduralSkillsFromEntries(proceduralGuidance);
+    const effectivenessGuidance = deriveSkillEffectivenessGuidance(proceduralGuidance);
     if (recommendedSkills.length > 0) {
       sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
+    }
+    if (effectivenessGuidance.length > 0) {
+      sections.push(
+        `Skill effectiveness guidance:\n- ${effectivenessGuidance
+          .map(
+            (item) =>
+              `skill=${item.skill} family=${item.family} score=${item.score.toFixed(2)} evidence=${item.evidenceCount}`,
+          )
+          .join("\n- ")}`,
+      );
     }
     sections.push(
       `Procedural guidance:\n- ${proceduralGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,

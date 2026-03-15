@@ -325,6 +325,27 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.rationale).toContain("consolidating within diagnostics");
   });
 
+  it("uses skill effectiveness guidance from memory to prefer the stronger accumulated skill", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the diagnostics workflow and pick the strongest reusable path.")],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=acceptance-report family=verification score=3.40 evidence=3",
+        "- skill=memory-diagnostics family=diagnostics score=-1.10 evidence=2",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.rankedSkills[0]).toBe("acceptance-report");
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+  });
+
   it("uses memory-weighted orchestration to choose the fallback skill", () => {
     const state = buildAgenticExecutionState({
       messages: [

@@ -2932,6 +2932,68 @@ describe("MemorySystemContextEngine", () => {
     ).toBe(true);
   });
 
+  it("injects skill effectiveness guidance into retrieved memory packets", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:skill-effectiveness-guidance-packet",
+      messages: [userMessage("Choose the strongest reusable workflow for the diagnostics fix.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "acceptance-report"],
+          likelySkills: ["memory-diagnostics"],
+          alternativeSkills: ["acceptance-report"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "extend_existing",
+          overlappingSkills: ["memory-diagnostics", "acceptance-report"],
+          skillFamilies: ["verification"],
+          nearMissCandidate: false,
+          retryClass: "skill_fallback",
+          suggestedSkill: "acceptance-report",
+          shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "acceptance-report",
+          fallbackSkills: ["memory-diagnostics"],
+          skillChain: ["acceptance-report", "memory-diagnostics"],
+          workflowSteps: [
+            { skill: "acceptance-report", role: "primary" },
+            { skill: "memory-diagnostics", role: "fallback" },
+          ],
+          rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          multiSkillCandidate: true,
+          chainedWorkflow: true,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "Reuse the acceptance-first verification path.",
+          planSteps: [],
+        },
+      } as never,
+    });
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [userMessage("Which workflow is strongest for the diagnostics fix?")],
+    });
+
+    expect(packet.text).toContain("Skill effectiveness guidance:");
+    expect(packet.text).toContain("skill=acceptance-report");
+    expect(packet.text).toContain("family=verification");
+    expect(packet.text).toContain("score=");
+  });
+
   it("includes maintenance details when diagnostics runs repair", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-repair-"));
     const sessionId = "agent:diagnostics-repair";

@@ -133,6 +133,8 @@ async function main(): Promise<void> {
           effectiveSkills: diagnostics.agenticTrends.effectiveSkills,
           recoveringSkills: diagnostics.agenticTrends.recoveringSkills,
           stabilizedSkills: diagnostics.agenticTrends.stabilizedSkills,
+          templateFamilies: diagnostics.agenticTrends.templateFamilies,
+          mergeFamilies: diagnostics.agenticTrends.mergeFamilies,
           trend: diagnostics.agenticTrends.trend,
         }
       : undefined;

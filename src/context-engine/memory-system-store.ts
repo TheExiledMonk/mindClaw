@@ -400,6 +400,8 @@ export type MemoryAgenticTrendReport = {
   weakeningSkills: string[];
   recoveringSkills: string[];
   stabilizedSkills: string[];
+  templateFamilies: string[];
+  mergeFamilies: string[];
   latestSummaries: string[];
   trend: "stable" | "watch" | "regressing";
   summary: string;
@@ -1118,6 +1120,107 @@ function derivePromotedScopedSkills(entries: LongTermMemoryEntry[]): string[] {
     }
   }
   return [...promoted].slice(0, 3);
+}
+
+function deriveTemplateScopedFamilies(entries: LongTermMemoryEntry[]): string[] {
+  const mergeFamilies = new Set(deriveMergeScopedFamilies(entries));
+  const familySignals = new Map<string, number>();
+  for (const entry of entries) {
+    const tags = entry.environmentTags ?? [];
+    const consolidationAction = tags
+      .find((tag) => tag.startsWith("procedural:consolidation-action:"))
+      ?.replace("procedural:consolidation-action:", "")
+      .trim();
+    if (consolidationAction !== "generalize_existing") {
+      continue;
+    }
+    if (tags.includes("procedural:merge-candidate")) {
+      continue;
+    }
+    if (!tags.includes("procedural:template-candidate")) {
+      continue;
+    }
+    const family = tags
+      .find((tag) => tag.startsWith("procedural:skill-family:"))
+      ?.replace("procedural:skill-family:", "")
+      .trim();
+    if (!family) {
+      continue;
+    }
+    const taskMode =
+      tags
+        .find((tag) => tag.startsWith("task-mode:"))
+        ?.replace("task-mode:", "")
+        .trim() || "general";
+    const env =
+      tags
+        .find((tag) => tag.startsWith("procedural:skill-env:"))
+        ?.replace("procedural:skill-env:", "")
+        .trim() || "unknown";
+    const outcome =
+      tags
+        .find((tag) => tag.startsWith("procedural:outcome:"))
+        ?.replace("procedural:outcome:", "") || "unverified";
+    if (outcome !== "verified" && outcome !== "partial") {
+      continue;
+    }
+    const key = `${family}@${taskMode}/${env}`;
+    familySignals.set(key, (familySignals.get(key) ?? 0) + 1);
+  }
+  return [...familySignals.entries()]
+    .filter(([key, count]) => count >= 2 && !mergeFamilies.has(key))
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([key]) => key)
+    .slice(0, 3);
+}
+
+function deriveMergeScopedFamilies(entries: LongTermMemoryEntry[]): string[] {
+  const familySignals = new Map<string, number>();
+  for (const entry of entries) {
+    const tags = entry.environmentTags ?? [];
+    const consolidationAction = tags
+      .find((tag) => tag.startsWith("procedural:consolidation-action:"))
+      ?.replace("procedural:consolidation-action:", "")
+      .trim();
+    if (consolidationAction !== "generalize_existing") {
+      continue;
+    }
+    const overlapCount = tags.filter((tag) => tag.startsWith("procedural:overlap-skill:")).length;
+    if (!tags.includes("procedural:merge-candidate") && overlapCount < 2) {
+      continue;
+    }
+    const family = tags
+      .find((tag) => tag.startsWith("procedural:skill-family:"))
+      ?.replace("procedural:skill-family:", "")
+      .trim();
+    if (!family) {
+      continue;
+    }
+    const taskMode =
+      tags
+        .find((tag) => tag.startsWith("task-mode:"))
+        ?.replace("task-mode:", "")
+        .trim() || "general";
+    const env =
+      tags
+        .find((tag) => tag.startsWith("procedural:skill-env:"))
+        ?.replace("procedural:skill-env:", "")
+        .trim() || "unknown";
+    const outcome =
+      tags
+        .find((tag) => tag.startsWith("procedural:outcome:"))
+        ?.replace("procedural:outcome:", "") || "unverified";
+    if (outcome !== "verified" && outcome !== "partial") {
+      continue;
+    }
+    const key = `${family}@${taskMode}/${env}`;
+    familySignals.set(key, (familySignals.get(key) ?? 0) + 1);
+  }
+  return [...familySignals.entries()]
+    .filter(([, count]) => count >= 2)
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([key]) => key)
+    .slice(0, 3);
 }
 
 function normalizeComparable(text: string): string {
@@ -8486,6 +8589,8 @@ function inspectMemoryAgenticTrends(
     .map((item) => `${item.skill}@${item.taskMode}/${item.env}`);
   const recoveringSkills = deriveRecoveringScopedSkills(proceduralEntries);
   const stabilizedSkills = deriveStabilizedScopedSkills(proceduralEntries);
+  const templateFamilies = deriveTemplateScopedFamilies(proceduralEntries);
+  const mergeFamilies = deriveMergeScopedFamilies(proceduralEntries);
   const latestSummaries = agenticEntries.slice(0, 3).map((entry) => clipText(entry.text, 160));
   const trend =
     failingQualityGateSignals > 0 || failingSoakSignals > 0
@@ -8508,6 +8613,8 @@ function inspectMemoryAgenticTrends(
     weakeningSkills,
     recoveringSkills,
     stabilizedSkills,
+    templateFamilies,
+    mergeFamilies,
     latestSummaries,
     trend,
     summary: clipText(
@@ -8522,6 +8629,8 @@ function inspectMemoryAgenticTrends(
         weakeningSkills.length > 0 ? `weakening=${weakeningSkills.join(",")}` : "",
         recoveringSkills.length > 0 ? `recovering=${recoveringSkills.join(",")}` : "",
         stabilizedSkills.length > 0 ? `stabilized=${stabilizedSkills.join(",")}` : "",
+        templateFamilies.length > 0 ? `template_families=${templateFamilies.join(",")}` : "",
+        mergeFamilies.length > 0 ? `merge_families=${mergeFamilies.join(",")}` : "",
         qualityFailureReasons.length > 0 ? `reasons=${qualityFailureReasons.join(",")}` : "",
       ]
         .filter(Boolean)
@@ -8611,6 +8720,12 @@ export async function generateMemoryDiagnosticsReport(params: {
     !agenticTrends?.weakeningSkills.length
       ? ["promote stabilized scoped skills for stable reuse or extend-existing workflow decisions"]
       : []),
+    ...(agenticTrends?.templateFamilies.length
+      ? ["parameterize template-ready workflow families before spawning new forks"]
+      : []),
+    ...(agenticTrends?.mergeFamilies.length
+      ? ["merge repeated sibling workflow families when overlap evidence stays durable"]
+      : []),
   ]);
   const summary = clipText(
     [
@@ -8676,6 +8791,14 @@ export function formatMemoryDiagnosticsReport(
           `agentic_stabilized_skills: ${report.agenticTrends.stabilizedSkills.join(", ")}`,
         );
       }
+      if (report.agenticTrends.templateFamilies.length > 0) {
+        lines.push(
+          `agentic_template_families: ${report.agenticTrends.templateFamilies.join(", ")}`,
+        );
+      }
+      if (report.agenticTrends.mergeFamilies.length > 0) {
+        lines.push(`agentic_merge_families: ${report.agenticTrends.mergeFamilies.join(", ")}`);
+      }
     }
     if (report.failedAcceptanceScenarios.length > 0) {
       lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
@@ -8729,6 +8852,8 @@ export function formatMemoryDiagnosticsReport(
       `- Weakening skills: ${report.agenticTrends.weakeningSkills.length > 0 ? report.agenticTrends.weakeningSkills.join(", ") : "none"}`,
       `- Recovering skills: ${report.agenticTrends.recoveringSkills.length > 0 ? report.agenticTrends.recoveringSkills.join(", ") : "none"}`,
       `- Stabilized skills: ${report.agenticTrends.stabilizedSkills.length > 0 ? report.agenticTrends.stabilizedSkills.join(", ") : "none"}`,
+      `- Template-ready families: ${report.agenticTrends.templateFamilies.length > 0 ? report.agenticTrends.templateFamilies.join(", ") : "none"}`,
+      `- Merge-ready families: ${report.agenticTrends.mergeFamilies.length > 0 ? report.agenticTrends.mergeFamilies.join(", ") : "none"}`,
       `- Latest summaries: ${report.agenticTrends.latestSummaries.length > 0 ? report.agenticTrends.latestSummaries.join("; ") : "none"}`,
       "",
     );

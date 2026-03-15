@@ -348,6 +348,8 @@ export type AgenticQualityGateReport = {
   effectiveSkills: string[];
   recoveringSkills: string[];
   stabilizedSkills: string[];
+  templateFamilies: string[];
+  mergeFamilies: string[];
   effectivenessTrend?: "stable" | "watch" | "regressing";
   recommendations: string[];
   summary: string;
@@ -4508,6 +4510,8 @@ export function runAgenticQualityGate(params?: {
     effectiveSkills?: string[];
     recoveringSkills?: string[];
     stabilizedSkills?: string[];
+    templateFamilies?: string[];
+    mergeFamilies?: string[];
     trend?: "stable" | "watch" | "regressing";
   };
 }): AgenticQualityGateReport {
@@ -4524,6 +4528,8 @@ export function runAgenticQualityGate(params?: {
   const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
   const recoveringSkills = uniqueCompact(params?.memoryTrend?.recoveringSkills ?? [], 6);
   const stabilizedSkills = uniqueCompact(params?.memoryTrend?.stabilizedSkills ?? [], 6);
+  const templateFamilies = uniqueCompact(params?.memoryTrend?.templateFamilies ?? [], 6);
+  const mergeFamilies = uniqueCompact(params?.memoryTrend?.mergeFamilies ?? [], 6);
   const effectivenessTrend = params?.memoryTrend?.trend;
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
@@ -4557,6 +4563,12 @@ export function runAgenticQualityGate(params?: {
       diagnostics.consolidationAction === "generalize_existing" && !diagnostics.mergeCandidate
         ? "Template-ready consolidation is active; parameterize the stable workflow instead of creating a new fork."
         : undefined,
+      templateFamilies.length > 0
+        ? `Memory-backed template-ready families: ${templateFamilies.join(", ")}.`
+        : undefined,
+      mergeFamilies.length > 0
+        ? `Memory-backed merge-ready families: ${mergeFamilies.join(", ")}.`
+        : undefined,
       weakeningSkills.length > 0
         ? "Review weakening scoped skills before promoting or extending the current workflow family."
         : undefined,
@@ -4584,6 +4596,8 @@ export function runAgenticQualityGate(params?: {
     effectiveSkills,
     recoveringSkills,
     stabilizedSkills,
+    templateFamilies,
+    mergeFamilies,
     effectivenessTrend,
     recommendations,
     summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"} effectiveness=${effectivenessPassed ? "pass" : "fail"}`,
@@ -4607,6 +4621,8 @@ export function formatAgenticQualityGateReport(
       `weakening_skills=${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(",") : "none"}`,
       `recovering_skills=${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(",") : "none"}`,
       `stabilized_skills=${report.stabilizedSkills.length > 0 ? report.stabilizedSkills.join(",") : "none"}`,
+      `template_families=${report.templateFamilies.length > 0 ? report.templateFamilies.join(",") : "none"}`,
+      `merge_families=${report.mergeFamilies.length > 0 ? report.mergeFamilies.join(",") : "none"}`,
       `recommendations=${report.recommendations.length > 0 ? report.recommendations.join(" | ") : "none"}`,
       `fail_reasons=${report.failReasons.length > 0 ? report.failReasons.join(",") : "none"}`,
     ];
@@ -4640,6 +4656,8 @@ export function formatAgenticQualityGateReport(
     `- Weakening skills: ${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(", ") : "none"}`,
     `- Recovering skills: ${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(", ") : "none"}`,
     `- Stabilized skills: ${report.stabilizedSkills.length > 0 ? report.stabilizedSkills.join(", ") : "none"}`,
+    `- Template-ready families: ${report.templateFamilies.length > 0 ? report.templateFamilies.join(", ") : "none"}`,
+    `- Merge-ready families: ${report.mergeFamilies.length > 0 ? report.mergeFamilies.join(", ") : "none"}`,
     `- Recommendations: ${report.recommendations.length > 0 ? report.recommendations.join("; ") : "none"}`,
   ];
   return `${lines.join("\n")}\n`;

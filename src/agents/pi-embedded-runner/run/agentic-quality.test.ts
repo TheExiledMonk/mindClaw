@@ -83,12 +83,16 @@ describe("agentic quality gate", () => {
         trend: "stable",
         effectiveSkills: ["acceptance-report@debugging/node"],
         stabilizedSkills: ["release-checks@debugging/node"],
+        templateFamilies: ["diagnostics@debugging/node"],
+        mergeFamilies: ["verification@debugging/node"],
       },
     });
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("agentic quality gate");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("recovering_skills=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("stabilized_skills=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("template_families=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("merge_families=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("recommendations=");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "# Agentic Quality Gate Report",
@@ -96,9 +100,19 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Diagnostics");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Effectiveness");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Template-ready families:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Merge-ready families:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Recommendations:");
     expect(report.recommendations).toContain(
       "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+    );
+    expect(report.recommendations).toContain(
+      "Memory-backed template-ready families: diagnostics@debugging/node.",
+    );
+    expect(report.recommendations).toContain(
+      "Memory-backed merge-ready families: verification@debugging/node.",
     );
   });
 

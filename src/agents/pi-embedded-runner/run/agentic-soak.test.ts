@@ -126,6 +126,20 @@ describe("agentic soak suite", () => {
     expect(memoryBackedClarificationLifecycle?.phases[0]?.details).toContain(
       "Configure the missing environment variable before retrying.",
     );
+    expect(memoryBackedClarificationLifecycle?.phases[1]?.passed).toBe(true);
+    expect(memoryBackedClarificationLifecycle?.phases[1]?.details).toContain(
+      "missing_information:approval",
+    );
+    expect(memoryBackedClarificationLifecycle?.phases[1]?.details).toContain(
+      "Obtain the required approval before retrying.",
+    );
+    expect(memoryBackedClarificationLifecycle?.phases[2]?.passed).toBe(true);
+    expect(memoryBackedClarificationLifecycle?.phases[2]?.details).toContain(
+      "missing_information:external_input",
+    );
+    expect(memoryBackedClarificationLifecycle?.phases[2]?.details).toContain(
+      "Request the missing external input before retrying.",
+    );
   });
 
   it("formats the soak report in summary and markdown forms", () => {

@@ -361,6 +361,108 @@ describe("agentic quality gate", () => {
     );
   });
 
+  it("uses memory-backed approval clarification guidance in the quality gate", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+
+    const clarificationReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(clarificationReport.recommendations).toContain(
+      "Obtain the required approval before retrying.",
+    );
+    expect(clarificationReport.recommendations).toContain(
+      "Need clarification on: prerequisite for deployment.",
+    );
+  });
+
+  it("uses memory-backed external-input clarification guidance in the quality gate", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the import workflow once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for dataset import.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:external_input trend=watch",
+      ].join("\n"),
+    });
+
+    const clarificationReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(clarificationReport.recommendations).toContain(
+      "Request the missing external input before retrying.",
+    );
+    expect(clarificationReport.recommendations).toContain(
+      "Need clarification on: prerequisite for dataset import.",
+    );
+  });
+
   it("surfaces template-ready and merge-ready consolidation recommendations in the quality gate", () => {
     const templateDiagnostics = inspectAgenticExecutionObservability({
       taskState: {

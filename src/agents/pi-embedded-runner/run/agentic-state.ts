@@ -6954,7 +6954,7 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
   }
 
   {
-    const state = buildAgenticExecutionState({
+    const envVarState = buildAgenticExecutionState({
       messages: [
         {
           role: "user",
@@ -6975,37 +6975,123 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
         "- reasons=missing_information:environment_variable trend=watch",
       ].join("\n"),
     });
-    const diagnostics = inspectAgenticExecutionObservability(state);
-    const gate = runAgenticQualityGate({
-      diagnosticsOverride: diagnostics,
+    const approvalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+    const externalInputState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the import workflow once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for dataset import.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:external_input trend=watch",
+      ].join("\n"),
+    });
+    const acceptanceOverride = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      summary: "agentic acceptance 0/0 passed",
+    };
+    const soakOverride = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      summary: "agentic soak 0/0 passed",
+    };
+    const envVarDiagnostics = inspectAgenticExecutionObservability(envVarState);
+    const envVarGate = runAgenticQualityGate({
+      diagnosticsOverride: envVarDiagnostics,
+      acceptanceOverride,
+      soakOverride,
+    });
+    const approvalDiagnostics = inspectAgenticExecutionObservability(approvalState);
+    const approvalGate = runAgenticQualityGate({
+      diagnosticsOverride: approvalDiagnostics,
+      acceptanceOverride,
+      soakOverride,
+    });
+    const externalInputDiagnostics = inspectAgenticExecutionObservability(externalInputState);
+    const externalInputGate = runAgenticQualityGate({
+      diagnosticsOverride: externalInputDiagnostics,
       acceptanceOverride: {
-        passed: true,
-        totalScenarios: 0,
-        passedScenarios: 0,
-        failedScenarioIds: [],
-        scenarios: [],
-        summary: "agentic acceptance 0/0 passed",
+        ...acceptanceOverride,
       },
       soakOverride: {
-        passed: true,
-        totalScenarios: 0,
-        passedScenarios: 0,
-        failedScenarioIds: [],
-        scenarios: [],
-        summary: "agentic soak 0/0 passed",
+        ...soakOverride,
       },
     });
     const phases = [
       buildSoakPhaseResult({
-        label: "memory_backed_clarification_diagnostics",
-        state,
+        label: "memory_backed_env_var_diagnostics",
+        state: envVarState,
         passed:
-          diagnostics.clarificationReason === "missing_information:environment_variable" &&
-          gate.recommendations.includes(
+          envVarDiagnostics.clarificationReason === "missing_information:environment_variable" &&
+          envVarGate.recommendations.includes(
             "Configure the missing environment variable before retrying.",
           ) &&
-          gate.recommendations.includes("Need clarification on: prerequisite for deployment."),
-        details: `reason=${diagnostics.clarificationReason ?? "none"} recommendations=${gate.recommendations.join("|")}`,
+          envVarGate.recommendations.includes(
+            "Need clarification on: prerequisite for deployment.",
+          ),
+        details: `reason=${envVarDiagnostics.clarificationReason ?? "none"} recommendations=${envVarGate.recommendations.join("|")}`,
+      }),
+      buildSoakPhaseResult({
+        label: "memory_backed_approval_diagnostics",
+        state: approvalState,
+        passed:
+          approvalDiagnostics.clarificationReason === "missing_information:approval" &&
+          approvalGate.recommendations.includes("Obtain the required approval before retrying.") &&
+          approvalGate.recommendations.includes(
+            "Need clarification on: prerequisite for deployment.",
+          ),
+        details: `reason=${approvalDiagnostics.clarificationReason ?? "none"} recommendations=${approvalGate.recommendations.join("|")}`,
+      }),
+      buildSoakPhaseResult({
+        label: "memory_backed_external_input_diagnostics",
+        state: externalInputState,
+        passed:
+          externalInputDiagnostics.clarificationReason === "missing_information:external_input" &&
+          externalInputGate.recommendations.includes(
+            "Request the missing external input before retrying.",
+          ) &&
+          externalInputGate.recommendations.includes(
+            "Need clarification on: prerequisite for dataset import.",
+          ),
+        details: `reason=${externalInputDiagnostics.clarificationReason ?? "none"} recommendations=${externalInputGate.recommendations.join("|")}`,
       }),
     ];
     const passed = phases.every((phase) => phase.passed);
@@ -7013,7 +7099,7 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       id: "memory_backed_clarification_reporting_boundary",
       passed,
       summary: passed
-        ? "Memory-backed clarification history shapes release-facing guidance even when the current blocker text is generic."
+        ? "Memory-backed clarification history shapes release-facing guidance for env-var, approval, and external-input blockers even when current blocker text is generic."
         : "Memory-backed clarification history did not stay visible in release-facing reporting.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),

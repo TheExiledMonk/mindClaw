@@ -50,6 +50,11 @@ export type AgenticPlanStep = {
   kind: "implementation" | "verification" | "handoff";
 };
 
+export type AgenticWorkflowStep = {
+  skill: string;
+  role: "primary" | "supporting" | "verification" | "fallback";
+};
+
 export type AgenticTaskState = {
   version: 1;
   objective?: string;
@@ -111,11 +116,13 @@ export type AgenticOrchestrationState = {
   primarySkill?: string;
   fallbackSkills: string[];
   skillChain: string[];
+  workflowSteps: AgenticWorkflowStep[];
   rankedSkills: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
   hasViableFallback: boolean;
   multiSkillCandidate: boolean;
+  chainedWorkflow: boolean;
   rationale?: string;
 };
 
@@ -160,11 +167,13 @@ export type ProceduralExecutionRecord = {
   primarySkill?: string;
   fallbackSkills: string[];
   skillChain: string[];
+  workflowSteps: AgenticWorkflowStep[];
   rankedSkills: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
   hasViableFallback: boolean;
   multiSkillCandidate: boolean;
+  chainedWorkflow: boolean;
   workspaceKind: "project" | "temporary" | "unknown";
   capabilitySignals: string[];
   preferredValidationTools: string[];
@@ -182,6 +191,7 @@ export type AgenticExecutionObservabilityReport = {
   riskLevel: AgenticRiskLevel;
   primarySkill?: string;
   suggestedSkill?: string;
+  workflowSteps: AgenticWorkflowStep[];
   rankedSkills: string[];
   capabilityGaps: string[];
   failurePattern: AgenticFailureLearningState["failurePattern"];
@@ -214,7 +224,9 @@ export type AgenticAcceptanceScenarioId =
   | "plan_step_completion_alignment"
   | "plan_step_blocking_alignment"
   | "recovered_retry_reopens_verification"
-  | "handoff_checkpoint_alignment";
+  | "handoff_checkpoint_alignment"
+  | "memory_guided_workflow_chain"
+  | "workflow_chain_persists_to_memory";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -276,6 +288,8 @@ type WorkspaceState = {
 type ProceduralMemorySkillSignal = {
   recommendedSkills: string[];
   weightedSkills: Map<string, number>;
+  workflowChains: string[][];
+  multiSkillHint: boolean;
 };
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -295,21 +309,76 @@ function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   );
 }
 
+function extractProceduralWorkflowChains(params: {
+  memoryText?: string;
+  availableSkills?: string[];
+}): { chains: string[][]; multiSkillHint: boolean } {
+  if (!params.memoryText || !params.availableSkills || params.availableSkills.length === 0) {
+    return { chains: [], multiSkillHint: false };
+  }
+  const availableSkillSet = new Set(params.availableSkills.map((skill) => skill.toLowerCase()));
+  const guidanceMatch = params.memoryText.match(/Procedural guidance:\s*((?:\n-\s+[^\n]+)+)/i);
+  if (!guidanceMatch) {
+    return { chains: [], multiSkillHint: false };
+  }
+  const guidanceLines = guidanceMatch[1]
+    .split("\n")
+    .map((line) => line.replace(/^\s*-\s+/, "").trim())
+    .filter(Boolean);
+  const chains: string[][] = [];
+  let multiSkillHint = false;
+  for (const line of guidanceLines) {
+    const normalizedLine = line.toLowerCase();
+    if (normalizedLine.includes("multi-skill orchestration candidate")) {
+      multiSkillHint = true;
+    }
+    const chainMatches = [
+      ...line.matchAll(/skill chain ([a-z0-9._-]+(?:\s*,\s*[a-z0-9._-]+)+)/gi),
+      ...line.matchAll(/fallback chain ([a-z0-9._-]+(?:\s*(?:->|,)\s*[a-z0-9._-]+)+)/gi),
+    ];
+    for (const match of chainMatches) {
+      const raw = match[1] ?? "";
+      const steps = uniqueCompact(
+        raw
+          .split(/\s*(?:->|,)\s*/g)
+          .map((item) => item.trim())
+          .filter((item) => availableSkillSet.has(item.toLowerCase())),
+        5,
+      );
+      if (steps.length > 1) {
+        chains.push(steps);
+      }
+    }
+  }
+  return { chains, multiSkillHint };
+}
+
 function extractProceduralMemorySkillSignals(params: {
   memoryText?: string;
   availableSkills?: string[];
 }): ProceduralMemorySkillSignal {
   const recommendedSkills = extractRecommendedProceduralSkills(params.memoryText);
+  const workflowHints = extractProceduralWorkflowChains(params);
   const weightedSkills = new Map<string, number>();
   for (const skill of recommendedSkills) {
     weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + 2.5);
   }
   if (!params.memoryText || !params.availableSkills || params.availableSkills.length === 0) {
-    return { recommendedSkills, weightedSkills };
+    return {
+      recommendedSkills,
+      weightedSkills,
+      workflowChains: workflowHints.chains,
+      multiSkillHint: workflowHints.multiSkillHint,
+    };
   }
   const guidanceMatch = params.memoryText.match(/Procedural guidance:\s*((?:\n-\s+[^\n]+)+)/i);
   if (!guidanceMatch) {
-    return { recommendedSkills, weightedSkills };
+    return {
+      recommendedSkills,
+      weightedSkills,
+      workflowChains: workflowHints.chains,
+      multiSkillHint: workflowHints.multiSkillHint,
+    };
   }
   const guidanceLines = guidanceMatch[1]
     .split("\n")
@@ -355,7 +424,12 @@ function extractProceduralMemorySkillSignals(params: {
       weightedSkills.set(skill, score);
     }
   }
-  return { recommendedSkills, weightedSkills };
+  return {
+    recommendedSkills,
+    weightedSkills,
+    workflowChains: workflowHints.chains,
+    multiSkillHint: workflowHints.multiSkillHint,
+  };
 }
 
 function extractMessageText(message: AgentMessage): string {
@@ -927,6 +1001,8 @@ function buildOrchestrationState(params: {
   likelySkills?: string[];
   memoryRecommendedSkills?: string[];
   memoryWeightedSkills?: Map<string, number>;
+  memoryWorkflowChains?: string[][];
+  memoryMultiSkillHint?: boolean;
   alternativeSkills?: string[];
   toolSignals?: ToolSignal[];
   plannerState?: AgenticPlannerState;
@@ -935,6 +1011,8 @@ function buildOrchestrationState(params: {
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
   const memoryRecommendedSkills = uniqueCompact(params.memoryRecommendedSkills ?? [], 6);
   const memoryWeightedSkills = params.memoryWeightedSkills ?? new Map<string, number>();
+  const memoryWorkflowChains = params.memoryWorkflowChains ?? [];
+  const memoryMultiSkillHint = params.memoryMultiSkillHint === true;
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const currentLikelySkill = likelySkills[0];
   const currentLikelyMemoryWeight = currentLikelySkill
@@ -1042,9 +1120,44 @@ function buildOrchestrationState(params: {
     (params.plannerState?.retryClass !== "skill_fallback" ||
       rankedSkills[0] !== likelySkills[0] ||
       fallbackSkills.some((skill) => alternativeSkills.includes(skill)));
-  const skillChain = uniqueCompact(
-    [primarySkill, ...fallbackSkills].filter((value): value is string => Boolean(value)),
+  const verificationLikeSkill = rankedSkills.find(
+    (skill) =>
+      ![primarySkill, ...fallbackSkills].includes(skill) &&
+      /\b(report|check|validation|test|acceptance|release)\b/i.test(skill),
+  );
+  const selectedMemoryChain =
+    memoryWorkflowChains
+      .filter((chain) => chain.every((skill) => rankedSkills.includes(skill)))
+      .toSorted((a, b) => b.length - a.length)[0] ?? [];
+  const baseWorkflowChain = uniqueCompact(
+    [
+      ...selectedMemoryChain,
+      primarySkill,
+      memoryMultiSkillHint ? fallbackSkills[0] : undefined,
+      verificationLikeSkill,
+    ].filter((value): value is string => Boolean(value)),
     4,
+  );
+  const chainedWorkflow = baseWorkflowChain.length > 1;
+  const workflowSteps: AgenticWorkflowStep[] = [
+    ...baseWorkflowChain.map((skill, index, chain): AgenticWorkflowStep => {
+      const role: AgenticWorkflowStep["role"] =
+        index === 0
+          ? "primary"
+          : index === chain.length - 1 &&
+              /\b(report|check|validation|test|acceptance|release)\b/i.test(skill)
+            ? "verification"
+            : "supporting";
+      return { skill, role };
+    }),
+    ...fallbackSkills
+      .filter((skill) => !baseWorkflowChain.includes(skill))
+      .slice(0, 2)
+      .map((skill) => ({ skill, role: "fallback" as const })),
+  ];
+  const skillChain = uniqueCompact(
+    workflowSteps.map((step) => step.skill),
+    5,
   );
   const capabilityGaps = uniqueCompact(
     [
@@ -1070,13 +1183,15 @@ function buildOrchestrationState(params: {
     5,
   );
   const multiSkillCandidate =
-    skillChain.length > 1 &&
+    (chainedWorkflow || memoryMultiSkillHint) &&
     (params.plannerState?.retryClass === "skill_fallback" ||
       prerequisiteWarnings.length > 0 ||
       params.taskMode === "planning" ||
-      params.taskMode === "operations");
+      params.taskMode === "operations" ||
+      params.taskMode === "coding" ||
+      params.taskMode === "debugging");
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -1085,11 +1200,13 @@ function buildOrchestrationState(params: {
     primarySkill,
     fallbackSkills,
     skillChain,
+    workflowSteps,
     rankedSkills,
     prerequisiteWarnings,
     capabilityGaps,
     hasViableFallback,
     multiSkillCandidate,
+    chainedWorkflow,
     rationale,
   };
 }
@@ -1348,6 +1465,8 @@ export function buildAgenticExecutionState(params: {
     likelySkills: params.likelySkills,
     memoryRecommendedSkills: memorySkillSignals.recommendedSkills,
     memoryWeightedSkills: memorySkillSignals.weightedSkills,
+    memoryWorkflowChains: memorySkillSignals.workflowChains,
+    memoryMultiSkillHint: memorySkillSignals.multiSkillHint,
     alternativeSkills: plannerState.alternativeSkills,
     toolSignals: params.toolSignals,
     plannerState,
@@ -1422,6 +1541,12 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.orchestrationState.fallbackSkills.length > 0
       ? `Fallback chain: ${state.orchestrationState.fallbackSkills.join(" -> ")}`
       : undefined;
+  const workflowGuidance =
+    state.orchestrationState.workflowSteps.length > 1
+      ? `Workflow chain: ${state.orchestrationState.workflowSteps
+          .map((step) => `${step.role}:${step.skill}`)
+          .join(" -> ")}`
+      : undefined;
   const capabilityGapGuidance =
     state.orchestrationState.capabilityGaps.length > 0
       ? `Capability gaps: ${state.orchestrationState.capabilityGaps.join(", ")}`
@@ -1465,6 +1590,7 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     governanceGuidance,
     governanceReasons,
     orchestrationGuidance,
+    workflowGuidance,
     fallbackChainGuidance,
     rankedSkillsGuidance,
     prerequisiteGuidance,
@@ -1543,6 +1669,13 @@ export function buildProceduralExecutionRecord(params: {
           ),
           6,
         );
+  const resolvedWorkflowSteps =
+    params.orchestrationState.workflowSteps.length > 0
+      ? params.orchestrationState.workflowSteps
+      : resolvedSkillChain.map((skill, index) => ({
+          skill,
+          role: index === 0 ? ("primary" as const) : ("fallback" as const),
+        }));
   if (nearMissCandidate && alternativeSkills.length > 0) {
     nextImprovement = `Capture why the primary path fell short and compare it with alternative skills such as ${alternativeSkills.slice(0, 3).join(", ")}.`;
   } else if (params.plannerState.shouldEscalate) {
@@ -1585,11 +1718,13 @@ export function buildProceduralExecutionRecord(params: {
     primarySkill: resolvedPrimarySkill,
     fallbackSkills: resolvedFallbackSkills,
     skillChain: resolvedSkillChain,
+    workflowSteps: resolvedWorkflowSteps,
     rankedSkills: resolvedRankedSkills,
     prerequisiteWarnings: params.orchestrationState.prerequisiteWarnings,
     capabilityGaps: params.orchestrationState.capabilityGaps,
     hasViableFallback: params.orchestrationState.hasViableFallback,
     multiSkillCandidate: params.orchestrationState.multiSkillCandidate,
+    chainedWorkflow: params.orchestrationState.chainedWorkflow,
     workspaceKind: params.environmentState.workspaceKind,
     capabilitySignals: params.environmentState.capabilitySignals,
     preferredValidationTools: params.environmentState.preferredValidationTools,
@@ -1642,6 +1777,7 @@ export function inspectAgenticExecutionObservability(
     riskLevel: state.governanceState.riskLevel,
     primarySkill: state.orchestrationState.primarySkill,
     suggestedSkill: state.plannerState.suggestedSkill,
+    workflowSteps: state.orchestrationState.workflowSteps,
     rankedSkills: state.orchestrationState.rankedSkills,
     capabilityGaps: state.orchestrationState.capabilityGaps,
     failurePattern: state.failureLearningState.failurePattern,
@@ -1664,6 +1800,9 @@ export function formatAgenticExecutionObservabilityReport(
       report.summary,
       `escalation=${report.escalationRequired ? "yes" : "no"} fallback=${report.hasViableFallback ? "viable" : "missing"}`,
       report.rankedSkills.length > 0 ? `ranked=${report.rankedSkills.join(">")}` : "ranked=none",
+      report.workflowSteps.length > 0
+        ? `workflow=${report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(">")}`
+        : "workflow=none",
       report.recommendations.length > 0
         ? `recommendations=${report.recommendations.join(" | ")}`
         : "recommendations=none",
@@ -1683,6 +1822,7 @@ export function formatAgenticExecutionObservabilityReport(
     `- Primary skill: ${report.primarySkill ?? "none"}`,
     `- Suggested skill: ${report.suggestedSkill ?? "none"}`,
     `- Ranked skills: ${report.rankedSkills.length > 0 ? report.rankedSkills.join(" > ") : "none"}`,
+    `- Workflow chain: ${report.workflowSteps.length > 0 ? report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ") : "none"}`,
     `- Failure pattern: ${report.failurePattern}`,
     `- Viable fallback: ${report.hasViableFallback ? "yes" : "no"}`,
     `- Escalation required: ${report.escalationRequired ? "yes" : "no"}`,
@@ -2187,6 +2327,100 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Handoff checkpoints produce resumable operator handoff state."
         : "Handoff checkpoints did not produce a resumable handoff summary.",
       details: `${report.summary} resume=${report.resumePrompt ?? "none"}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, then run the acceptance report and final validation in sequence.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: skill chain memory-diagnostics, acceptance-report: ranked skills acceptance-report > memory-diagnostics: multi-skill orchestration candidate",
+      ].join("\n"),
+    });
+    const passed =
+      state.orchestrationState.workflowSteps.length >= 2 &&
+      state.orchestrationState.workflowSteps[0]?.skill === "memory-diagnostics" &&
+      state.orchestrationState.workflowSteps[1]?.skill === "acceptance-report" &&
+      state.orchestrationState.chainedWorkflow;
+    scenarios.push({
+      id: "memory_guided_workflow_chain",
+      passed,
+      summary: passed
+        ? "Procedural memory can promote an explicit multi-skill workflow chain."
+        : "Procedural memory did not produce the expected workflow chain.",
+      details: state.orchestrationState.workflowSteps
+        .map((step) => `${step.role}:${step.skill}`)
+        .join("|"),
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, then run the acceptance report and final validation in sequence.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: skill chain memory-diagnostics, acceptance-report: multi-skill orchestration candidate",
+      ].join("\n"),
+    });
+    const record = buildProceduralExecutionRecord({
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [],
+      diffSignals: [],
+    });
+    const passed =
+      record.workflowSteps.length >= 2 &&
+      record.workflowSteps.some(
+        (step) => step.role === "supporting" || step.role === "verification",
+      ) &&
+      record.chainedWorkflow;
+    scenarios.push({
+      id: "workflow_chain_persists_to_memory",
+      passed,
+      summary: passed
+        ? "Workflow-chain orchestration persists into procedural execution memory."
+        : "Workflow-chain orchestration did not persist into procedural memory.",
+      details: record.workflowSteps.map((step) => `${step.role}:${step.skill}`).join("|"),
     });
   }
 

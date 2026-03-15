@@ -199,11 +199,16 @@ export type CompactEmbeddedPiSessionParams = {
     primarySkill?: string;
     fallbackSkills: string[];
     skillChain: string[];
+    workflowSteps: Array<{
+      skill: string;
+      role: "primary" | "supporting" | "verification" | "fallback";
+    }>;
     rankedSkills: string[];
     prerequisiteWarnings: string[];
     capabilityGaps: string[];
     hasViableFallback: boolean;
     multiSkillCandidate: boolean;
+    chainedWorkflow: boolean;
     rationale?: string;
   };
   environmentState?: {

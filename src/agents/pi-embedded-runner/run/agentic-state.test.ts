@@ -297,6 +297,45 @@ describe("agentic-state", () => {
     expect(state.plannerState.nextAction).toContain("acceptance-report");
   });
 
+  it("builds a memory-guided workflow chain for multi-skill orchestration", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the diagnostics workflow, then run the acceptance report and final validation in sequence.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: skill chain memory-diagnostics, acceptance-report: ranked skills acceptance-report > memory-diagnostics: multi-skill orchestration candidate",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.workflowSteps.length).toBeGreaterThanOrEqual(2);
+    expect(state.orchestrationState.workflowSteps[0]).toEqual({
+      role: "primary",
+      skill: "memory-diagnostics",
+    });
+    expect(state.orchestrationState.workflowSteps[1]).toEqual({
+      role: "verification",
+      skill: "acceptance-report",
+    });
+    expect(state.orchestrationState.chainedWorkflow).toBe(true);
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Workflow chain: primary:memory-diagnostics -> verification:acceptance-report",
+    );
+  });
+
   it("marks when fallback guidance is still not viable", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Fix the diagnostics workflow and find a viable fallback.")],
@@ -618,6 +657,7 @@ describe("agentic-state", () => {
     expect(record.shouldEscalate).toBe(false);
     expect(record.autonomyMode).toBe("continue");
     expect(record.skillChain).toEqual(expect.arrayContaining(["memory-diagnostics"]));
+    expect(record.workflowSteps.length).toBeGreaterThan(0);
     expect(record.rankedSkills).toEqual(expect.arrayContaining(["memory-diagnostics"]));
     expect(record.planSteps.length).toBeGreaterThan(0);
     expect(record.workspaceKind).toBe("unknown");
@@ -670,6 +710,7 @@ describe("agentic-state", () => {
     expect(record.autonomyMode).toBe("fallback");
     expect(record.primarySkill).toBe("acceptance-report");
     expect(record.fallbackSkills).toEqual(expect.arrayContaining(["memory-diagnostics"]));
+    expect(record.workflowSteps.length).toBeGreaterThan(0);
     expect(record.rankedSkills[0]).toBe("acceptance-report");
     expect(record.failurePattern).toBe("near_miss");
     expect(record.nextImprovement).toContain("alternative skills");

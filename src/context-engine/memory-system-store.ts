@@ -2960,11 +2960,13 @@ function deriveRuntimeSignalCandidates(params: {
           primarySkill?: unknown;
           fallbackSkills?: unknown;
           skillChain?: unknown;
+          workflowSteps?: unknown;
           rankedSkills?: unknown;
           prerequisiteWarnings?: unknown;
           capabilityGaps?: unknown;
           hasViableFallback?: unknown;
           multiSkillCandidate?: unknown;
+          chainedWorkflow?: unknown;
           workspaceKind?: unknown;
           capabilitySignals?: unknown;
           preferredValidationTools?: unknown;
@@ -3095,6 +3097,38 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const workflowSteps = Array.isArray(proceduralExecution.workflowSteps)
+      ? proceduralExecution.workflowSteps
+          .map((step) => {
+            if (!step || typeof step !== "object") {
+              return undefined;
+            }
+            const skill =
+              typeof (step as { skill?: unknown }).skill === "string" &&
+              (step as { skill?: string }).skill!.trim().length > 0
+                ? (step as { skill?: string }).skill!.trim()
+                : undefined;
+            const role =
+              (step as { role?: unknown }).role === "primary" ||
+              (step as { role?: unknown }).role === "supporting" ||
+              (step as { role?: unknown }).role === "verification" ||
+              (step as { role?: unknown }).role === "fallback"
+                ? (step as { role: "primary" | "supporting" | "verification" | "fallback" }).role
+                : undefined;
+            if (!skill || !role) {
+              return undefined;
+            }
+            return { skill, role };
+          })
+          .filter(
+            (
+              step,
+            ): step is {
+              skill: string;
+              role: "primary" | "supporting" | "verification" | "fallback";
+            } => Boolean(step),
+          )
+      : [];
     const rankedSkills = uniqueStrings(
       Array.isArray(proceduralExecution.rankedSkills)
         ? proceduralExecution.rankedSkills.filter(
@@ -3119,6 +3153,7 @@ function deriveRuntimeSignalCandidates(params: {
     );
     const hasViableFallback = proceduralExecution.hasViableFallback !== false;
     const multiSkillCandidate = proceduralExecution.multiSkillCandidate === true;
+    const chainedWorkflow = proceduralExecution.chainedWorkflow === true;
     const workspaceKind =
       proceduralExecution.workspaceKind === "project" ||
       proceduralExecution.workspaceKind === "temporary" ||
@@ -3168,11 +3203,15 @@ function deriveRuntimeSignalCandidates(params: {
       primarySkill ? `primary_skill=${primarySkill}` : "",
       fallbackSkills.length > 0 ? `fallback_skills=${fallbackSkills.join(",")}` : "",
       skillChain.length > 0 ? `skill_chain=${skillChain.join(",")}` : "",
+      workflowSteps.length > 0
+        ? `workflow_steps=${workflowSteps.map((step) => `${step.role}:${step.skill}`).join(",")}`
+        : "",
       rankedSkills.length > 0 ? `ranked_skills=${rankedSkills.join(",")}` : "",
       prerequisiteWarnings.length > 0 ? `skill_prereqs=${prerequisiteWarnings.join(",")}` : "",
       capabilityGaps.length > 0 ? `capability_gaps=${capabilityGaps.join(",")}` : "",
       hasViableFallback ? "viable_fallback=true" : "viable_fallback=false",
       multiSkillCandidate ? "multi_skill_candidate=true" : "",
+      chainedWorkflow ? "chained_workflow=true" : "",
       `workspace_kind=${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities=${capabilitySignals.join(",")}` : "",
       preferredValidationTools.length > 0
@@ -3195,6 +3234,9 @@ function deriveRuntimeSignalCandidates(params: {
       alternativeSkills.length > 0 ? `fallback skills ${alternativeSkills.join(", ")}` : "",
       primarySkill ? `primary skill ${primarySkill}` : "",
       fallbackSkills.length > 0 ? `fallback chain ${fallbackSkills.join(" -> ")}` : "",
+      workflowSteps.length > 0
+        ? `workflow chain ${workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ")}`
+        : "",
       rankedSkills.length > 0 ? `ranked skills ${rankedSkills.join(" > ")}` : "",
       prerequisiteWarnings.length > 0
         ? `skill prerequisites ${prerequisiteWarnings.join(", ")}`
@@ -3202,6 +3244,7 @@ function deriveRuntimeSignalCandidates(params: {
       capabilityGaps.length > 0 ? `capability gaps ${capabilityGaps.join(", ")}` : "",
       !hasViableFallback ? "no viable fallback identified" : "",
       multiSkillCandidate ? "multi-skill orchestration candidate" : "",
+      chainedWorkflow ? "chained workflow active" : "",
       `workspace ${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities ${capabilitySignals.join(", ")}` : "",
       preferredValidationTools.length > 0
@@ -3238,6 +3281,9 @@ function deriveRuntimeSignalCandidates(params: {
         ...(toolChain.map((tool) => `tool:${tool}`) ?? []),
         ...(alternativeSkills.map((skill) => `skill:${skill}`) ?? []),
         ...(fallbackSkills.map((skill) => `skill:${skill}`) ?? []),
+        ...(workflowSteps.map(
+          (step, index) => `procedural:workflow-step:${index + 1}:${step.role}:${step.skill}`,
+        ) ?? []),
         ...(rankedSkills.map((skill, index) => `procedural:ranked-skill:${index + 1}:${skill}`) ??
           []),
         ...(prerequisiteWarnings.map((warning) => `procedural:prereq:${warning}`) ?? []),
@@ -3252,6 +3298,7 @@ function deriveRuntimeSignalCandidates(params: {
         suggestedSkill ? `procedural:suggested-skill:${suggestedSkill}` : "",
         shouldEscalate ? `procedural:escalate:${escalationReason ?? "unknown"}` : "",
         multiSkillCandidate ? "procedural:multi-skill-candidate" : "",
+        chainedWorkflow ? "procedural:chained-workflow" : "",
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",
         proceduralExecution.consolidationCandidate === true
           ? "procedural:consolidation-candidate"

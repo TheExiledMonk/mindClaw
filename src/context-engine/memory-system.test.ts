@@ -2372,10 +2372,15 @@ describe("MemorySystemContextEngine", () => {
           primarySkill: "memory-diagnostics",
           fallbackSkills: ["acceptance-report"],
           skillChain: ["memory-diagnostics", "acceptance-report"],
+          workflowSteps: [
+            { skill: "memory-diagnostics", role: "primary" },
+            { skill: "acceptance-report", role: "verification" },
+          ],
           rankedSkills: ["acceptance-report", "memory-diagnostics"],
           prerequisiteWarnings: ["acceptance-report:missing-env:docker"],
           capabilityGaps: [],
           multiSkillCandidate: true,
+          chainedWorkflow: true,
           workspaceKind: "project",
           capabilitySignals: ["can_execute_commands", "can_read_files", "git_worktree"],
           preferredValidationTools: ["exec"],
@@ -2404,6 +2409,20 @@ describe("MemorySystemContextEngine", () => {
             "procedural:prereq:acceptance-report:missing-env:docker",
           ) &&
           entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+      ),
+    ).toBe(true);
+    expect(
+      proceduralEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes(
+          "procedural:workflow-step:1:primary:memory-diagnostics",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      proceduralEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes(
+          "procedural:workflow-step:2:verification:acceptance-report",
+        ),
       ),
     ).toBe(true);
 

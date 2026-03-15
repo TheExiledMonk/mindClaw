@@ -8,6 +8,8 @@ describe("agentic acceptance suite", () => {
     expect(report.totalScenarios).toBeGreaterThanOrEqual(34);
     expect(report.failedScenarioIds).toEqual([]);
     expect(report.clarificationTrendPolicyStatus).toBe("aligned_and_guarded");
+    expect(report.protectedBranchGovernanceStatus).toBe("guarded");
+    expect(report.environmentRetryStatus).toBe("bounded");
     const recoveringScenario = report.scenarios.find(
       (scenario) => scenario.id === "recovering_skills_guidance_alignment",
     );
@@ -113,6 +115,12 @@ describe("agentic acceptance suite", () => {
       "clarification_trend_policy_status=aligned_and_guarded",
     );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "protected_branch_governance_status=guarded",
+    );
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "environment_retry_status=bounded",
+    );
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment",
     );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
@@ -128,6 +136,12 @@ describe("agentic acceptance suite", () => {
     );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "Clarification trend policy status: aligned_and_guarded",
+    );
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
+      "Protected branch governance status: guarded",
+    );
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
+      "Environment retry status: bounded",
     );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "soak_warning_policy=observe",

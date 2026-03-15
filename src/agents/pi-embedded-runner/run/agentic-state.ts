@@ -343,6 +343,8 @@ export type AgenticAcceptanceReport = {
   failedScenarioIds: AgenticAcceptanceScenarioId[];
   scenarios: AgenticAcceptanceScenarioResult[];
   clarificationTrendPolicyStatus?: "unknown" | "aligned_and_guarded";
+  protectedBranchGovernanceStatus?: "unknown" | "guarded";
+  environmentRetryStatus?: "unknown" | "bounded";
   summary: string;
 };
 
@@ -395,6 +397,7 @@ export type AgenticSoakReport = {
   clarificationTrendPolicy?: AgenticQualityGateReport["clarificationTrendPolicy"];
   clarificationTrendPolicyStatus?: "none" | "observe_only" | "blocking";
   trendPolicyPromotionStatus?: "promotion_safe" | "gated_for_trend_watch";
+  environmentBoundaryStatus?: "unknown" | "bounded_and_guarded";
   summary: string;
 };
 
@@ -655,6 +658,24 @@ function deriveAcceptanceTrendPolicyStatus(params: {
   driftGuardPassed?: boolean;
 }): NonNullable<AgenticAcceptanceReport["clarificationTrendPolicyStatus"]> {
   return params.alignmentPassed && params.driftGuardPassed ? "aligned_and_guarded" : "unknown";
+}
+
+function deriveAcceptanceProtectedBranchGovernanceStatus(
+  passed?: boolean,
+): NonNullable<AgenticAcceptanceReport["protectedBranchGovernanceStatus"]> {
+  return passed ? "guarded" : "unknown";
+}
+
+function deriveAcceptanceEnvironmentRetryStatus(
+  passed?: boolean,
+): NonNullable<AgenticAcceptanceReport["environmentRetryStatus"]> {
+  return passed ? "bounded" : "unknown";
+}
+
+function deriveSoakEnvironmentBoundaryStatus(
+  passed?: boolean,
+): NonNullable<AgenticSoakReport["environmentBoundaryStatus"]> {
+  return passed ? "bounded_and_guarded" : "unknown";
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -5929,6 +5950,12 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   const clarificationTrendPolicyDriftGuardScenario = scenarios.find(
     (scenario) => scenario.id === "clarification_trend_policy_drift_guard",
   );
+  const protectedBranchGovernanceScenario = scenarios.find(
+    (scenario) => scenario.id === "protected_branch_governance_alignment",
+  );
+  const environmentRetryScenario = scenarios.find(
+    (scenario) => scenario.id === "environment_guard_retry_alignment",
+  );
   const clarificationTrendPolicyStatus = deriveAcceptanceTrendPolicyStatus({
     alignmentPassed: clarificationTrendPolicyAlignmentScenario?.passed,
     driftGuardPassed: clarificationTrendPolicyDriftGuardScenario?.passed,
@@ -5940,6 +5967,12 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     failedScenarioIds,
     scenarios,
     clarificationTrendPolicyStatus,
+    protectedBranchGovernanceStatus: deriveAcceptanceProtectedBranchGovernanceStatus(
+      protectedBranchGovernanceScenario?.passed,
+    ),
+    environmentRetryStatus: deriveAcceptanceEnvironmentRetryStatus(
+      environmentRetryScenario?.passed,
+    ),
     summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -5955,6 +5988,8 @@ export function formatAgenticAcceptanceReport(
     const lines = [
       report.summary,
       `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "unknown"}`,
+      `protected_branch_governance_status=${report.protectedBranchGovernanceStatus ?? "unknown"}`,
+      `environment_retry_status=${report.environmentRetryStatus ?? "unknown"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary}${scenario.details ? ` details=${scenario.details}` : ""}`,
@@ -5968,6 +6003,8 @@ export function formatAgenticAcceptanceReport(
     `- Summary: ${report.summary}`,
     `- Passed: ${report.passed ? "yes" : "no"}`,
     `- Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "unknown"}`,
+    `- Protected branch governance status: ${report.protectedBranchGovernanceStatus ?? "unknown"}`,
+    `- Environment retry status: ${report.environmentRetryStatus ?? "unknown"}`,
     "",
     ...report.scenarios.map(
       (scenario) =>
@@ -7567,6 +7604,9 @@ export function runAgenticSoakSuite(params?: {
     hasRisingClarificationTrend,
     params?.failOnClarificationTrend,
   );
+  const environmentGuardedRetryLifecycle = scenarios.find(
+    (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
+  );
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7579,6 +7619,9 @@ export function runAgenticSoakSuite(params?: {
     clarificationTrendPolicy,
     clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
     trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
+    environmentBoundaryStatus: deriveSoakEnvironmentBoundaryStatus(
+      environmentGuardedRetryLifecycle?.passed,
+    ),
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7601,6 +7644,7 @@ export function formatAgenticSoakReport(
       `clarification_trend_policy=${report.clarificationTrendPolicy ?? "none"}`,
       `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "none"}`,
       `trend_policy_promotion_status=${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
+      `environment_boundary_status=${report.environmentBoundaryStatus ?? "unknown"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
@@ -7622,6 +7666,7 @@ export function formatAgenticSoakReport(
     `Clarification trend policy: ${report.clarificationTrendPolicy ?? "none"}`,
     `Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "none"}`,
     `Trend policy promotion status: ${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
+    `Environment boundary status: ${report.environmentBoundaryStatus ?? "unknown"}`,
     "",
     ...report.scenarios.flatMap((scenario) => [
       `## ${scenario.id}`,

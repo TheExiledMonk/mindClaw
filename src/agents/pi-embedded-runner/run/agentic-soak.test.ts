@@ -17,6 +17,7 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendPolicy).toBe("observe");
     expect(report.clarificationTrendPolicyStatus).toBe("observe_only");
     expect(report.trendPolicyPromotionStatus).toBe("promotion_safe");
+    expect(report.environmentBoundaryStatus).toBe("bounded_and_guarded");
 
     const retryLifecycle = report.scenarios.find(
       (scenario) => scenario.id === "retry_replan_recover_complete",
@@ -167,6 +168,9 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "trend_policy_promotion_status=promotion_safe",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "environment_boundary_status=bounded_and_guarded",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain("# Agentic Soak Report");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Dominant clarification profile: mixed",
@@ -182,6 +186,9 @@ describe("agentic soak suite", () => {
       "Trend policy promotion status: promotion_safe",
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Environment boundary status: bounded_and_guarded",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "## retry_replan_recover_complete",
     );
   });
@@ -194,6 +201,7 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendPolicy).toBe("blocking");
     expect(report.clarificationTrendPolicyStatus).toBe("blocking");
     expect(report.trendPolicyPromotionStatus).toBe("gated_for_trend_watch");
+    expect(report.environmentBoundaryStatus).toBe("bounded_and_guarded");
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "clarification_trend_policy=blocking",
     );
@@ -203,6 +211,9 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "trend_policy_promotion_status=gated_for_trend_watch",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "environment_boundary_status=bounded_and_guarded",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Clarification trend policy: blocking",
     );
@@ -211,6 +222,9 @@ describe("agentic soak suite", () => {
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Trend policy promotion status: gated_for_trend_watch",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Environment boundary status: bounded_and_guarded",
     );
   });
 });

@@ -343,7 +343,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "permanence_invalidation"
     | "store_recovery"
     | "mixed_lifecycle_soak"
-    | "project_lifecycle_long_run";
+    | "project_lifecycle_long_run"
+    | "scope_matrix_resilience";
   passed: boolean;
   summary: string;
   details: string[];
@@ -1264,6 +1265,57 @@ function countExplicitScopeMatches(
   return matches;
 }
 
+function countExplicitScopeConflicts(
+  entry: Pick<LongTermMemoryEntry, "versionScope" | "installProfileScope" | "customerScope">,
+  scopeContext?: MemoryScopeContext,
+): number {
+  if (!scopeContext) {
+    return 0;
+  }
+  let conflicts = 0;
+  if (
+    scopeContext.versionScope &&
+    entry.versionScope &&
+    entry.versionScope !== scopeContext.versionScope
+  ) {
+    conflicts += 1;
+  }
+  if (
+    scopeContext.installProfileScope &&
+    entry.installProfileScope &&
+    entry.installProfileScope !== scopeContext.installProfileScope
+  ) {
+    conflicts += 1;
+  }
+  if (
+    scopeContext.customerScope &&
+    entry.customerScope &&
+    entry.customerScope !== scopeContext.customerScope
+  ) {
+    conflicts += 1;
+  }
+  return conflicts;
+}
+
+function hasExplicitEnvironmentConflict(
+  entry: Pick<LongTermMemoryEntry, "environmentTags">,
+  scopeContext?: MemoryScopeContext,
+): boolean {
+  if (!scopeContext?.environmentTags?.length || !entry.environmentTags?.length) {
+    return false;
+  }
+  const relevantQueryTags = scopeContext.environmentTags.filter((tag) =>
+    ["linux", "macos", "windows", "docker", "pnpm", "npm", "node", "typescript"].includes(tag),
+  );
+  const relevantEntryTags = entry.environmentTags.filter((tag) =>
+    ["linux", "macos", "windows", "docker", "pnpm", "npm", "node", "typescript"].includes(tag),
+  );
+  if (relevantQueryTags.length === 0 || relevantEntryTags.length === 0) {
+    return false;
+  }
+  return !relevantEntryTags.some((tag) => relevantQueryTags.includes(tag));
+}
+
 function hasExplicitScopeContext(scopeContext?: MemoryScopeContext): boolean {
   return Boolean(
     scopeContext?.versionScope || scopeContext?.installProfileScope || scopeContext?.customerScope,
@@ -1293,8 +1345,21 @@ function shouldIncludeScopedEntry(params: {
   }
   if (
     hasExplicitScopeContext(params.scopeContext) &&
+    countExplicitScopeConflicts(params.entry, params.scopeContext) > 0 &&
+    params.taskMode !== "debugging"
+  ) {
+    return false;
+  }
+  if (
+    hasExplicitScopeContext(params.scopeContext) &&
     countExplicitScopeMatches(params.entry, params.scopeContext) === 0 &&
     (params.entry.versionScope || params.entry.installProfileScope || params.entry.customerScope) &&
+    params.taskMode !== "debugging"
+  ) {
+    return false;
+  }
+  if (
+    hasExplicitEnvironmentConflict(params.entry, params.scopeContext) &&
     params.taskMode !== "debugging"
   ) {
     return false;
@@ -6397,6 +6462,70 @@ export async function runMemoryAcceptanceSuite(params: {
       longRunPermanentArtifacts > 0,
     summary: `long-run constraints=${longRunConstraintConceptCount} profile-b-visible=${longRunProfileBVisible} profile-a-leaked=${longRunProfileALeak} runtime-signals=${longRunRuntimeSignalsCaptured}`,
     details: longRunPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
+  const scopeMatrixTurns = [
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-1 install profile profile-a on linux.",
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-1 install profile profile-b on linux.",
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-2 install profile profile-b on linux.",
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-2 install profile profile-b on windows.",
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer beta version v2026.3.13-2 install profile profile-b on windows.",
+    "I observed directly that the permanent memory-system path in src/context-engine/memory-system.ts works for customer beta version v2026.3.13-2 install profile profile-b on windows.",
+  ];
+  let scopeMatrixCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:scope-matrix`,
+    messages: [userMessageForSuite(scopeMatrixTurns[0])],
+  });
+  for (const turn of scopeMatrixTurns.slice(1)) {
+    scopeMatrixCompiled = compileMemoryState({
+      sessionId: `${sessionIdPrefix}:scope-matrix`,
+      previous: scopeMatrixCompiled,
+      messages: [userMessageForSuite(turn)],
+    });
+  }
+  const scopeMatrixPacket = retrieveMemoryContextPacket(scopeMatrixCompiled, {
+    messages: [
+      userMessageForSuite(
+        "For customer beta version v2026.3.13-2 install profile profile-b on windows, what should we use in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const scopeMatrixConstraintConceptCount = new Set(
+    scopeMatrixCompiled.longTermMemory
+      .filter(
+        (entry) =>
+          entry.ontologyKind === "constraint" &&
+          entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+      )
+      .map((entry) => entry.conceptKey),
+  ).size;
+  const scopeMatrixTargetVisible = scopeMatrixPacket.retrievalItems.some(
+    (item) =>
+      item.reason.includes("customer=beta") &&
+      item.reason.includes("version=v2026.3.13-2") &&
+      item.reason.includes("profile=profile-b") &&
+      item.reason.includes("env=windows") &&
+      item.text.includes("customer beta"),
+  );
+  const scopeMatrixLeak = scopeMatrixPacket.retrievalItems.some(
+    (item) =>
+      ((item.reason.includes("customer=acme") && item.text.includes("customer acme")) ||
+        (item.reason.includes("profile=profile-a") && item.text.includes("profile-a")) ||
+        (item.reason.includes("version=v2026.3.13-1") && item.text.includes("v2026.3.13-1")) ||
+        (item.reason.includes("env=linux") && item.text.includes("linux"))) &&
+      !item.reason.includes("customer=beta"),
+  );
+  scenarios.push({
+    scenario: "scope_matrix_resilience",
+    passed:
+      scopeMatrixConstraintConceptCount <= 5 &&
+      scopeMatrixTargetVisible &&
+      !scopeMatrixLeak &&
+      scopeMatrixCompiled.review.contestedRevisionConceptIds.length <= 2,
+    summary: `scope-matrix concepts=${scopeMatrixConstraintConceptCount} target-visible=${scopeMatrixTargetVisible} leaked=${scopeMatrixLeak}`,
+    details: scopeMatrixPacket.retrievalItems.map(
       (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
     ),
   });

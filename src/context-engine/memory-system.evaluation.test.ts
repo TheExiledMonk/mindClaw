@@ -359,6 +359,70 @@ describe("memory system evaluation scenarios", () => {
     ).toBe(false);
   });
 
+  it("isolates customer, version, profile, and environment scope across a mixed memory matrix", () => {
+    const turns = [
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-1 install profile profile-a on linux.",
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-1 install profile profile-b on linux.",
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-2 install profile profile-b on linux.",
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-2 install profile profile-b on windows.",
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer beta version v2026.3.13-2 install profile profile-b on windows.",
+      "I observed directly that the permanent memory-system path in src/context-engine/memory-system.ts works for customer beta version v2026.3.13-2 install profile profile-b on windows.",
+    ];
+
+    let compiled = compileMemoryState({
+      sessionId: "eval-scope-matrix",
+      messages: [userMessage(turns[0])],
+    });
+    for (const turn of turns.slice(1)) {
+      compiled = compileMemoryState({
+        sessionId: "eval-scope-matrix",
+        previous: compiled,
+        messages: [userMessage(turn)],
+      });
+    }
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "For customer beta version v2026.3.13-2 install profile profile-b on windows, what should we use in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+
+    const constraintConceptCount = new Set(
+      compiled.longTermMemory
+        .filter(
+          (entry) =>
+            entry.ontologyKind === "constraint" &&
+            entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+        )
+        .map((entry) => entry.conceptKey),
+    ).size;
+
+    expect(constraintConceptCount).toBeLessThanOrEqual(5);
+    expect(compiled.review.contestedRevisionConceptIds.length).toBeLessThanOrEqual(2);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.includes("customer=beta") &&
+          item.reason.includes("version=v2026.3.13-2") &&
+          item.reason.includes("profile=profile-b") &&
+          item.reason.includes("env=windows") &&
+          item.text.includes("customer beta"),
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          ((item.reason.includes("customer=acme") && item.text.includes("customer acme")) ||
+            (item.reason.includes("profile=profile-a") && item.text.includes("profile-a")) ||
+            (item.reason.includes("version=v2026.3.13-1") && item.text.includes("v2026.3.13-1")) ||
+            (item.reason.includes("env=linux") && item.text.includes("linux"))) &&
+          !item.reason.includes("customer=beta"),
+      ),
+    ).toBe(false);
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",

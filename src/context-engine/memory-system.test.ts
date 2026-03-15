@@ -24,10 +24,12 @@ import {
   repairMemoryStoreSnapshot,
   repairMemoryStoreSnapshotWithReport,
   retrieveMemoryContextPacket,
+  runMemoryAcceptanceSuite,
   runMemorySleepReview,
 } from "./memory-system-store.js";
 import type {
   LongTermMemoryEntry,
+  MemoryAcceptanceScenarioResult,
   PendingMemoryEntry,
   PermanentMemoryNode,
 } from "./memory-system-store.js";
@@ -2664,6 +2666,27 @@ describe("MemorySystemContextEngine", () => {
     expect(acceptanceMarkdown).toContain("# Memory Acceptance Report");
     expect(acceptanceMarkdown).toContain("## Scenarios");
     expect(acceptanceSummary).toContain("scenarios:");
+  });
+
+  it("includes persisted stabilized-promotion coverage in the memory acceptance suite", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-acceptance-agentic-"));
+
+    const report = await runMemoryAcceptanceSuite({
+      workspaceDir: tempDir,
+      sessionIdPrefix: "agentic-stable-promotion",
+      backendKinds: ["fs-json"],
+    });
+
+    const scenario = report.scenarios.find(
+      (entry: MemoryAcceptanceScenarioResult) => entry.scenario === "agentic_stable_promotion",
+    );
+    expect(scenario?.passed).toBe(true);
+    expect(scenario?.details).toContain("diagnostics-repair@debugging/node");
+    expect(scenario?.details).toContain(
+      "promote stabilized scoped skills for stable reuse or extend-existing workflow decisions",
+    );
+
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("surfaces agentic trend summaries in memory diagnostics", async () => {

@@ -347,7 +347,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "project_lifecycle_long_run"
     | "scope_matrix_resilience"
     | "rivalry_governance"
-    | "multi_tenant_release_handoff";
+    | "multi_tenant_release_handoff"
+    | "agentic_stable_promotion";
   passed: boolean;
   summary: string;
   details: string[];
@@ -8088,6 +8089,159 @@ export async function runMemoryAcceptanceSuite(params: {
     details: multiTenantPacket.retrievalItems.map(
       (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
     ),
+  });
+
+  const stablePromotionSessionId = `${sessionIdPrefix}:agentic-stable-promotion`;
+  const firstStablePromotionSnapshot = compileMemoryState({
+    sessionId: stablePromotionSessionId,
+    messages: [
+      userMessageForSuite(
+        "Track when a scoped diagnostics workflow has become stable enough to promote.",
+      ),
+    ],
+    runtimeContext: {
+      proceduralExecution: {
+        version: 1,
+        availableSkills: ["diagnostics-repair"],
+        likelySkills: ["diagnostics-repair"],
+        alternativeSkills: [],
+        toolChain: ["read", "exec"],
+        changedArtifacts: ["scripts/agentic-quality-report.ts"],
+        outcome: "verified",
+        goalSatisfaction: "satisfied",
+        taskMode: "debugging",
+        planSteps: [],
+        templateCandidate: false,
+        consolidationCandidate: false,
+        consolidationAction: "extend_existing",
+        overlappingSkills: [],
+        skillFamilies: ["diagnostics"],
+        nearMissCandidate: false,
+        retryClass: "same_path_retry",
+        suggestedSkill: undefined,
+        shouldEscalate: false,
+        autonomyMode: "continue",
+        riskLevel: "medium",
+        governanceReasons: ["planner:unknown"],
+        primarySkill: "diagnostics-repair",
+        fallbackSkills: [],
+        skillChain: ["diagnostics-repair"],
+        workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+        rankedSkills: ["diagnostics-repair"],
+        effectiveSkills: ["diagnostics-repair"],
+        effectiveFamilies: ["diagnostics"],
+        stabilityState: "stable_reuse",
+        stabilitySkills: ["diagnostics-repair"],
+        prerequisiteWarnings: [],
+        capabilityGaps: [],
+        hasViableFallback: true,
+        multiSkillCandidate: false,
+        chainedWorkflow: false,
+        workspaceKind: "project",
+        capabilitySignals: ["can_execute_commands"],
+        preferredValidationTools: ["exec"],
+        skillEnvironments: ["node"],
+        failurePattern: "clean_success",
+        learnFromFailure: true,
+        failureReasons: [],
+        nextImprovement: "Keep reusing the now-stable diagnostics repair workflow.",
+      },
+    } as never,
+  });
+  const secondStablePromotionSnapshot = compileMemoryState({
+    sessionId: stablePromotionSessionId,
+    messages: [
+      userMessageForSuite(
+        "Track when a scoped diagnostics workflow has become stable enough to promote.",
+      ),
+    ],
+    runtimeContext: {
+      proceduralExecution: {
+        version: 1,
+        availableSkills: ["diagnostics-repair"],
+        likelySkills: ["diagnostics-repair"],
+        alternativeSkills: [],
+        toolChain: ["read", "exec"],
+        changedArtifacts: ["scripts/agentic-quality-report.ts"],
+        outcome: "verified",
+        goalSatisfaction: "satisfied",
+        taskMode: "debugging",
+        planSteps: [],
+        templateCandidate: false,
+        consolidationCandidate: true,
+        consolidationAction: "extend_existing",
+        overlappingSkills: [],
+        skillFamilies: ["diagnostics"],
+        nearMissCandidate: false,
+        retryClass: "same_path_retry",
+        suggestedSkill: undefined,
+        shouldEscalate: false,
+        autonomyMode: "continue",
+        riskLevel: "medium",
+        governanceReasons: ["planner:unknown"],
+        primarySkill: "diagnostics-repair",
+        fallbackSkills: [],
+        skillChain: ["diagnostics-repair"],
+        workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+        rankedSkills: ["diagnostics-repair"],
+        effectiveSkills: ["diagnostics-repair"],
+        effectiveFamilies: ["diagnostics"],
+        stabilityState: "stable_reuse",
+        stabilitySkills: ["diagnostics-repair"],
+        prerequisiteWarnings: [],
+        capabilityGaps: [],
+        hasViableFallback: true,
+        multiSkillCandidate: false,
+        chainedWorkflow: false,
+        workspaceKind: "project",
+        capabilitySignals: ["can_execute_commands"],
+        preferredValidationTools: ["exec"],
+        skillEnvironments: ["node"],
+        failurePattern: "clean_success",
+        learnFromFailure: true,
+        failureReasons: [],
+        nextImprovement: "Promote the stable diagnostics repair workflow for reuse in this scope.",
+      },
+    } as never,
+  });
+  for (const entry of firstStablePromotionSnapshot.longTermMemory) {
+    entry.updatedAt = 1_000;
+  }
+  for (const entry of secondStablePromotionSnapshot.longTermMemory) {
+    entry.updatedAt = 2_000;
+  }
+  firstStablePromotionSnapshot.longTermMemory.push(...secondStablePromotionSnapshot.longTermMemory);
+  firstStablePromotionSnapshot.pendingSignificance.push(
+    ...secondStablePromotionSnapshot.pendingSignificance,
+  );
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: stablePromotionSessionId,
+    backendKind: "fs-json",
+    workingMemory: firstStablePromotionSnapshot.workingMemory,
+    longTermMemory: firstStablePromotionSnapshot.longTermMemory,
+    pendingSignificance: firstStablePromotionSnapshot.pendingSignificance,
+    permanentMemory: firstStablePromotionSnapshot.permanentMemory,
+    graph: firstStablePromotionSnapshot.graph,
+  });
+  const stablePromotionReport = await generateMemoryDiagnosticsReport({
+    workspaceDir: params.workspaceDir,
+    sessionId: stablePromotionSessionId,
+    backendKind: "fs-json",
+  });
+  const stablePromotionRecommendation =
+    "promote stabilized scoped skills for stable reuse or extend-existing workflow decisions";
+  scenarios.push({
+    scenario: "agentic_stable_promotion",
+    passed:
+      stablePromotionReport.agenticTrends?.stabilizedSkills.includes(
+        "diagnostics-repair@debugging/node",
+      ) === true && stablePromotionReport.recommendations.includes(stablePromotionRecommendation),
+    summary: `stabilized=${stablePromotionReport.agenticTrends?.stabilizedSkills.join(",") ?? "none"} promoted=${stablePromotionReport.recommendations.includes(stablePromotionRecommendation)}`,
+    details: [
+      ...(stablePromotionReport.agenticTrends?.stabilizedSkills ?? []),
+      ...stablePromotionReport.recommendations,
+    ],
   });
 
   const passedCount = scenarios.filter((scenario) => scenario.passed).length;

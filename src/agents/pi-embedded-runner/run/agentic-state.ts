@@ -354,6 +354,7 @@ export type AgenticAcceptanceReport = {
   clarificationTrendPolicyStatus?: "unknown" | "aligned_and_guarded";
   protectedBranchGovernanceStatus?: "unknown" | "guarded";
   environmentRetryStatus?: "unknown" | "bounded";
+  handoffResumabilityStatus?: "unknown" | "guarded_resume_paths";
   summary: string;
 };
 
@@ -380,6 +381,8 @@ export type AgenticSoakPhaseResult = {
   retryClass: AgenticRetryClass;
   autonomyMode: AgenticAutonomyMode;
   clarificationProfile: AgenticQualityGateReport["clarificationProfile"];
+  resumabilityStatus: AgenticHandoffReport["resumabilityStatus"];
+  resumeBarrierProfile: AgenticHandoffReport["resumeBarrierProfile"];
   primarySkill?: string;
   planStepSummary: string[];
   pendingHandoffSteps: number;
@@ -407,6 +410,9 @@ export type AgenticSoakReport = {
   clarificationTrendPolicyStatus?: "none" | "observe_only" | "blocking";
   trendPolicyPromotionStatus?: "promotion_safe" | "gated_for_trend_watch";
   environmentBoundaryStatus?: "unknown" | "bounded_and_guarded";
+  handoffResumabilityStatus?: "unknown" | "guarded_resume_paths";
+  dominantResumeBarrierProfile?: AgenticHandoffReport["resumeBarrierProfile"];
+  resumeBarrierCounts?: string[];
   summary: string;
 };
 
@@ -673,31 +679,68 @@ function deriveAcceptanceTrendPolicyStatus(params: {
 
 function deriveAcceptanceEnvironmentRollups(
   scenarios: AgenticAcceptanceScenarioResult[],
-): Pick<AgenticAcceptanceReport, "protectedBranchGovernanceStatus" | "environmentRetryStatus"> {
+): Pick<
+  AgenticAcceptanceReport,
+  "protectedBranchGovernanceStatus" | "environmentRetryStatus" | "handoffResumabilityStatus"
+> {
   const protectedBranchGovernanceScenario = scenarios.find(
     (scenario) => scenario.id === "protected_branch_governance_alignment",
   );
   const environmentRetryScenario = scenarios.find(
     (scenario) => scenario.id === "environment_guard_retry_alignment",
   );
+  const guardedHandoffScenario = scenarios.find(
+    (scenario) => scenario.id === "guarded_handoff_alignment",
+  );
   return {
     protectedBranchGovernanceStatus: protectedBranchGovernanceScenario?.passed
       ? "guarded"
       : "unknown",
     environmentRetryStatus: environmentRetryScenario?.passed ? "bounded" : "unknown",
+    handoffResumabilityStatus: guardedHandoffScenario?.passed ? "guarded_resume_paths" : "unknown",
   };
 }
 
 function deriveSoakEnvironmentRollups(
   scenarios: AgenticSoakScenarioResult[],
-): Pick<AgenticSoakReport, "environmentBoundaryStatus"> {
+): Pick<
+  AgenticSoakReport,
+  | "environmentBoundaryStatus"
+  | "handoffResumabilityStatus"
+  | "dominantResumeBarrierProfile"
+  | "resumeBarrierCounts"
+> {
   const environmentGuardedRetryLifecycle = scenarios.find(
     (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
   );
+  const guardedHandoffLifecycle = scenarios.find(
+    (scenario) => scenario.id === "guarded_handoff_boundary",
+  );
+  const guardedBarrierProfiles =
+    guardedHandoffLifecycle?.phases
+      .map((phase) => phase.resumeBarrierProfile)
+      .filter((profile) => profile !== "none") ?? [];
+  const barrierCounts = new Map<
+    Exclude<AgenticHandoffReport["resumeBarrierProfile"], "none">,
+    number
+  >();
+  for (const profile of guardedBarrierProfiles) {
+    barrierCounts.set(profile, (barrierCounts.get(profile) ?? 0) + 1);
+  }
+  const barrierEntries = [...barrierCounts.entries()].toSorted((left, right) => right[1] - left[1]);
+  const topBarrierCount = barrierEntries[0]?.[1];
+  const topBarriers =
+    topBarrierCount === undefined
+      ? []
+      : barrierEntries.filter(([, count]) => count === topBarrierCount).map(([profile]) => profile);
   return {
     environmentBoundaryStatus: environmentGuardedRetryLifecycle?.passed
       ? "bounded_and_guarded"
       : "unknown",
+    handoffResumabilityStatus: guardedHandoffLifecycle?.passed ? "guarded_resume_paths" : "unknown",
+    dominantResumeBarrierProfile:
+      topBarriers.length === 1 ? topBarriers[0] : topBarriers.length > 1 ? "none" : "none",
+    resumeBarrierCounts: barrierEntries.map(([profile, count]) => `${profile}:${count}`),
   };
 }
 
@@ -6029,6 +6072,7 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     clarificationTrendPolicyStatus,
     protectedBranchGovernanceStatus: acceptanceEnvironmentRollups.protectedBranchGovernanceStatus,
     environmentRetryStatus: acceptanceEnvironmentRollups.environmentRetryStatus,
+    handoffResumabilityStatus: acceptanceEnvironmentRollups.handoffResumabilityStatus,
     summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -6046,6 +6090,7 @@ export function formatAgenticAcceptanceReport(
       `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "unknown"}`,
       `protected_branch_governance_status=${report.protectedBranchGovernanceStatus ?? "unknown"}`,
       `environment_retry_status=${report.environmentRetryStatus ?? "unknown"}`,
+      `handoff_resumability_status=${report.handoffResumabilityStatus ?? "unknown"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary}${scenario.details ? ` details=${scenario.details}` : ""}`,
@@ -6061,6 +6106,7 @@ export function formatAgenticAcceptanceReport(
     `- Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "unknown"}`,
     `- Protected branch governance status: ${report.protectedBranchGovernanceStatus ?? "unknown"}`,
     `- Environment retry status: ${report.environmentRetryStatus ?? "unknown"}`,
+    `- Handoff resumability status: ${report.handoffResumabilityStatus ?? "unknown"}`,
     "",
     ...report.scenarios.map(
       (scenario) =>
@@ -6088,6 +6134,8 @@ function buildSoakPhaseResult(params: {
     retryClass: params.state.plannerState.retryClass,
     autonomyMode: params.state.governanceState.autonomyMode,
     clarificationProfile: mapClarificationReasonToProfile(clarificationReason) ?? "none",
+    resumabilityStatus: handoffReport.resumabilityStatus,
+    resumeBarrierProfile: handoffReport.resumeBarrierProfile,
     primarySkill: params.state.orchestrationState.primarySkill,
     planStepSummary: params.state.taskState.planSteps.map(
       (step) => `${step.kind}:${step.status}:${step.title}`,
@@ -7674,6 +7722,9 @@ export function runAgenticSoakSuite(params?: {
     clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
     trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
     environmentBoundaryStatus: soakEnvironmentRollups.environmentBoundaryStatus,
+    handoffResumabilityStatus: soakEnvironmentRollups.handoffResumabilityStatus,
+    dominantResumeBarrierProfile: soakEnvironmentRollups.dominantResumeBarrierProfile,
+    resumeBarrierCounts: soakEnvironmentRollups.resumeBarrierCounts,
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7688,6 +7739,7 @@ export function formatAgenticSoakReport(
   if (format === "summary") {
     const clarificationProfileCounts = report.clarificationProfileCounts ?? [];
     const clarificationTrendSignals = report.clarificationTrendSignals ?? [];
+    const resumeBarrierCounts = report.resumeBarrierCounts ?? [];
     const lines = [
       report.summary,
       `clarification_profile=${report.dominantClarificationProfile ?? "none"}`,
@@ -7697,6 +7749,9 @@ export function formatAgenticSoakReport(
       `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "none"}`,
       `trend_policy_promotion_status=${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
       `environment_boundary_status=${report.environmentBoundaryStatus ?? "unknown"}`,
+      `handoff_resumability_status=${report.handoffResumabilityStatus ?? "unknown"}`,
+      `resume_barrier_profile=${report.dominantResumeBarrierProfile ?? "none"}`,
+      `resume_barrier_counts=${resumeBarrierCounts.length > 0 ? resumeBarrierCounts.join(",") : "none"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
@@ -7708,6 +7763,7 @@ export function formatAgenticSoakReport(
   }
   const clarificationProfileCounts = report.clarificationProfileCounts ?? [];
   const clarificationTrendSignals = report.clarificationTrendSignals ?? [];
+  const resumeBarrierCounts = report.resumeBarrierCounts ?? [];
   const lines = [
     "# Agentic Soak Report",
     "",
@@ -7719,6 +7775,9 @@ export function formatAgenticSoakReport(
     `Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "none"}`,
     `Trend policy promotion status: ${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
     `Environment boundary status: ${report.environmentBoundaryStatus ?? "unknown"}`,
+    `Handoff resumability status: ${report.handoffResumabilityStatus ?? "unknown"}`,
+    `Resume barrier profile: ${report.dominantResumeBarrierProfile ?? "none"}`,
+    `Resume barrier counts: ${resumeBarrierCounts.length > 0 ? resumeBarrierCounts.join(", ") : "none"}`,
     "",
     ...report.scenarios.flatMap((scenario) => [
       `## ${scenario.id}`,

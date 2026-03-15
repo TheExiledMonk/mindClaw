@@ -10,6 +10,7 @@ describe("agentic acceptance suite", () => {
     expect(report.clarificationTrendPolicyStatus).toBe("aligned_and_guarded");
     expect(report.protectedBranchGovernanceStatus).toBe("guarded");
     expect(report.environmentRetryStatus).toBe("bounded");
+    expect(report.handoffResumabilityStatus).toBe("guarded_resume_paths");
     const recoveringScenario = report.scenarios.find(
       (scenario) => scenario.id === "recovering_skills_guidance_alignment",
     );
@@ -121,6 +122,9 @@ describe("agentic acceptance suite", () => {
       "environment_retry_status=bounded",
     );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "handoff_resumability_status=guarded_resume_paths",
+    );
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment",
     );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
@@ -142,6 +146,9 @@ describe("agentic acceptance suite", () => {
     );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "Environment retry status: bounded",
+    );
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
+      "Handoff resumability status: guarded_resume_paths",
     );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "soak_warning_policy=observe",

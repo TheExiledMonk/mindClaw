@@ -18,6 +18,10 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendPolicyStatus).toBe("observe_only");
     expect(report.trendPolicyPromotionStatus).toBe("promotion_safe");
     expect(report.environmentBoundaryStatus).toBe("bounded_and_guarded");
+    expect(report.handoffResumabilityStatus).toBe("guarded_resume_paths");
+    expect(report.resumeBarrierCounts).toContain("operator_approval:1");
+    expect(report.resumeBarrierCounts).toContain("generic_prerequisite:1");
+    expect(report.dominantResumeBarrierProfile).toBe("none");
 
     const retryLifecycle = report.scenarios.find(
       (scenario) => scenario.id === "retry_replan_recover_complete",
@@ -90,6 +94,12 @@ describe("agentic soak suite", () => {
     );
     expect(guardedHandoffLifecycle?.phases[0]?.passed).toBe(true);
     expect(guardedHandoffLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(guardedHandoffLifecycle?.phases[0]?.resumabilityStatus).toBe("approval_gated");
+    expect(guardedHandoffLifecycle?.phases.at(-1)?.resumabilityStatus).toBe("prerequisite_gated");
+    expect(guardedHandoffLifecycle?.phases[0]?.resumeBarrierProfile).toBe("operator_approval");
+    expect(guardedHandoffLifecycle?.phases.at(-1)?.resumeBarrierProfile).toBe(
+      "generic_prerequisite",
+    );
     expect(guardedHandoffLifecycle?.phases[0]?.details).toContain("Resume after approval");
     expect(guardedHandoffLifecycle?.phases.at(-1)?.details).toContain(
       "Resume after prerequisites are restored",
@@ -171,6 +181,13 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "environment_boundary_status=bounded_and_guarded",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "handoff_resumability_status=guarded_resume_paths",
+    );
+    expect(formatAgenticSoakReport(report, "summary")).toContain("resume_barrier_profile=none");
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "resume_barrier_counts=operator_approval:1,generic_prerequisite:1",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain("# Agentic Soak Report");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Dominant clarification profile: mixed",
@@ -189,6 +206,13 @@ describe("agentic soak suite", () => {
       "Environment boundary status: bounded_and_guarded",
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Handoff resumability status: guarded_resume_paths",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain("Resume barrier profile: none");
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Resume barrier counts: operator_approval:1, generic_prerequisite:1",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "## retry_replan_recover_complete",
     );
   });
@@ -202,6 +226,7 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendPolicyStatus).toBe("blocking");
     expect(report.trendPolicyPromotionStatus).toBe("gated_for_trend_watch");
     expect(report.environmentBoundaryStatus).toBe("bounded_and_guarded");
+    expect(report.handoffResumabilityStatus).toBe("guarded_resume_paths");
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "clarification_trend_policy=blocking",
     );
@@ -214,6 +239,9 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "environment_boundary_status=bounded_and_guarded",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "handoff_resumability_status=guarded_resume_paths",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Clarification trend policy: blocking",
     );
@@ -225,6 +253,9 @@ describe("agentic soak suite", () => {
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Environment boundary status: bounded_and_guarded",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Handoff resumability status: guarded_resume_paths",
     );
   });
 });

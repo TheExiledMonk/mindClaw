@@ -662,47 +662,48 @@ function deriveAcceptanceTrendPolicyStatus(params: {
   return params.alignmentPassed && params.driftGuardPassed ? "aligned_and_guarded" : "unknown";
 }
 
-function deriveAcceptanceProtectedBranchGovernanceStatus(
+function deriveAcceptanceEnvironmentRollups(
   scenarios: AgenticAcceptanceScenarioResult[],
-): NonNullable<AgenticAcceptanceReport["protectedBranchGovernanceStatus"]> {
+): Pick<AgenticAcceptanceReport, "protectedBranchGovernanceStatus" | "environmentRetryStatus"> {
   const protectedBranchGovernanceScenario = scenarios.find(
     (scenario) => scenario.id === "protected_branch_governance_alignment",
   );
-  return protectedBranchGovernanceScenario?.passed ? "guarded" : "unknown";
-}
-
-function deriveAcceptanceEnvironmentRetryStatus(
-  scenarios: AgenticAcceptanceScenarioResult[],
-): NonNullable<AgenticAcceptanceReport["environmentRetryStatus"]> {
   const environmentRetryScenario = scenarios.find(
     (scenario) => scenario.id === "environment_guard_retry_alignment",
   );
-  return environmentRetryScenario?.passed ? "bounded" : "unknown";
+  return {
+    protectedBranchGovernanceStatus: protectedBranchGovernanceScenario?.passed
+      ? "guarded"
+      : "unknown",
+    environmentRetryStatus: environmentRetryScenario?.passed ? "bounded" : "unknown",
+  };
 }
 
-function deriveSoakEnvironmentBoundaryStatus(
+function deriveSoakEnvironmentRollups(
   scenarios: AgenticSoakScenarioResult[],
-): NonNullable<AgenticSoakReport["environmentBoundaryStatus"]> {
+): Pick<AgenticSoakReport, "environmentBoundaryStatus"> {
   const environmentGuardedRetryLifecycle = scenarios.find(
     (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
   );
-  return environmentGuardedRetryLifecycle?.passed ? "bounded_and_guarded" : "unknown";
+  return {
+    environmentBoundaryStatus: environmentGuardedRetryLifecycle?.passed
+      ? "bounded_and_guarded"
+      : "unknown",
+  };
 }
 
-function deriveQualityProtectedBranchGovernanceStatus(
+function deriveQualityEnvironmentRollups(
   diagnostics: AgenticExecutionObservabilityReport,
-): AgenticQualityGateReport["protectedBranchGovernanceStatus"] {
-  return diagnostics.permissionSignals.length > 0 &&
-    diagnostics.branchConventions.length > 0 &&
-    diagnostics.autonomyMode === "approval_required"
-    ? "guarded"
-    : "unknown";
-}
-
-function deriveQualityValidationReadinessStatus(
-  diagnostics: AgenticExecutionObservabilityReport,
-): AgenticQualityGateReport["validationReadinessStatus"] {
-  return diagnostics.validationCommands.length > 0 ? "observed" : "unknown";
+): Pick<AgenticQualityGateReport, "protectedBranchGovernanceStatus" | "validationReadinessStatus"> {
+  return {
+    protectedBranchGovernanceStatus:
+      diagnostics.permissionSignals.length > 0 &&
+      diagnostics.branchConventions.length > 0 &&
+      diagnostics.autonomyMode === "approval_required"
+        ? "guarded"
+        : "unknown",
+    validationReadinessStatus: diagnostics.validationCommands.length > 0 ? "observed" : "unknown",
+  };
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -5981,6 +5982,7 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     alignmentPassed: clarificationTrendPolicyAlignmentScenario?.passed,
     driftGuardPassed: clarificationTrendPolicyDriftGuardScenario?.passed,
   });
+  const acceptanceEnvironmentRollups = deriveAcceptanceEnvironmentRollups(scenarios);
   return {
     passed,
     totalScenarios: scenarios.length,
@@ -5988,8 +5990,8 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     failedScenarioIds,
     scenarios,
     clarificationTrendPolicyStatus,
-    protectedBranchGovernanceStatus: deriveAcceptanceProtectedBranchGovernanceStatus(scenarios),
-    environmentRetryStatus: deriveAcceptanceEnvironmentRetryStatus(scenarios),
+    protectedBranchGovernanceStatus: acceptanceEnvironmentRollups.protectedBranchGovernanceStatus,
+    environmentRetryStatus: acceptanceEnvironmentRollups.environmentRetryStatus,
     summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7621,6 +7623,7 @@ export function runAgenticSoakSuite(params?: {
     hasRisingClarificationTrend,
     params?.failOnClarificationTrend,
   );
+  const soakEnvironmentRollups = deriveSoakEnvironmentRollups(scenarios);
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7633,7 +7636,7 @@ export function runAgenticSoakSuite(params?: {
     clarificationTrendPolicy,
     clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
     trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
-    environmentBoundaryStatus: deriveSoakEnvironmentBoundaryStatus(scenarios),
+    environmentBoundaryStatus: soakEnvironmentRollups.environmentBoundaryStatus,
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7777,8 +7780,7 @@ export function runAgenticQualityGate(params?: {
   const crossLayerTrendPolicyStatus = deriveCrossLayerTrendPolicyStatus(
     clarificationTrendPolicyAlignment,
   );
-  const protectedBranchGovernanceStatus = deriveQualityProtectedBranchGovernanceStatus(diagnostics);
-  const validationReadinessStatus = deriveQualityValidationReadinessStatus(diagnostics);
+  const qualityEnvironmentRollups = deriveQualityEnvironmentRollups(diagnostics);
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7877,8 +7879,8 @@ export function runAgenticQualityGate(params?: {
     clarificationTrendPolicyAlignment,
     clarificationTrendPolicyStatus,
     crossLayerTrendPolicyStatus,
-    protectedBranchGovernanceStatus,
-    validationReadinessStatus,
+    protectedBranchGovernanceStatus: qualityEnvironmentRollups.protectedBranchGovernanceStatus,
+    validationReadinessStatus: qualityEnvironmentRollups.validationReadinessStatus,
     acceptance,
     soak,
     diagnostics,

@@ -280,7 +280,8 @@ export type AgenticAcceptanceReport = {
 export type AgenticSoakScenarioId =
   | "retry_replan_recover_complete"
   | "handoff_resume_completion"
-  | "effectiveness_drift_recovery";
+  | "effectiveness_drift_recovery"
+  | "recovered_watch_stabilization";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -3691,6 +3692,168 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       summary: passed
         ? "Scoped effectiveness drift can fail the gate and then recover after the stronger path is restored."
         : "Scoped effectiveness drift/recovery did not propagate through the long-run gate lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
+  {
+    const recoveredWatchState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Keep the recovered diagnostics workflow under watch and prefer the more stable sibling path until it proves durable.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["diagnostics-repair", "acceptance-report"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [
+        { name: "diagnostics-repair", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=diagnostics-repair family=diagnostics task_mode=debugging workspace=project env=node validation=exec score=2.20 evidence=3",
+        "- skill=acceptance-report family=verification task_mode=debugging workspace=project env=node validation=exec score=2.40 evidence=3",
+        "Skill recovery guidance:",
+        "- skill=diagnostics-repair task_mode=debugging env=node state=recovered_watch",
+      ].join("\n"),
+    });
+    const recoveredWatchGate = runAgenticQualityGate({
+      failOnRecoveringSkills: true,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        recoveringSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
+    const stabilizedState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Keep the recovered diagnostics workflow under watch and prefer the more stable sibling path until it proves durable.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 2,
+          summary:
+            "Stayed on the stable sibling path while the recovered route remained under watch.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary:
+            "Validated the stable acceptance-report path while monitoring the recovered diagnostics route.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary:
+            "Stable sibling path validated successfully, the recovered diagnostics workflow proved durable, and the task is ready for final handoff.",
+        },
+        {
+          kind: "handoff",
+          summary:
+            "Final handoff updated after the recovered diagnostics workflow stabilized and the stronger reusable path was confirmed.",
+        },
+      ],
+      availableSkills: ["diagnostics-repair", "acceptance-report"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [
+        { name: "diagnostics-repair", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=diagnostics-repair family=diagnostics task_mode=debugging workspace=project env=node validation=exec score=2.60 evidence=4",
+        "- skill=acceptance-report family=verification task_mode=debugging workspace=project env=node validation=exec score=2.50 evidence=4",
+      ].join("\n"),
+    });
+    const stabilizedGate = runAgenticQualityGate({
+      failOnRecoveringSkills: true,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "stable",
+        effectiveSkills: ["acceptance-report@debugging/node", "diagnostics-repair@debugging/node"],
+        recoveringSkills: [],
+      },
+    });
+    const phases = [
+      buildSoakPhaseResult({
+        label: "recovered_watch_gate",
+        state: recoveredWatchState,
+        passed:
+          recoveredWatchState.orchestrationState.primarySkill === "acceptance-report" &&
+          !recoveredWatchGate.passed &&
+          !recoveredWatchGate.effectivenessPassed &&
+          recoveredWatchGate.failReasons.includes("recovering_scoped_skills"),
+        details: `quality_gate=${recoveredWatchGate.summary}`,
+      }),
+      buildSoakPhaseResult({
+        label: "stabilized_reuse",
+        state: stabilizedState,
+        passed:
+          stabilizedState.verificationState.goalSatisfaction === "satisfied" &&
+          stabilizedState.verificationState.outcome !== "failed" &&
+          stabilizedState.verificationState.outcome !== "blocked" &&
+          buildAgenticHandoffReport(stabilizedState).pendingSteps.length === 0 &&
+          stabilizedGate.passed &&
+          stabilizedGate.effectivenessPassed &&
+          stabilizedGate.recoveringSkills.length === 0,
+        details: `quality_gate=${stabilizedGate.summary}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "recovered_watch_stabilization",
+      passed,
+      summary: passed
+        ? "Recovered-watch skills can stay gated under observation and later stabilize into a clean reusable path."
+        : "Recovered-watch lifecycle did not move cleanly from guarded use into stable reuse.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });

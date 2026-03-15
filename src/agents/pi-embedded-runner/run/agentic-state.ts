@@ -679,40 +679,51 @@ function deriveAcceptanceTrendPolicyStatus(params: {
 
 function deriveAcceptanceEnvironmentRollups(
   scenarios: AgenticAcceptanceScenarioResult[],
-): Pick<
-  AgenticAcceptanceReport,
-  "protectedBranchGovernanceStatus" | "environmentRetryStatus" | "handoffResumabilityStatus"
-> {
+): Pick<AgenticAcceptanceReport, "protectedBranchGovernanceStatus" | "environmentRetryStatus"> {
   const protectedBranchGovernanceScenario = scenarios.find(
     (scenario) => scenario.id === "protected_branch_governance_alignment",
   );
   const environmentRetryScenario = scenarios.find(
     (scenario) => scenario.id === "environment_guard_retry_alignment",
   );
-  const guardedHandoffScenario = scenarios.find(
-    (scenario) => scenario.id === "guarded_handoff_alignment",
-  );
   return {
     protectedBranchGovernanceStatus: protectedBranchGovernanceScenario?.passed
       ? "guarded"
       : "unknown",
     environmentRetryStatus: environmentRetryScenario?.passed ? "bounded" : "unknown",
+  };
+}
+
+function deriveAcceptanceHandoffRollups(
+  scenarios: AgenticAcceptanceScenarioResult[],
+): Pick<AgenticAcceptanceReport, "handoffResumabilityStatus"> {
+  const guardedHandoffScenario = scenarios.find(
+    (scenario) => scenario.id === "guarded_handoff_alignment",
+  );
+  return {
     handoffResumabilityStatus: guardedHandoffScenario?.passed ? "guarded_resume_paths" : "unknown",
   };
 }
 
 function deriveSoakEnvironmentRollups(
   scenarios: AgenticSoakScenarioResult[],
-): Pick<
-  AgenticSoakReport,
-  | "environmentBoundaryStatus"
-  | "handoffResumabilityStatus"
-  | "dominantResumeBarrierProfile"
-  | "resumeBarrierCounts"
-> {
+): Pick<AgenticSoakReport, "environmentBoundaryStatus"> {
   const environmentGuardedRetryLifecycle = scenarios.find(
     (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
   );
+  return {
+    environmentBoundaryStatus: environmentGuardedRetryLifecycle?.passed
+      ? "bounded_and_guarded"
+      : "unknown",
+  };
+}
+
+function deriveSoakHandoffRollups(
+  scenarios: AgenticSoakScenarioResult[],
+): Pick<
+  AgenticSoakReport,
+  "handoffResumabilityStatus" | "dominantResumeBarrierProfile" | "resumeBarrierCounts"
+> {
   const guardedHandoffLifecycle = scenarios.find(
     (scenario) => scenario.id === "guarded_handoff_boundary",
   );
@@ -734,9 +745,6 @@ function deriveSoakEnvironmentRollups(
       ? []
       : barrierEntries.filter(([, count]) => count === topBarrierCount).map(([profile]) => profile);
   return {
-    environmentBoundaryStatus: environmentGuardedRetryLifecycle?.passed
-      ? "bounded_and_guarded"
-      : "unknown",
     handoffResumabilityStatus: guardedHandoffLifecycle?.passed ? "guarded_resume_paths" : "unknown",
     dominantResumeBarrierProfile:
       topBarriers.length === 1 ? topBarriers[0] : topBarriers.length > 1 ? "none" : "none",
@@ -6063,6 +6071,7 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     driftGuardPassed: clarificationTrendPolicyDriftGuardScenario?.passed,
   });
   const acceptanceEnvironmentRollups = deriveAcceptanceEnvironmentRollups(scenarios);
+  const acceptanceHandoffRollups = deriveAcceptanceHandoffRollups(scenarios);
   return {
     passed,
     totalScenarios: scenarios.length,
@@ -6072,7 +6081,7 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     clarificationTrendPolicyStatus,
     protectedBranchGovernanceStatus: acceptanceEnvironmentRollups.protectedBranchGovernanceStatus,
     environmentRetryStatus: acceptanceEnvironmentRollups.environmentRetryStatus,
-    handoffResumabilityStatus: acceptanceEnvironmentRollups.handoffResumabilityStatus,
+    handoffResumabilityStatus: acceptanceHandoffRollups.handoffResumabilityStatus,
     summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7709,6 +7718,7 @@ export function runAgenticSoakSuite(params?: {
     params?.failOnClarificationTrend,
   );
   const soakEnvironmentRollups = deriveSoakEnvironmentRollups(scenarios);
+  const soakHandoffRollups = deriveSoakHandoffRollups(scenarios);
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7722,9 +7732,9 @@ export function runAgenticSoakSuite(params?: {
     clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
     trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
     environmentBoundaryStatus: soakEnvironmentRollups.environmentBoundaryStatus,
-    handoffResumabilityStatus: soakEnvironmentRollups.handoffResumabilityStatus,
-    dominantResumeBarrierProfile: soakEnvironmentRollups.dominantResumeBarrierProfile,
-    resumeBarrierCounts: soakEnvironmentRollups.resumeBarrierCounts,
+    handoffResumabilityStatus: soakHandoffRollups.handoffResumabilityStatus,
+    dominantResumeBarrierProfile: soakHandoffRollups.dominantResumeBarrierProfile,
+    resumeBarrierCounts: soakHandoffRollups.resumeBarrierCounts,
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }

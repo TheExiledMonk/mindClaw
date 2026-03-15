@@ -9,9 +9,12 @@ import {
   buildWorkingMemorySnapshot,
   compileMemoryState,
   deriveLongTermMemoryCandidates,
+  exportMemoryStoreBundle,
+  importMemoryStoreBundle,
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
   persistMemoryStoreSnapshot,
+  repairMemoryStoreSnapshot,
   retrieveMemoryContextPacket,
   runMemorySleepReview,
 } from "./memory-system-store.js";
@@ -1863,6 +1866,51 @@ describe("MemorySystemContextEngine", () => {
     ).resolves.toBeTruthy();
   });
 
+  it("exports and imports memory store bundles across backends", async () => {
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-export-source-"));
+    const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-export-target-"));
+    const sessionId = "agent:bundle-export";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for all migrations.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: sourceDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const bundle = await exportMemoryStoreBundle({
+      workspaceDir: sourceDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+    await importMemoryStoreBundle({
+      workspaceDir: targetDir,
+      bundle,
+      backendKind: "fs-json",
+      targetSessionId: "agent:bundle-imported",
+    });
+
+    const imported = await loadMemoryStoreSnapshot({
+      workspaceDir: targetDir,
+      sessionId: "agent:bundle-imported",
+      backendKind: "fs-json",
+    });
+    expect(bundle.metadata.backend).toBe("sqlite-graph");
+    expect(imported.longTermMemory[0]?.text).toContain("permanent memory-system path");
+  });
+
   it("uses the sqlite backend when requested through runtime context", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-engine-sqlite-"));
     process.chdir(tempDir);
@@ -1989,6 +2037,79 @@ describe("MemorySystemContextEngine", () => {
     expect(typeof metadata.longTermCount).toBe("number");
     expect(typeof metadata.conceptCount).toBe("number");
     expect(typeof metadata.permanentNodeCount).toBe("number");
+  });
+
+  it("repairs persisted fs-json snapshots by rewriting sanitized long-term entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-repair-"));
+    const storeDir = path.join(tempDir, MEMORY_SYSTEM_DIRNAME);
+    await fs.mkdir(path.join(storeDir, "sessions"), { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions", "agent_repair.json"),
+      JSON.stringify({
+        sessionId: "agent:repair",
+        updatedAt: Date.now(),
+        rollingSummary: "",
+        activeFacts: [],
+        activeGoals: [],
+        openLoops: [],
+        recentEvents: [],
+        recentDecisions: [],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(storeDir, "long-term.json"),
+      JSON.stringify([
+        {
+          id: "",
+          category: "fact",
+          text: "Repair should restore semantic keys and canonical text.",
+          strength: 0.7,
+          evidence: [],
+          provenance: [],
+          confidence: 0.8,
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "deferred",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: Date.now(),
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          environmentTags: [],
+          artifactRefs: [],
+          updatedAt: Date.now(),
+        },
+      ]),
+      "utf8",
+    );
+    await fs.writeFile(path.join(storeDir, "pending-significance.json"), "[]", "utf8");
+    await fs.writeFile(
+      path.join(storeDir, "permanent-tree.json"),
+      JSON.stringify(permanentRoot()),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(storeDir, "memory-graph.json"),
+      JSON.stringify(emptyGraph()),
+      "utf8",
+    );
+
+    const repaired = await repairMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId: "agent:repair",
+      backendKind: "fs-json",
+    });
+
+    expect(repaired.longTermMemory[0]?.semanticKey).toBeTruthy();
+    expect(repaired.longTermMemory[0]?.conceptKey).toBeTruthy();
+    expect(repaired.longTermMemory[0]?.canonicalText).toBeTruthy();
   });
 
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {

@@ -219,6 +219,15 @@ export type MemoryStoreMetadata = {
   graphEdgeCount?: number;
 };
 
+export type MemoryStoreExportBundle = {
+  version: 1;
+  exportedAt: number;
+  sessionId: string;
+  backendKind: MemoryStoreBackendKind;
+  metadata: MemoryStoreMetadata;
+  snapshot: MemoryStoreSnapshot;
+};
+
 export type MemoryCompileResult = MemoryStoreSnapshot & {
   compilerNotes: string[];
   review: MemoryReviewResult;
@@ -514,6 +523,51 @@ function buildSnapshotStoreMetadata(params: {
     graphNodeCount: params.snapshot.graph.nodes.length,
     graphEdgeCount: params.snapshot.graph.edges.length,
   };
+}
+
+async function loadPersistedStoreMetadata(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryStoreMetadata> {
+  const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  if (params.backendKind === "sqlite-graph") {
+    const { DatabaseSync } = requireNodeSqlite();
+    await ensureStoreDirs(paths);
+    const dbPath = path.join(paths.rootDir, SQLITE_STORE_FILENAME);
+    const db = new DatabaseSync(dbPath);
+    try {
+      const migrationState = applySqliteGraphMigrations(db);
+      const row = db.prepare("SELECT value FROM memory_store_metadata WHERE key = 'store'").get() as
+        | { value?: string }
+        | undefined;
+      return sanitizeMemoryStoreMetadata(
+        row?.value
+          ? {
+              ...(JSON.parse(row.value) as MemoryStoreMetadata),
+              schemaVersion: migrationState.schemaVersion,
+              lastAppliedMigration: migrationState.lastAppliedMigration,
+            }
+          : {
+              ...defaultMemoryStoreMetadata("sqlite-graph"),
+              schemaVersion: migrationState.schemaVersion,
+              lastAppliedMigration: migrationState.lastAppliedMigration,
+            },
+        "sqlite-graph",
+      );
+    } finally {
+      db.close();
+    }
+  }
+  const backend = resolveMemoryStoreBackend(params.backendKind);
+  await ensureStoreDirs(paths);
+  return sanitizeMemoryStoreMetadata(
+    await backend.readJson<MemoryStoreMetadata>(
+      paths.metadataFile,
+      defaultMemoryStoreMetadata(backend.kind),
+    ),
+    backend.kind,
+  );
 }
 
 function clipText(text: string, max = 220): string {
@@ -5640,4 +5694,86 @@ export async function persistMemoryStoreSnapshot(params: {
     backend.writeJson(paths.permanentTreeFile, params.permanentMemory),
     backend.writeJson(paths.graphFile, params.graph),
   ]);
+}
+
+export async function exportMemoryStoreBundle(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryStoreExportBundle> {
+  const backendKind = params.backendKind ?? "fs-json";
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  const metadata = await loadPersistedStoreMetadata({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  return {
+    version: 1,
+    exportedAt: Date.now(),
+    sessionId: params.sessionId,
+    backendKind,
+    metadata,
+    snapshot,
+  };
+}
+
+export async function importMemoryStoreBundle(params: {
+  workspaceDir: string;
+  bundle: MemoryStoreExportBundle;
+  targetSessionId?: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<void> {
+  const sessionId = params.targetSessionId ?? params.bundle.sessionId;
+  const backendKind = params.backendKind ?? params.bundle.backendKind;
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId,
+    backendKind,
+    workingMemory: {
+      ...params.bundle.snapshot.workingMemory,
+      sessionId,
+      updatedAt: Date.now(),
+    },
+    longTermMemory: params.bundle.snapshot.longTermMemory.map((entry) =>
+      sanitizeLongTermEntry(entry),
+    ),
+    pendingSignificance: params.bundle.snapshot.pendingSignificance.map((entry) =>
+      sanitizePendingEntry(entry),
+    ),
+    permanentMemory: sanitizePermanentNode(params.bundle.snapshot.permanentMemory),
+    graph: sanitizeGraphSnapshot(params.bundle.snapshot.graph),
+  });
+}
+
+export async function repairMemoryStoreSnapshot(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryStoreSnapshot> {
+  const backendKind = params.backendKind ?? "fs-json";
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+    workingMemory: snapshot.workingMemory,
+    longTermMemory: snapshot.longTermMemory,
+    pendingSignificance: snapshot.pendingSignificance,
+    permanentMemory: snapshot.permanentMemory,
+    graph: snapshot.graph,
+  });
+  return loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
 }

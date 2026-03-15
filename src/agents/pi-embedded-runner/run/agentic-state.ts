@@ -137,6 +137,8 @@ export type AgenticOrchestrationState = {
   chainedWorkflow: boolean;
   skillFamilies: string[];
   overlappingSkills: string[];
+  stabilityState: "neutral" | "recovered_watch" | "stable_reuse";
+  stabilitySkills: string[];
   consolidationAction: AgenticConsolidationAction;
   rationale?: string;
 };
@@ -190,6 +192,8 @@ export type ProceduralExecutionRecord = {
   rankedSkills: string[];
   effectiveSkills: string[];
   effectiveFamilies: string[];
+  stabilityState: "neutral" | "recovered_watch" | "stable_reuse";
+  stabilitySkills: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
   hasViableFallback: boolean;
@@ -1639,10 +1643,27 @@ function buildOrchestrationState(params: {
   const overlapFamilies = overlapSignals.families.filter((family) =>
     memoryRegressionSignals.consolidationPreferredFamilies.includes(family),
   );
+  const stabilitySkills = uniqueCompact(
+    [
+      ...availableSkills
+        .map((skill) => skill.name)
+        .filter((skill) => memoryStabilizedSkills.has(skill)),
+      ...availableSkills
+        .map((skill) => skill.name)
+        .filter((skill) => memoryRecoveringSkills.has(skill)),
+    ],
+    6,
+  );
   const recoveringPrimaryFamily =
     primarySkill && memoryRecoveringSkills.has(primarySkill)
       ? inferSkillFamily(primarySkill)
       : undefined;
+  const stabilityState: AgenticOrchestrationState["stabilityState"] =
+    primarySkill && memoryRecoveringSkills.has(primarySkill)
+      ? "recovered_watch"
+      : primarySkill && memoryStabilizedSkills.has(primarySkill)
+        ? "stable_reuse"
+        : "neutral";
   const strongPrimaryFamily =
     primarySkill &&
     effectiveFamilies.includes(inferSkillFamily(primarySkill)) &&
@@ -1681,6 +1702,8 @@ function buildOrchestrationState(params: {
     chainedWorkflow,
     skillFamilies: overlapSignals.families,
     overlappingSkills: overlapSignals.overlappingSkills,
+    stabilityState,
+    stabilitySkills,
     consolidationAction,
     rationale,
   };
@@ -2220,6 +2243,8 @@ export function buildProceduralExecutionRecord(params: {
         );
   const resolvedEffectiveSkills = params.orchestrationState.effectiveSkills;
   const resolvedEffectiveFamilies = params.orchestrationState.effectiveFamilies;
+  const resolvedStabilityState = params.orchestrationState.stabilityState;
+  const resolvedStabilitySkills = params.orchestrationState.stabilitySkills;
   const resolvedWorkflowSteps =
     params.orchestrationState.workflowSteps.length > 0
       ? params.orchestrationState.workflowSteps
@@ -2237,6 +2262,11 @@ export function buildProceduralExecutionRecord(params: {
   ) {
     nextImprovement =
       "Capture a stronger fallback or alternative execution path for this workflow.";
+  } else if (resolvedStabilityState === "recovered_watch") {
+    nextImprovement =
+      "Keep the recovered workflow under watch until it proves durable across repeated runs.";
+  } else if (resolvedStabilityState === "stable_reuse") {
+    nextImprovement = "Extend the stable workflow family rather than creating a new fork.";
   } else if (consolidationCandidate) {
     nextImprovement =
       "Consider consolidating overlapping skills into a more generic reusable workflow.";
@@ -2282,6 +2312,8 @@ export function buildProceduralExecutionRecord(params: {
     rankedSkills: resolvedRankedSkills,
     effectiveSkills: resolvedEffectiveSkills,
     effectiveFamilies: resolvedEffectiveFamilies,
+    stabilityState: resolvedStabilityState,
+    stabilitySkills: resolvedStabilitySkills,
     prerequisiteWarnings: params.orchestrationState.prerequisiteWarnings,
     capabilityGaps: params.orchestrationState.capabilityGaps,
     hasViableFallback: params.orchestrationState.hasViableFallback,

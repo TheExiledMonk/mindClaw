@@ -2381,6 +2381,8 @@ describe("MemorySystemContextEngine", () => {
             { skill: "acceptance-report", role: "verification" },
           ],
           rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          stabilityState: "stable_reuse",
+          stabilitySkills: ["memory-diagnostics"],
           prerequisiteWarnings: ["acceptance-report:missing-env:docker"],
           capabilityGaps: [],
           multiSkillCandidate: true,
@@ -2436,6 +2438,16 @@ describe("MemorySystemContextEngine", () => {
     expect(
       proceduralEntries.some((entry) =>
         (entry.environmentTags ?? []).includes("procedural:skill-family:verification"),
+      ),
+    ).toBe(true);
+    expect(
+      proceduralEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("procedural:stability:stable_reuse"),
+      ),
+    ).toBe(true);
+    expect(
+      proceduralEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("procedural:stability-skill:memory-diagnostics"),
       ),
     ).toBe(true);
 

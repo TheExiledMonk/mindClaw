@@ -3498,6 +3498,8 @@ function deriveRuntimeSignalCandidates(params: {
           skillChain?: unknown;
           workflowSteps?: unknown;
           rankedSkills?: unknown;
+          stabilityState?: unknown;
+          stabilitySkills?: unknown;
           prerequisiteWarnings?: unknown;
           capabilityGaps?: unknown;
           hasViableFallback?: unknown;
@@ -3699,6 +3701,19 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const stabilityState =
+      proceduralExecution.stabilityState === "neutral" ||
+      proceduralExecution.stabilityState === "recovered_watch" ||
+      proceduralExecution.stabilityState === "stable_reuse"
+        ? proceduralExecution.stabilityState
+        : "neutral";
+    const stabilitySkills = uniqueStrings(
+      Array.isArray(proceduralExecution.stabilitySkills)
+        ? proceduralExecution.stabilitySkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
     const prerequisiteWarnings = uniqueStrings(
       Array.isArray(proceduralExecution.prerequisiteWarnings)
         ? proceduralExecution.prerequisiteWarnings.filter(
@@ -3790,6 +3805,8 @@ function deriveRuntimeSignalCandidates(params: {
       shouldEscalate ? `escalate=${escalationReason ?? "unknown"}` : "",
       governanceReasons.length > 0 ? `governance=${governanceReasons.join(",")}` : "",
       failureReasons.length > 0 ? `failure_reasons=${failureReasons.join(",")}` : "",
+      stabilityState !== "neutral" ? `stability_state=${stabilityState}` : "",
+      stabilitySkills.length > 0 ? `stability_skills=${stabilitySkills.join(",")}` : "",
       nextImprovement ?? "",
       consolidationAction !== "none" ? `consolidation_action=${consolidationAction}` : "",
       overlappingSkills.length > 0 ? `overlap_skills=${overlappingSkills.join(",")}` : "",
@@ -3830,6 +3847,8 @@ function deriveRuntimeSignalCandidates(params: {
       `risk ${riskLevel}`,
       suggestedSkill ? `suggested fallback ${suggestedSkill}` : "",
       shouldEscalate ? `requires escalation ${escalationReason ?? "unknown"}` : "",
+      stabilityState !== "neutral" ? `stability state ${stabilityState}` : "",
+      stabilitySkills.length > 0 ? `stability skills ${stabilitySkills.join(", ")}` : "",
       nextImprovement ? `Next improvement: ${nextImprovement}` : "",
     ]
       .filter(Boolean)
@@ -3858,6 +3877,8 @@ function deriveRuntimeSignalCandidates(params: {
         ) ?? []),
         ...(rankedSkills.map((skill, index) => `procedural:ranked-skill:${index + 1}:${skill}`) ??
           []),
+        stabilityState !== "neutral" ? `procedural:stability:${stabilityState}` : "",
+        ...(stabilitySkills.map((skill) => `procedural:stability-skill:${skill}`) ?? []),
         ...(prerequisiteWarnings.map((warning) => `procedural:prereq:${warning}`) ?? []),
         ...(capabilityGaps.map((gap) => `procedural:capability-gap:${gap}`) ?? []),
         hasViableFallback ? "procedural:viable-fallback" : "procedural:no-viable-fallback",

@@ -363,6 +363,8 @@ describe("agentic-state", () => {
 
     expect(state.orchestrationState.effectiveSkills).toContain("memory-diagnostics");
     expect(state.orchestrationState.effectiveFamilies).toContain("diagnostics");
+    expect(state.orchestrationState.stabilityState).toBe("stable_reuse");
+    expect(state.orchestrationState.stabilitySkills).toContain("memory-diagnostics");
     expect(state.orchestrationState.consolidationAction).toBe("extend_existing");
   });
 
@@ -412,6 +414,7 @@ describe("agentic-state", () => {
     });
 
     expect(state.orchestrationState.primarySkill).toBe("diagnostics-repair");
+    expect(state.orchestrationState.stabilityState).toBe("recovered_watch");
     expect(state.orchestrationState.consolidationAction).toBe("none");
     expect(state.orchestrationState.rationale).toContain("recovered path under watch");
   });

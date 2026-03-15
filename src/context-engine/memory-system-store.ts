@@ -596,7 +596,7 @@ function extractEnvironmentTags(text: string): string[] {
 }
 
 function extractArtifactRefs(text: string): string[] {
-  const matches = text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|md|yml|yaml|toml|lock)\b/g) ?? [];
+  const matches = text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
   const pathLike = text.match(/\b(?:src|docs|config|packages|apps)\/[\w./-]+\b/g) ?? [];
   return uniqueStrings([...matches, ...pathLike]).slice(0, MAX_WORKING_ITEMS);
 }
@@ -644,6 +644,10 @@ function buildRuntimeScopeContext(params?: {
     const value = runtime?.[key];
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   };
+  const stringArray = (key: string): string[] => {
+    const value = runtime?.[key];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  };
   const extraPrompt = stringValue("extraSystemPrompt") ?? "";
   return {
     versionScope: extractVersionScope(extraPrompt),
@@ -655,10 +659,12 @@ function buildRuntimeScopeContext(params?: {
         stringValue("model") ? `model:${stringValue("model")}` : "",
         stringValue("messageProvider") ? `channel:${stringValue("messageProvider")}` : "",
         runtime?.bashElevated === true ? "bash-elevated" : "",
+        ...stringArray("workspaceTags"),
       ].filter(Boolean),
     ),
     artifactRefs: uniqueStrings([
       ...extractArtifactRefs(extraPrompt),
+      ...stringArray("activeArtifacts"),
       params?.sessionFile ? path.basename(params.sessionFile) : "",
     ]),
   };

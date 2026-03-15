@@ -516,6 +516,8 @@ describe("memory system store", () => {
         model: "gpt-5",
         messageProvider: "slack",
         authProfileId: "profile-runtime",
+        activeArtifacts: ["runtime-artifact.md", "src/runtime/known.ts"],
+        workspaceTags: ["workspace", "tmp-workspace"],
         extraSystemPrompt:
           "Use src/context-engine/memory-system.ts as the authoritative artifact for v2026.3.13-1.",
       },
@@ -527,7 +529,10 @@ describe("memory system store", () => {
     );
     expect(durable?.installProfileScope).toBe("profile-runtime");
     expect(durable?.environmentTags).toContain("provider:openai");
+    expect(durable?.environmentTags).toContain("tmp-workspace");
     expect(durable?.artifactRefs).toContain("src/context-engine/memory-system.ts");
+    expect(durable?.artifactRefs).toContain("runtime-artifact.md");
+    expect(durable?.artifactRefs).toContain("src/runtime/known.ts");
     expect(durable?.artifactRefs).toContain("session.jsonl");
   });
 

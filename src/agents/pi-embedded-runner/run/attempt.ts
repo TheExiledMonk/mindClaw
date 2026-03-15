@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -1281,7 +1282,22 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
+  sessionFile: string;
 }): Partial<CompactEmbeddedPiSessionParams> {
+  const activeArtifacts = [
+    path.basename(params.sessionFile),
+    params.sessionFile,
+    params.attempt.extraSystemPrompt,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .flatMap(
+      (value) => value.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [],
+    );
+  const workspaceTags = [
+    "workspace",
+    params.workspaceDir.includes("/tmp") ? "tmp-workspace" : "",
+    params.agentDir.includes("openclaw") ? "openclaw-agent-dir" : "",
+  ].filter(Boolean);
   return {
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
@@ -1300,6 +1316,8 @@ export function buildAfterTurnRuntimeContext(params: {
     bashElevated: params.attempt.bashElevated,
     extraSystemPrompt: params.attempt.extraSystemPrompt,
     ownerNumbers: params.attempt.ownerNumbers,
+    activeArtifacts,
+    workspaceTags,
   };
 }
 
@@ -2613,6 +2631,7 @@ export async function runEmbeddedAttempt(
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
+            sessionFile: params.sessionFile,
           });
 
           if (typeof params.contextEngine.afterTurn === "function") {

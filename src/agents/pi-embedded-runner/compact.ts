@@ -143,6 +143,8 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  activeArtifacts?: string[];
+  workspaceTags?: string[];
 };
 
 type CompactionMessageMetrics = {

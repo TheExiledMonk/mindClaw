@@ -1115,6 +1115,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       },
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
     });
 
     expect(legacy).toMatchObject({
@@ -1151,6 +1152,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       },
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
     });
 
     // buildAfterTurnLegacyCompactionParams no longer resolves the override;
@@ -1180,6 +1182,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       },
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
     });
 
     expect(legacy).toMatchObject({
@@ -1188,6 +1191,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       model: "gpt-5.3-codex",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+      workspaceTags: expect.arrayContaining(["workspace", "tmp-workspace"]),
+      activeArtifacts: expect.arrayContaining(["session.jsonl"]),
     });
   });
 });

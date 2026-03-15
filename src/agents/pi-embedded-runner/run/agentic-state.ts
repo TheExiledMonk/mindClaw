@@ -387,6 +387,7 @@ export type AgenticQualityGateReport = {
   diagnosticsPassed: boolean;
   effectivenessPassed: boolean;
   failReasons: string[];
+  clarificationClasses: string[];
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -497,6 +498,16 @@ function buildClarificationRecommendation(reason?: string, summary?: string): st
     return buildClarificationNextAction(reason);
   }
   return summary;
+}
+
+function mapClarificationReasonToQualityFailReason(reason?: string): string | undefined {
+  return reason === "missing_information:environment_variable"
+    ? "diagnostics_clarification_environment_variable"
+    : reason === "missing_information:approval"
+      ? "diagnostics_clarification_approval"
+      : reason === "missing_information:external_input"
+        ? "diagnostics_clarification_external_input"
+        : undefined;
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -7164,6 +7175,7 @@ export function runAgenticQualityGate(params?: {
   messages?: AgentMessage[];
   failOnEscalation?: boolean;
   failOnMissingFallback?: boolean;
+  failOnClarificationBlockers?: boolean;
   failOnWeakeningSkills?: boolean;
   failOnRecoveringSkills?: boolean;
   diagnosticsOverride?: AgenticExecutionObservabilityReport;
@@ -7195,6 +7207,15 @@ export function runAgenticQualityGate(params?: {
   const templateFamilies = uniqueCompact(params?.memoryTrend?.templateFamilies ?? [], 6);
   const mergeFamilies = uniqueCompact(params?.memoryTrend?.mergeFamilies ?? [], 6);
   const effectivenessTrend = params?.memoryTrend?.trend;
+  const clarificationClasses = uniqueCompact(
+    diagnostics.clarificationReason ? [diagnostics.clarificationReason] : [],
+    3,
+  );
+  const clarificationFailReason =
+    params?.failOnClarificationBlockers && diagnostics.retryClass === "clarify"
+      ? (mapClarificationReasonToQualityFailReason(diagnostics.clarificationReason) ??
+        "diagnostics_clarification_blocker")
+      : undefined;
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7204,6 +7225,7 @@ export function runAgenticQualityGate(params?: {
     params?.failOnMissingFallback && !diagnostics.hasViableFallback
       ? "diagnostics_missing_fallback"
       : undefined,
+    clarificationFailReason,
     params?.failOnWeakeningSkills && weakeningSkills.length > 0
       ? "weakening_scoped_skills"
       : undefined,
@@ -7213,7 +7235,8 @@ export function runAgenticQualityGate(params?: {
   ].filter((reason): reason is string => Boolean(reason));
   const diagnosticsPassed =
     (!params?.failOnEscalation || !diagnostics.escalationRequired) &&
-    (!params?.failOnMissingFallback || diagnostics.hasViableFallback);
+    (!params?.failOnMissingFallback || diagnostics.hasViableFallback) &&
+    !clarificationFailReason;
   const effectivenessPassed =
     (!params?.failOnWeakeningSkills || weakeningSkills.length === 0) &&
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
@@ -7270,6 +7293,7 @@ export function runAgenticQualityGate(params?: {
     diagnosticsPassed,
     effectivenessPassed,
     failReasons,
+    clarificationClasses,
     acceptance,
     soak,
     diagnostics,
@@ -7299,6 +7323,7 @@ export function formatAgenticQualityGateReport(
       `soak=${report.soak.summary}`,
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
+      `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
       `weakening_skills=${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(",") : "none"}`,
       `recovering_skills=${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(",") : "none"}`,
       `stabilized_skills=${report.stabilizedSkills.length > 0 ? report.stabilizedSkills.join(",") : "none"}`,
@@ -7329,6 +7354,7 @@ export function formatAgenticQualityGateReport(
     `- Passed: ${report.diagnosticsPassed ? "yes" : "no"}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
+    `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,
     "",
     "## Effectiveness",
     `- Passed: ${report.effectivenessPassed ? "yes" : "no"}`,

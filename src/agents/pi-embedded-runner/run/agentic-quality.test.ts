@@ -90,6 +90,7 @@ describe("agentic quality gate", () => {
     });
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("agentic quality gate");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("recovering_skills=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("stabilized_skills=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("template_families=");
@@ -412,6 +413,59 @@ describe("agentic quality gate", () => {
     );
   });
 
+  it("can fail the diagnostics gate on repeated approval blockers", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+
+    const report = runAgenticQualityGate({
+      failOnClarificationBlockers: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.diagnosticsPassed).toBe(false);
+    expect(report.clarificationClasses).toContain("missing_information:approval");
+    expect(report.failReasons).toContain("diagnostics_clarification_approval");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "clarification_classes=missing_information:approval",
+    );
+  });
+
   it("uses memory-backed external-input clarification guidance in the quality gate", () => {
     const clarificationState = buildAgenticExecutionState({
       messages: [
@@ -460,6 +514,59 @@ describe("agentic quality gate", () => {
     );
     expect(clarificationReport.recommendations).toContain(
       "Need clarification on: prerequisite for dataset import.",
+    );
+  });
+
+  it("can fail the diagnostics gate on repeated external-input blockers", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the import workflow once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for dataset import.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:external_input trend=watch",
+      ].join("\n"),
+    });
+
+    const report = runAgenticQualityGate({
+      failOnClarificationBlockers: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.diagnosticsPassed).toBe(false);
+    expect(report.clarificationClasses).toContain("missing_information:external_input");
+    expect(report.failReasons).toContain("diagnostics_clarification_external_input");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification classes: missing_information:external_input",
     );
   });
 

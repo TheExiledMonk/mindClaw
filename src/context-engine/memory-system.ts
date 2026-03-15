@@ -269,6 +269,9 @@ export class MemorySystemContextEngine implements ContextEngine {
       staleMemoryIds: reviewed.review.staleMemoryIds,
       contradictoryMemoryIds: reviewed.review.contradictoryMemoryIds,
       supersededMemoryIds: reviewed.review.supersededMemoryIds,
+      permanentEligibleIds: reviewed.review.permanentEligibleIds,
+      permanentDeferredIds: reviewed.review.permanentDeferredIds,
+      permanentBlockedIds: reviewed.review.permanentBlockedIds,
     };
   }
 

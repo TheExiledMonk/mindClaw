@@ -50,6 +50,9 @@ export type ReviewResult = {
   staleMemoryIds?: string[];
   contradictoryMemoryIds?: string[];
   supersededMemoryIds?: string[];
+  permanentEligibleIds?: string[];
+  permanentDeferredIds?: string[];
+  permanentBlockedIds?: string[];
 };
 
 export type ContextEngineInfo = {

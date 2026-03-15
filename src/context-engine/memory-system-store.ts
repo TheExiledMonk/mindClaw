@@ -54,6 +54,7 @@ export type MemoryCompressionState = "active" | "stable" | "compressed" | "laten
 export type MemoryActiveStatus = "active" | "pending" | "stale" | "superseded" | "archived";
 export type MemoryAdjudicationStatus = "authoritative" | "contested" | "superseded";
 export type MemoryRevisionKind = "new" | "reasserted" | "updated" | "narrowed" | "contested";
+export type MemoryPermanenceStatus = "eligible" | "deferred" | "blocked";
 export type MemoryTrend = "rising" | "stable" | "fading";
 export type PermanentNodeType =
   | "root"
@@ -135,6 +136,9 @@ export type WorkingMemorySnapshot = {
 export type LongTermMemoryEntry = {
   id: string;
   semanticKey: string;
+  conceptKey: string;
+  canonicalText: string;
+  conceptAliases: string[];
   ontologyKind: MemoryOntologyKind;
   category: MemoryCategory;
   text: string;
@@ -149,6 +153,8 @@ export type LongTermMemoryEntry = {
   adjudicationStatus: MemoryAdjudicationStatus;
   revisionCount: number;
   lastRevisionKind: MemoryRevisionKind;
+  permanenceStatus: MemoryPermanenceStatus;
+  permanenceReasons: string[];
   trend: MemoryTrend;
   accessCount: number;
   createdAt: number;
@@ -212,6 +218,9 @@ export type MemoryReviewResult = {
   reviewedPendingIds: string[];
   contradictoryMemoryIds: string[];
   supersededMemoryIds: string[];
+  permanentEligibleIds: string[];
+  permanentDeferredIds: string[];
+  permanentBlockedIds: string[];
 };
 
 export type MemoryRetrievalItem = {
@@ -316,6 +325,67 @@ function normalizeComparable(text: string): string {
     .trim();
 }
 
+const CANONICAL_STOP_WORDS = new Set([
+  "the",
+  "a",
+  "an",
+  "for",
+  "with",
+  "when",
+  "while",
+  "into",
+  "from",
+  "that",
+  "this",
+  "these",
+  "those",
+  "during",
+  "after",
+  "before",
+  "then",
+  "than",
+  "each",
+  "every",
+  "should",
+  "would",
+  "could",
+  "because",
+  "through",
+  "current",
+  "active",
+  "session",
+  "sessions",
+]);
+
+function singularizeToken(token: string): string {
+  if (token.endsWith("ies") && token.length > 4) {
+    return `${token.slice(0, -3)}y`;
+  }
+  if (token.endsWith("s") && !token.endsWith("ss") && token.length > 4) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+
+function canonicalizeComparable(text: string): string {
+  const normalized = normalizeComparable(text)
+    .replace(/\bmemory system\b/g, "memory-system")
+    .replace(/\bmemory system path\b/g, "memory-system-path")
+    .replace(/\bpath for memory-system integration\b/g, "memory-system-path")
+    .replace(/\bpermanent path\b/g, "permanent memory-system-path")
+    .replace(/\bcarry forward\b/g, "carry-forward")
+    .replace(/\blong term\b/g, "long-term")
+    .replace(/\bnode tree\b/g, "node-tree")
+    .replace(/\bshould be used\b/g, "use")
+    .replace(/\bbe used\b/g, "use")
+    .replace(/\bold workaround\b/g, "legacy-workaround");
+  const tokens = normalized
+    .split(/\s+/)
+    .map((token) => singularizeToken(token))
+    .filter((token) => token && !CANONICAL_STOP_WORDS.has(token));
+  return tokens.join(" ").trim();
+}
+
 function stableHash(text: string): string {
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
@@ -362,7 +432,9 @@ function mergeProvenance(
 function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
   return {
     ...entry,
+    conceptAliases: [...(entry.conceptAliases ?? [])],
     evidence: [...entry.evidence],
+    permanenceReasons: [...(entry.permanenceReasons ?? [])],
     provenance: entry.provenance.map((item) => ({
       ...item,
       derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])],
@@ -412,6 +484,11 @@ function dedupeLongTermCandidates(entries: LongTermMemoryEntry[]): LongTermMemor
     current.provenance = mergeProvenance(current.provenance, entry.provenance);
     current.strength = Math.max(current.strength, entry.strength);
     current.confidence = Math.max(current.confidence, entry.confidence);
+    current.conceptAliases = uniqueStrings([
+      ...(current.conceptAliases ?? []),
+      ...(entry.conceptAliases ?? []),
+      entry.text,
+    ]);
     current.updatedAt = Math.max(current.updatedAt, entry.updatedAt);
   }
   return [...bySemanticKey.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
@@ -441,7 +518,7 @@ function createProvenanceRecord(
 function inferOntologyKind(category: MemoryCategory, text: string): MemoryOntologyKind {
   if (
     category === "decision" ||
-    /\b(must|required|always|never|constraint|preserve|keep|use)\b/i.test(text)
+    /\b(must|required|always|never|constraint|preserve|keep|use|used|preferred)\b/i.test(text)
   ) {
     return "constraint";
   }
@@ -519,6 +596,87 @@ function buildMemorySemanticKey(params: {
   ].join("::");
 }
 
+function buildMemoryConceptKey(params: {
+  category: MemoryCategory;
+  ontologyKind?: MemoryOntologyKind;
+  text: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  artifactRefs?: string[];
+}): string {
+  return [
+    params.ontologyKind ?? inferOntologyKind(params.category, params.text),
+    params.category,
+    canonicalizeComparable(params.text),
+    normalizeComparable(params.versionScope ?? ""),
+    normalizeComparable(params.installProfileScope ?? ""),
+    normalizeComparable(params.customerScope ?? ""),
+    uniqueStrings(params.artifactRefs ?? [])
+      .map((item) => normalizeComparable(item))
+      .join("|"),
+  ].join("::");
+}
+
+function evaluatePermanenceStatus(
+  entry: Pick<
+    LongTermMemoryEntry,
+    | "importanceClass"
+    | "confidence"
+    | "strength"
+    | "revisionCount"
+    | "adjudicationStatus"
+    | "activeStatus"
+    | "category"
+    | "ontologyKind"
+    | "contradictionCount"
+    | "artifactRefs"
+  >,
+): { status: MemoryPermanenceStatus; reasons: string[] } {
+  const reasons: string[] = [];
+  if (entry.activeStatus === "superseded") {
+    return {
+      status: "blocked",
+      reasons: ["superseded memory is not eligible for permanent truth"],
+    };
+  }
+  if (entry.adjudicationStatus === "contested" || entry.contradictionCount > 0) {
+    return {
+      status: "blocked",
+      reasons: ["contested memory requires adjudication before permanence"],
+    };
+  }
+  if (entry.importanceClass === "temporary") {
+    return {
+      status: "blocked",
+      reasons: ["temporary memory should remain outside permanent memory"],
+    };
+  }
+  if (
+    entry.importanceClass === "critical" ||
+    entry.ontologyKind === "constraint" ||
+    entry.category === "decision"
+  ) {
+    reasons.push("constraint or critical memory qualifies for permanent retention");
+  }
+  if (entry.revisionCount >= 1) {
+    reasons.push("memory has recurrence or revision support");
+  }
+  if ((entry.artifactRefs ?? []).length > 0) {
+    reasons.push("memory is anchored to a durable artifact");
+  }
+  if (entry.confidence >= 0.9 || entry.strength >= 0.9) {
+    reasons.push("memory has high confidence or strength");
+  }
+  if (reasons.length > 0) {
+    return { status: "eligible", reasons };
+  }
+  return {
+    status: "deferred",
+    reasons: ["memory remains durable but lacks enough evidence for permanent promotion"],
+  };
+}
+
 function buildStableMemoryId(prefix: "ltm" | "pattern", semanticKey: string): string {
   return `${prefix}-${stableHash(semanticKey)}`;
 }
@@ -537,6 +695,13 @@ function findConceptMatch(
   let best: LongTermMemoryEntry | undefined;
   let bestScore = 0;
   for (const candidate of entries) {
+    if (
+      candidate.conceptKey &&
+      incoming.conceptKey &&
+      candidate.conceptKey === incoming.conceptKey
+    ) {
+      return candidate;
+    }
     if (candidate.category !== incoming.category) {
       continue;
     }
@@ -939,6 +1104,17 @@ export function deriveLongTermMemoryCandidates(params: {
     const entryBase: LongTermMemoryEntry = {
       id: buildStableMemoryId("ltm", semanticKey),
       semanticKey,
+      conceptKey: buildMemoryConceptKey({
+        category,
+        ontologyKind: inferOntologyKind(category, normalized),
+        text: normalized,
+        versionScope: scope.versionScope,
+        installProfileScope: scope.installProfileScope,
+        customerScope: scope.customerScope,
+        artifactRefs: scope.artifactRefs,
+      }),
+      canonicalText: canonicalizeComparable(normalized),
+      conceptAliases: [normalized],
       ontologyKind: inferOntologyKind(category, normalized),
       category,
       text: normalized,
@@ -953,6 +1129,8 @@ export function deriveLongTermMemoryCandidates(params: {
       adjudicationStatus: "authoritative",
       revisionCount: 0,
       lastRevisionKind: "new",
+      permanenceStatus: "deferred",
+      permanenceReasons: [],
       trend: "rising",
       accessCount: 0,
       createdAt: Date.now(),
@@ -997,6 +1175,17 @@ export function deriveLongTermMemoryCandidates(params: {
     durable.push({
       id: buildStableMemoryId("ltm", semanticKey),
       semanticKey,
+      conceptKey: buildMemoryConceptKey({
+        category: "episode",
+        ontologyKind: inferOntologyKind("episode", normalizedSummary),
+        text: normalizedSummary,
+        versionScope: scope.versionScope,
+        installProfileScope: scope.installProfileScope,
+        customerScope: scope.customerScope,
+        artifactRefs: scope.artifactRefs,
+      }),
+      canonicalText: canonicalizeComparable(normalizedSummary),
+      conceptAliases: [normalizedSummary],
       ontologyKind: inferOntologyKind("episode", normalizedSummary),
       category: "episode",
       text: normalizedSummary,
@@ -1011,6 +1200,8 @@ export function deriveLongTermMemoryCandidates(params: {
       adjudicationStatus: "authoritative",
       revisionCount: 0,
       lastRevisionKind: "new",
+      permanenceStatus: "deferred",
+      permanenceReasons: [],
       trend: "stable",
       accessCount: 0,
       createdAt: Date.now(),
@@ -1045,15 +1236,37 @@ export function mergeLongTermMemory(
     const key = item.semanticKey || normalizeComparable(item.text);
     const current = byIdentity.get(key) ?? findConceptMatch(byIdentity.values(), item);
     if (!current) {
+      const permanence = evaluatePermanenceStatus(item);
       byIdentity.set(key, {
         ...item,
         evidence: dedupeTexts(item.evidence, MAX_WORKING_ITEMS),
+        permanenceStatus: permanence.status,
+        permanenceReasons: permanence.reasons,
       });
       continue;
     }
     current.updatedAt = Date.now();
     const revisionKind = classifyRevisionKind(current, item);
     current.semanticKey = current.semanticKey || item.semanticKey || key;
+    current.conceptKey =
+      current.conceptKey ||
+      item.conceptKey ||
+      buildMemoryConceptKey({
+        category: current.category,
+        ontologyKind: current.ontologyKind,
+        text: current.text,
+        versionScope: current.versionScope,
+        installProfileScope: current.installProfileScope,
+        customerScope: current.customerScope,
+        artifactRefs: current.artifactRefs,
+      });
+    current.canonicalText = current.canonicalText || canonicalizeComparable(current.text);
+    current.conceptAliases = uniqueStrings([
+      ...(current.conceptAliases ?? []),
+      ...(item.conceptAliases ?? []),
+      current.text,
+      item.text,
+    ]);
     current.ontologyKind = item.ontologyKind ?? current.ontologyKind;
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.03);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
@@ -1078,6 +1291,7 @@ export function mergeLongTermMemory(
     current.trend = "rising";
     if (revisionKind === "updated" || revisionKind === "narrowed") {
       current.text = item.text;
+      current.canonicalText = canonicalizeComparable(item.text);
       current.evidence = dedupeTexts([item.text, ...current.evidence], MAX_WORKING_ITEMS);
     }
     if (revisionKind === "contested") {
@@ -1110,6 +1324,9 @@ export function mergeLongTermMemory(
         contradictionCount: current.contradictionCount,
       });
     }
+    const permanence = evaluatePermanenceStatus(current);
+    current.permanenceStatus = permanence.status;
+    current.permanenceReasons = permanence.reasons;
   }
   return [...byIdentity.values()]
     .toSorted((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
@@ -1196,6 +1413,11 @@ function annotateContradictions(entries: LongTermMemoryEntry[]): LongTermMemoryE
       contradictionCount > 0 && entry.activeStatus !== "superseded"
         ? "pending"
         : entry.activeStatus;
+    const permanence = evaluatePermanenceStatus({
+      ...entry,
+      activeStatus,
+      contradictionCount,
+    });
     return {
       ...entry,
       contradictionCount,
@@ -1204,6 +1426,8 @@ function annotateContradictions(entries: LongTermMemoryEntry[]): LongTermMemoryE
         activeStatus,
         contradictionCount,
       }),
+      permanenceStatus: permanence.status,
+      permanenceReasons: permanence.reasons,
       confidence:
         contradictionCount > 0
           ? Math.max(0.35, entry.confidence - contradictionCount * 0.08)
@@ -1311,6 +1535,16 @@ function refreshLongTermLifecycle(
         activeStatus,
         contradictionCount: entry.contradictionCount,
       }),
+      ...(() => {
+        const permanence = evaluatePermanenceStatus({
+          ...entry,
+          activeStatus,
+        });
+        return {
+          permanenceStatus: permanence.status,
+          permanenceReasons: permanence.reasons,
+        };
+      })(),
       strength,
       confidence,
       trend,
@@ -1472,6 +1706,16 @@ function flattenPermanentNodes(root: PermanentMemoryNode): PermanentMemoryNode[]
   return output;
 }
 
+function permanentTreeHasMemoryId(
+  root: PermanentMemoryNode | undefined,
+  memoryId: string,
+): boolean {
+  if (!root) {
+    return false;
+  }
+  return flattenPermanentNodes(root).some((node) => node.sourceMemoryIds.includes(memoryId));
+}
+
 function selectPermanentBranch(
   entry: Pick<LongTermMemoryEntry, "category" | "ontologyKind">,
 ): string[] {
@@ -1558,6 +1802,18 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
     patterns.push({
       id: patternId,
       semanticKey,
+      conceptKey: buildMemoryConceptKey({
+        category: "pattern",
+        ontologyKind: "pattern",
+        text: summary,
+        versionScope: deduped.find((entry) => entry.versionScope)?.versionScope,
+        installProfileScope: deduped.find((entry) => entry.installProfileScope)
+          ?.installProfileScope,
+        customerScope: deduped.find((entry) => entry.customerScope)?.customerScope,
+        artifactRefs: uniqueStrings(deduped.flatMap((entry) => entry.artifactRefs ?? [])),
+      }),
+      canonicalText: canonicalizeComparable(summary),
+      conceptAliases: [summary, ...deduped.map((entry) => entry.text)],
       ontologyKind: "pattern",
       category: "pattern",
       text: summary,
@@ -1588,6 +1844,8 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       adjudicationStatus: "authoritative",
       revisionCount: 0,
       lastRevisionKind: "new",
+      permanenceStatus: "deferred",
+      permanenceReasons: [],
       trend: "rising",
       accessCount: 0,
       createdAt: Date.now(),
@@ -1673,6 +1931,8 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
       older.provenance = mergeProvenance(older.provenance, [
         createProvenanceRecord("derived", `superseded by ${newer.text}`, [newer.id]),
       ]);
+      older.permanenceStatus = "blocked";
+      older.permanenceReasons = ["superseded memory is not eligible for permanent truth"];
       older.relatedMemoryIds = uniqueIds([...older.relatedMemoryIds, newer.id]);
       older.relations = mergeRelations(older.relations, [
         { sourceMemoryId: older.id, type: "superseded_by", targetMemoryId: newer.id, weight: 0.96 },
@@ -1684,6 +1944,11 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
         activeStatus: newer.activeStatus,
         contradictionCount: newer.contradictionCount,
       });
+      {
+        const permanence = evaluatePermanenceStatus(newer);
+        newer.permanenceStatus = permanence.status;
+        newer.permanenceReasons = permanence.reasons;
+      }
       supersededCount += 1;
     }
   }
@@ -1719,6 +1984,18 @@ function reviewMemoryState(params: {
     .filter((entry) => entry.activeStatus === "superseded")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const permanentEligibleIds = params.longTermMemory
+    .filter((entry) => entry.permanenceStatus === "eligible")
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
+  const permanentDeferredIds = params.longTermMemory
+    .filter((entry) => entry.permanenceStatus === "deferred")
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
+  const permanentBlockedIds = params.longTermMemory
+    .filter((entry) => entry.permanenceStatus === "blocked")
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
   const carryForwardSummary = clipText(
     [
       params.workingMemory.rollingSummary,
@@ -1729,6 +2006,12 @@ function reviewMemoryState(params: {
         ? `Contradictions need resolution: ${contradictoryMemoryIds.length}`
         : "",
       supersededMemoryIds[0] ? `Superseded memories to retire: ${supersededMemoryIds.length}` : "",
+      permanentDeferredIds[0]
+        ? `Durable memories waiting for permanence: ${permanentDeferredIds.length}`
+        : "",
+      permanentBlockedIds[0]
+        ? `Permanent-memory blocks to review: ${permanentBlockedIds.length}`
+        : "",
     ]
       .filter(Boolean)
       .join(" | "),
@@ -1742,6 +2025,9 @@ function reviewMemoryState(params: {
     reviewedPendingIds,
     contradictoryMemoryIds,
     supersededMemoryIds,
+    permanentEligibleIds,
+    permanentDeferredIds,
+    permanentBlockedIds,
   };
 }
 
@@ -2103,20 +2389,26 @@ export function compileMemoryState(params: {
     ...nextWorkingMemory,
     carryForwardSummary: review.carryForwardSummary,
   };
-  const durableCandidateIds = new Set(
-    [...candidates.durable, ...promotedPending.durable, ...patternCandidates].map(
-      (entry) => entry.id,
-    ),
-  );
   const previousById = new Map((previous?.longTermMemory ?? []).map((entry) => [entry.id, entry]));
-  const nextPermanent = mergePermanentMemoryTree(
-    previous?.permanentMemory,
-    nextLongTerm.filter(
-      (entry) =>
-        durableCandidateIds.has(entry.id) ||
-        didDurableStateChange(previousById.get(entry.id), entry),
-    ),
-  );
+  const permanentCandidates = nextLongTerm.filter((entry) => {
+    if (entry.permanenceStatus === "eligible") {
+      return true;
+    }
+    if (
+      entry.activeStatus === "superseded" &&
+      didDurableStateChange(previousById.get(entry.id), entry)
+    ) {
+      return true;
+    }
+    if (
+      permanentTreeHasMemoryId(previous?.permanentMemory, entry.id) &&
+      didDurableStateChange(previousById.get(entry.id), entry)
+    ) {
+      return true;
+    }
+    return false;
+  });
+  const nextPermanent = mergePermanentMemoryTree(previous?.permanentMemory, permanentCandidates);
   const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
 
   const compilerNotes: string[] = [];
@@ -2156,6 +2448,21 @@ export function compileMemoryState(params: {
   }
   if (review.supersededMemoryIds.length > 0) {
     compilerNotes.push(`review flagged ${review.supersededMemoryIds.length} superseded memories`);
+  }
+  if (review.permanentEligibleIds.length > 0) {
+    compilerNotes.push(
+      `review marked ${review.permanentEligibleIds.length} memories eligible for permanent retention`,
+    );
+  }
+  if (review.permanentDeferredIds.length > 0) {
+    compilerNotes.push(
+      `review deferred ${review.permanentDeferredIds.length} durable memories from permanent retention`,
+    );
+  }
+  if (review.permanentBlockedIds.length > 0) {
+    compilerNotes.push(
+      `review blocked ${review.permanentBlockedIds.length} memories from permanent retention`,
+    );
   }
 
   return {
@@ -2266,6 +2573,7 @@ function didDurableStateChange(
     previous.compressionState !== next.compressionState ||
     previous.contradictionCount !== next.contradictionCount ||
     previous.supersededById !== next.supersededById ||
+    previous.permanenceStatus !== next.permanenceStatus ||
     previous.confidence !== next.confidence ||
     previous.strength !== next.strength
   );
@@ -3076,12 +3384,37 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
       customerScope: entry.customerScope,
       artifactRefs: entry.artifactRefs,
     });
+  const adjudicationStatus =
+    entry.adjudicationStatus ??
+    inferAdjudicationStatus({
+      activeStatus: entry.activeStatus ?? "active",
+      contradictionCount: entry.contradictionCount ?? 0,
+    });
+  const permanence = evaluatePermanenceStatus({
+    ...entry,
+    activeStatus: entry.activeStatus ?? "active",
+    adjudicationStatus,
+    contradictionCount: entry.contradictionCount ?? 0,
+  });
   return {
     ...entry,
     id:
       entry.id ||
       buildStableMemoryId(entry.category === "pattern" ? "pattern" : "ltm", semanticKey),
     semanticKey,
+    conceptKey:
+      entry.conceptKey ||
+      buildMemoryConceptKey({
+        category: entry.category,
+        ontologyKind: entry.ontologyKind,
+        text: entry.text,
+        versionScope: entry.versionScope,
+        installProfileScope: entry.installProfileScope,
+        customerScope: entry.customerScope,
+        artifactRefs: entry.artifactRefs,
+      }),
+    canonicalText: entry.canonicalText ?? canonicalizeComparable(entry.text),
+    conceptAliases: uniqueStrings([...(entry.conceptAliases ?? []), entry.text]),
     ontologyKind: entry.ontologyKind ?? inferOntologyKind(entry.category, entry.text),
     evidence: [...(entry.evidence ?? [])],
     provenance: (entry.provenance ?? []).map((item) => ({
@@ -3093,14 +3426,11 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
     importanceClass: entry.importanceClass ?? "useful",
     compressionState: entry.compressionState ?? "stable",
     activeStatus: entry.activeStatus ?? "active",
-    adjudicationStatus:
-      entry.adjudicationStatus ??
-      inferAdjudicationStatus({
-        activeStatus: entry.activeStatus ?? "active",
-        contradictionCount: entry.contradictionCount ?? 0,
-      }),
+    adjudicationStatus,
     revisionCount: entry.revisionCount ?? 0,
     lastRevisionKind: entry.lastRevisionKind ?? "new",
+    permanenceStatus: entry.permanenceStatus ?? permanence.status,
+    permanenceReasons: entry.permanenceReasons ?? permanence.reasons,
     trend: entry.trend ?? "stable",
     accessCount: entry.accessCount ?? 0,
     createdAt: entry.createdAt ?? entry.updatedAt ?? Date.now(),

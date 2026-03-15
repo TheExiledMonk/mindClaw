@@ -5,7 +5,7 @@
 The integrated memory system now has four explicit architecture layers:
 
 1. Concept identity
-   Each durable memory carries a `semanticKey`, stable `id`, `ontologyKind`, and adjudication state.
+   Each durable memory carries a `semanticKey`, stable `id`, `conceptKey`, canonical text, alias history, `ontologyKind`, and adjudication state.
 
    Equivalent memories can now also attach through a second-stage concept matcher when wording changes but category, artifact, and scope overlap still indicate the same concept.
 
@@ -18,6 +18,16 @@ The integrated memory system now has four explicit architecture layers:
 
 4. Storage backend seam
    The store persists a metadata file and resolves a backend through a dedicated backend interface. Only `fs-json` exists today, but the code no longer assumes raw file IO everywhere.
+
+## Permanent Promotion Policy
+
+Permanent memory is no longer a direct mirror of long-term memory.
+
+- `eligible`: high-confidence constraints, critical memories, revised memories, or durable artifact-anchored memories
+- `deferred`: durable memories that are useful but still lack enough evidence for permanent retention
+- `blocked`: superseded, temporary, or contested memories that should not become permanent truth
+
+Blocked or deferred memories can still remain in long-term memory and retrieval; the policy only governs what may become structural permanent memory.
 
 ## Permanent Ontology
 

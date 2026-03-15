@@ -41,6 +41,9 @@ function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMe
   return {
     id: "ltm-default",
     semanticKey: `test::${category}::${text.toLowerCase()}`,
+    conceptKey: `concept::${category}::${text.toLowerCase()}`,
+    canonicalText: text.toLowerCase(),
+    conceptAliases: [text],
     ontologyKind:
       category === "decision"
         ? "constraint"
@@ -73,6 +76,8 @@ function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMe
     adjudicationStatus: "authoritative",
     revisionCount: 0,
     lastRevisionKind: "new",
+    permanenceStatus: "deferred",
+    permanenceReasons: [],
     trend: "stable",
     accessCount: 0,
     createdAt: now,
@@ -235,6 +240,41 @@ describe("memory system store", () => {
     );
     expect(Array.isArray(compiled.pendingSignificance)).toBe(true);
     expect(compiled.review.carryForwardSummary).toBeTruthy();
+  });
+
+  it("gates permanent-memory promotion through explicit permanence policy", () => {
+    const compiled = compileMemoryState({
+      sessionId: "permanence-policy-a",
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for all migrations.",
+        ),
+        userMessage(
+          "The current session is a migration-planning session for memory compiler notes.",
+        ),
+        userMessage(
+          "Do not use the permanent memory-system path in src/context-engine/memory-system.ts during transcript debugging.",
+        ),
+      ],
+    });
+
+    const constraint = compiled.longTermMemory.find((entry) =>
+      entry.text.includes("permanent memory-system path"),
+    );
+    const discussedFact = compiled.longTermMemory.find((entry) =>
+      entry.text.includes("current session is a migration-planning session"),
+    );
+
+    expect(compiled.review.permanentEligibleIds.length).toBeGreaterThan(0);
+    expect(compiled.review.permanentBlockedIds.length).toBeGreaterThan(0);
+    expect(constraint?.permanenceStatus).toMatch(/eligible|blocked/);
+    expect(discussedFact?.permanenceStatus).toBe("deferred");
+    expect(
+      findPermanentNodeBySummary(
+        compiled.permanentMemory,
+        "current session is a migration-planning session",
+      ),
+    ).toBe(undefined);
   });
 
   it("promotes recurring pending-significance memories into durable long-term memory", () => {

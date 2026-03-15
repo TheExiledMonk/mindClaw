@@ -44,6 +44,28 @@ describe("memory system evaluation scenarios", () => {
     expect(secondConstraint?.lastRevisionKind).toBe("reasserted");
   });
 
+  it("tracks concept aliases across paraphrased but equivalent durable constraints", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-aliases",
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-aliases",
+      previous: first,
+      messages: [
+        userMessage(
+          "The permanent path for memory-system integration in src/context-engine/memory-system.ts should be used.",
+        ),
+      ],
+    });
+
+    const durable = second.longTermMemory.find((entry) => entry.id === first.longTermMemory[0]?.id);
+    expect(durable?.conceptAliases.length).toBeGreaterThan(1);
+    expect(durable?.canonicalText).toContain("memory-system");
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",
@@ -80,6 +102,11 @@ describe("memory system evaluation scenarios", () => {
           {
             id: "ltm-old-workaround",
             semanticKey: "test::decision::old-workaround",
+            conceptKey: "concept::decision::old-workaround",
+            canonicalText: "use old memory-system workaround src context-engine memory-system ts",
+            conceptAliases: [
+              "Use the old memory-system workaround for src/context-engine/memory-system.ts.",
+            ],
             ontologyKind: "constraint",
             category: "decision",
             text: "Use the old memory-system workaround for src/context-engine/memory-system.ts.",
@@ -101,6 +128,8 @@ describe("memory system evaluation scenarios", () => {
             adjudicationStatus: "authoritative",
             revisionCount: 0,
             lastRevisionKind: "new",
+            permanenceStatus: "deferred",
+            permanenceReasons: [],
             trend: "stable",
             accessCount: 0,
             createdAt: Date.now() - 1000 * 60 * 60,

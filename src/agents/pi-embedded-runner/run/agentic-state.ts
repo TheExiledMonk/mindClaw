@@ -258,7 +258,8 @@ export type AgenticAcceptanceScenarioId =
   | "consolidation_persists_to_memory"
   | "goal_satisfaction_downgrades_verified_checks"
   | "long_run_recovery_reaches_goal_satisfaction"
-  | "weakening_skills_quality_gate";
+  | "weakening_skills_quality_gate"
+  | "recovering_skills_guidance_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -3151,6 +3152,72 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Weakening scoped skills can fail the quality gate and surface in operator-facing output."
         : "Weakening scoped skills did not flow through the quality gate correctly.",
       details: `failReasons=${report.failReasons.join("|")} weakening=${report.weakeningSkills.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow and prefer the most stable reusable path while the recovered diagnostics route is still under watch.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["diagnostics-repair", "acceptance-report"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [
+        { name: "diagnostics-repair", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=diagnostics-repair family=diagnostics task_mode=debugging workspace=project env=node validation=exec score=2.20 evidence=3",
+        "- skill=acceptance-report family=verification task_mode=debugging workspace=project env=node validation=exec score=2.40 evidence=3",
+        "Skill recovery guidance:",
+        "- skill=diagnostics-repair task_mode=debugging env=node state=recovered_watch",
+      ].join("\n"),
+    });
+    const report = runAgenticQualityGate({
+      failOnRecoveringSkills: true,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        recoveringSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
+    const passed =
+      state.orchestrationState.primarySkill === "acceptance-report" &&
+      state.orchestrationState.rankedSkills[0] === "acceptance-report" &&
+      !report.passed &&
+      !report.effectivenessPassed &&
+      report.failReasons.includes("recovering_scoped_skills") &&
+      report.recoveringSkills.includes("diagnostics-repair@debugging/node");
+    scenarios.push({
+      id: "recovering_skills_guidance_alignment",
+      passed,
+      summary: passed
+        ? "Recovered-watch skills steer planning toward the stable sibling and can still fail the quality gate."
+        : "Recovered-watch guidance did not align planning and quality-gate behavior.",
+      details: `primary=${state.orchestrationState.primarySkill} failReasons=${report.failReasons.join("|")} recovering=${report.recoveringSkills.join("|")}`,
     });
   }
 

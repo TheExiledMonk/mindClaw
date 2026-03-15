@@ -1,7 +1,7 @@
 {
   "name": "openclaw",
   "version": "2026.3.13",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
+  "description": "MindClaw personal AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
   "bugs": {
@@ -14,6 +14,7 @@
     "url": "git+https://github.com/openclaw/openclaw.git"
   },
   "bin": {
+    "mindclaw": "mindclaw.mjs",
     "openclaw": "openclaw.mjs"
   },
   "directories": {
@@ -23,6 +24,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "mindclaw.mjs",
     "openclaw.mjs",
     "README-header.png",
     "README.md",
@@ -295,6 +297,8 @@
     "memory:diagnostics": "node --import tsx scripts/memory-diagnostics-report.ts",
     "memory:diagnostics:markdown": "node --import tsx scripts/memory-diagnostics-report.ts --format markdown",
     "memory:diagnostics:summary": "node --import tsx scripts/memory-diagnostics-report.ts --format summary",
+    "mindclaw": "node scripts/run-node.mjs",
+    "mindclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",

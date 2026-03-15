@@ -326,6 +326,7 @@ export type AgenticQualityGateReport = {
   weakeningSkills: string[];
   effectiveSkills: string[];
   recoveringSkills: string[];
+  stabilizedSkills: string[];
   effectivenessTrend?: "stable" | "watch" | "regressing";
   summary: string;
 };
@@ -3925,6 +3926,7 @@ export function runAgenticQualityGate(params?: {
     weakeningSkills?: string[];
     effectiveSkills?: string[];
     recoveringSkills?: string[];
+    stabilizedSkills?: string[];
     trend?: "stable" | "watch" | "regressing";
   };
 }): AgenticQualityGateReport {
@@ -3937,6 +3939,7 @@ export function runAgenticQualityGate(params?: {
   const weakeningSkills = uniqueCompact(params?.memoryTrend?.weakeningSkills ?? [], 6);
   const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
   const recoveringSkills = uniqueCompact(params?.memoryTrend?.recoveringSkills ?? [], 6);
+  const stabilizedSkills = uniqueCompact(params?.memoryTrend?.stabilizedSkills ?? [], 6);
   const effectivenessTrend = params?.memoryTrend?.trend;
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
@@ -3974,6 +3977,7 @@ export function runAgenticQualityGate(params?: {
     weakeningSkills,
     effectiveSkills,
     recoveringSkills,
+    stabilizedSkills,
     effectivenessTrend,
     summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"} effectiveness=${effectivenessPassed ? "pass" : "fail"}`,
   };
@@ -3995,6 +3999,7 @@ export function formatAgenticQualityGateReport(
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `weakening_skills=${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(",") : "none"}`,
       `recovering_skills=${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(",") : "none"}`,
+      `stabilized_skills=${report.stabilizedSkills.length > 0 ? report.stabilizedSkills.join(",") : "none"}`,
       `fail_reasons=${report.failReasons.length > 0 ? report.failReasons.join(",") : "none"}`,
     ];
     return `${lines.join("\n")}\n`;
@@ -4026,6 +4031,7 @@ export function formatAgenticQualityGateReport(
     `- Effective skills: ${report.effectiveSkills.length > 0 ? report.effectiveSkills.join(", ") : "none"}`,
     `- Weakening skills: ${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(", ") : "none"}`,
     `- Recovering skills: ${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(", ") : "none"}`,
+    `- Stabilized skills: ${report.stabilizedSkills.length > 0 ? report.stabilizedSkills.join(", ") : "none"}`,
   ];
   return `${lines.join("\n")}\n`;
 }

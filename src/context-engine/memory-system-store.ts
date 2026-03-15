@@ -398,6 +398,7 @@ export type MemoryAgenticTrendReport = {
   effectiveFamilies: string[];
   weakeningSkills: string[];
   recoveringSkills: string[];
+  stabilizedSkills: string[];
   latestSummaries: string[];
   trend: "stable" | "watch" | "regressing";
   summary: string;
@@ -1017,6 +1018,27 @@ function deriveRecoveringScopedSkills(entries: LongTermMemoryEntry[]): string[] 
       const latestSignal = sortedSignals[0];
       const earlierNegative = sortedSignals.slice(1).some((signal) => signal.score < 0);
       return latestSignal && latestSignal.score > 0 && earlierNegative ? [key] : [];
+    })
+    .slice(0, 3);
+}
+
+function deriveStabilizedScopedSkills(entries: LongTermMemoryEntry[]): string[] {
+  const signalsByKey = new Map<string, ProceduralSkillSignal[]>();
+  for (const signal of collectProceduralSkillSignals(entries)) {
+    const key = `${signal.skill}@${signal.taskMode}/${signal.env}`;
+    const bucket = signalsByKey.get(key) ?? [];
+    bucket.push(signal);
+    signalsByKey.set(key, bucket);
+  }
+  const recoveringSkills = new Set(deriveRecoveringScopedSkills(entries));
+  return [...signalsByKey.entries()]
+    .flatMap(([key, signals]) => {
+      if (recoveringSkills.has(key)) {
+        return [];
+      }
+      const sortedSignals = signals.toSorted((a, b) => b.updatedAt - a.updatedAt);
+      const latestTwo = sortedSignals.slice(0, 2);
+      return latestTwo.length >= 2 && latestTwo.every((signal) => signal.score > 0) ? [key] : [];
     })
     .slice(0, 3);
 }
@@ -8161,6 +8183,7 @@ function inspectMemoryAgenticTrends(
     .slice(0, 3)
     .map((item) => `${item.skill}@${item.taskMode}/${item.env}`);
   const recoveringSkills = deriveRecoveringScopedSkills(proceduralEntries);
+  const stabilizedSkills = deriveStabilizedScopedSkills(proceduralEntries);
   const latestSummaries = agenticEntries.slice(0, 3).map((entry) => clipText(entry.text, 160));
   const trend =
     failingQualityGateSignals > 0 || failingSoakSignals > 0
@@ -8182,6 +8205,7 @@ function inspectMemoryAgenticTrends(
     effectiveFamilies,
     weakeningSkills,
     recoveringSkills,
+    stabilizedSkills,
     latestSummaries,
     trend,
     summary: clipText(
@@ -8195,6 +8219,7 @@ function inspectMemoryAgenticTrends(
         effectiveSkills.length > 0 ? `effective=${effectiveSkills.join(",")}` : "",
         weakeningSkills.length > 0 ? `weakening=${weakeningSkills.join(",")}` : "",
         recoveringSkills.length > 0 ? `recovering=${recoveringSkills.join(",")}` : "",
+        stabilizedSkills.length > 0 ? `stabilized=${stabilizedSkills.join(",")}` : "",
         qualityFailureReasons.length > 0 ? `reasons=${qualityFailureReasons.join(",")}` : "",
       ]
         .filter(Boolean)
@@ -8339,6 +8364,11 @@ export function formatMemoryDiagnosticsReport(
           `agentic_recovering_skills: ${report.agenticTrends.recoveringSkills.join(", ")}`,
         );
       }
+      if (report.agenticTrends.stabilizedSkills.length > 0) {
+        lines.push(
+          `agentic_stabilized_skills: ${report.agenticTrends.stabilizedSkills.join(", ")}`,
+        );
+      }
     }
     if (report.failedAcceptanceScenarios.length > 0) {
       lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
@@ -8391,6 +8421,7 @@ export function formatMemoryDiagnosticsReport(
       `- Effective families: ${report.agenticTrends.effectiveFamilies.length > 0 ? report.agenticTrends.effectiveFamilies.join(", ") : "none"}`,
       `- Weakening skills: ${report.agenticTrends.weakeningSkills.length > 0 ? report.agenticTrends.weakeningSkills.join(", ") : "none"}`,
       `- Recovering skills: ${report.agenticTrends.recoveringSkills.length > 0 ? report.agenticTrends.recoveringSkills.join(", ") : "none"}`,
+      `- Stabilized skills: ${report.agenticTrends.stabilizedSkills.length > 0 ? report.agenticTrends.stabilizedSkills.join(", ") : "none"}`,
       `- Latest summaries: ${report.agenticTrends.latestSummaries.length > 0 ? report.agenticTrends.latestSummaries.join("; ") : "none"}`,
       "",
     );

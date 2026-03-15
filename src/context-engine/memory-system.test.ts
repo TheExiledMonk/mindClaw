@@ -3131,6 +3131,144 @@ describe("MemorySystemContextEngine", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("surfaces stabilized scoped skills in persisted agentic diagnostics trends", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-agentic-stable-"));
+    const sessionId = "agent:agentic-stable-trends";
+    const firstStableSnapshot = compileMemoryState({
+      sessionId,
+      messages: [userMessage("Track when a scoped diagnostics workflow has become stable.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "extend_existing",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          suggestedSkill: undefined,
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: [],
+          skillChain: ["diagnostics-repair"],
+          workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+          rankedSkills: ["diagnostics-repair"],
+          effectiveSkills: ["diagnostics-repair"],
+          effectiveFamilies: ["diagnostics"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "Keep reusing the now-stable diagnostics repair workflow.",
+        },
+      } as never,
+    });
+    const secondStableSnapshot = compileMemoryState({
+      sessionId,
+      messages: [userMessage("Track when a scoped diagnostics workflow has become stable.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "extend_existing",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          suggestedSkill: undefined,
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: [],
+          skillChain: ["diagnostics-repair"],
+          workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+          rankedSkills: ["diagnostics-repair"],
+          effectiveSkills: ["diagnostics-repair"],
+          effectiveFamilies: ["diagnostics"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "The diagnostics repair workflow is holding up across repeated runs.",
+        },
+      } as never,
+    });
+
+    for (const entry of firstStableSnapshot.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of secondStableSnapshot.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    firstStableSnapshot.longTermMemory.push(...secondStableSnapshot.longTermMemory);
+    firstStableSnapshot.pendingSignificance.push(...secondStableSnapshot.pendingSignificance);
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+      workingMemory: firstStableSnapshot.workingMemory,
+      longTermMemory: firstStableSnapshot.longTermMemory,
+      pendingSignificance: firstStableSnapshot.pendingSignificance,
+      permanentMemory: firstStableSnapshot.permanentMemory,
+      graph: firstStableSnapshot.graph,
+    });
+
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+    });
+
+    expect(report.agenticTrends?.stabilizedSkills).toContain("diagnostics-repair@debugging/node");
+    const summary = formatMemoryDiagnosticsReport(report, "summary");
+    const markdown = formatMemoryDiagnosticsReport(report, "markdown");
+    expect(summary).toContain("agentic_stabilized_skills:");
+    expect(markdown).toContain("Stabilized skills:");
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("injects agentic regression guidance into retrieved memory packets", () => {
     const compiled = compileMemoryState({
       sessionId: "agent:agentic-regression-packet",

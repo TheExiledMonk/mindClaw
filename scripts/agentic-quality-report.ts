@@ -116,6 +116,7 @@ async function main(): Promise<void> {
         weakeningSkills?: string[];
         effectiveSkills?: string[];
         recoveringSkills?: string[];
+        stabilizedSkills?: string[];
         trend?: "stable" | "watch" | "regressing";
       }
     | undefined;
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
           weakeningSkills: diagnostics.agenticTrends.weakeningSkills,
           effectiveSkills: diagnostics.agenticTrends.effectiveSkills,
           recoveringSkills: diagnostics.agenticTrends.recoveringSkills,
+          stabilizedSkills: diagnostics.agenticTrends.stabilizedSkills,
           trend: diagnostics.agenticTrends.trend,
         }
       : undefined;

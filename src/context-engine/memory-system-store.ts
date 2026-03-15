@@ -200,7 +200,7 @@ export type MemoryStoreSnapshot = {
   graph: MemoryGraphSnapshot;
 };
 
-export type MemoryStoreBackendKind = "fs-json" | "sqlite-doc";
+export type MemoryStoreBackendKind = "fs-json" | "sqlite-doc" | "sqlite-graph";
 
 export type MemoryStoreMetadata = {
   backend: MemoryStoreBackendKind;
@@ -363,8 +363,16 @@ const sqliteDocMemoryStoreBackend: MemoryStoreBackend = {
   writeJson: writeSqliteJsonFile,
 };
 
+const sqliteGraphMemoryStoreBackend: MemoryStoreBackend = {
+  kind: "sqlite-graph",
+  readJson: readSqliteJsonFile,
+  writeJson: writeSqliteJsonFile,
+};
+
 function resolveMemoryStoreBackend(kind?: MemoryStoreBackendKind): MemoryStoreBackend {
   switch (kind ?? "fs-json") {
+    case "sqlite-graph":
+      return sqliteGraphMemoryStoreBackend;
     case "sqlite-doc":
       return sqliteDocMemoryStoreBackend;
     case "fs-json":
@@ -3568,12 +3576,178 @@ function sanitizePermanentNode(node: PermanentMemoryNode): PermanentMemoryNode {
   };
 }
 
+function flattenPermanentNodeRecords(
+  node: PermanentMemoryNode,
+  parentId?: string,
+): Array<{ id: string; parentId: string | undefined; json: string }> {
+  const records: Array<{ id: string; parentId: string | undefined; json: string }> = [
+    { id: node.id, parentId, json: JSON.stringify(node) },
+  ];
+  for (const child of node.children) {
+    records.push(...flattenPermanentNodeRecords(child, node.id));
+  }
+  return records;
+}
+
+function collectSqliteGraphRoot(
+  entries: Array<{ id: string; parent_id: string | null; json: string }>,
+): PermanentMemoryNode {
+  const nodes = new Map<string, PermanentMemoryNode>();
+  const childrenByParent = new Map<string, PermanentMemoryNode[]>();
+  let root: PermanentMemoryNode | undefined;
+
+  for (const entry of entries) {
+    const node = sanitizePermanentNode(JSON.parse(entry.json) as PermanentMemoryNode);
+    node.children = [];
+    nodes.set(entry.id, node);
+    if (entry.parent_id) {
+      const bucket = childrenByParent.get(entry.parent_id) ?? [];
+      bucket.push(node);
+      childrenByParent.set(entry.parent_id, bucket);
+    } else {
+      root = node;
+    }
+  }
+  for (const [parentId, children] of childrenByParent.entries()) {
+    const parent = nodes.get(parentId);
+    if (parent) {
+      parent.children = children;
+    }
+  }
+  return root ?? createPermanentRoot();
+}
+
+function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_store_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS working_memory (
+      session_id TEXT PRIMARY KEY,
+      json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS long_term_memory (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      concept_key TEXT NOT NULL,
+      ontology_kind TEXT NOT NULL,
+      active_status TEXT NOT NULL,
+      permanence_status TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pending_memory (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS permanent_nodes (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      parent_id TEXT,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS memory_graph_nodes (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      active_status TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS memory_graph_edges (
+      session_id TEXT NOT NULL,
+      from_id TEXT NOT NULL,
+      to_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL,
+      PRIMARY KEY (session_id, from_id, to_id, type)
+    );
+  `);
+}
+
 export async function loadMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
   backendKind?: MemoryStoreBackendKind;
 }): Promise<MemoryStoreSnapshot> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  if (params.backendKind === "sqlite-graph") {
+    const { DatabaseSync } = requireNodeSqlite();
+    await ensureStoreDirs(paths);
+    const dbPath = path.join(paths.rootDir, SQLITE_STORE_FILENAME);
+    const db = new DatabaseSync(dbPath);
+    try {
+      ensureSqliteGraphStoreSchema(db);
+      db.prepare(
+        `
+          INSERT INTO memory_store_metadata (key, value)
+          VALUES ('store', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `,
+      ).run(JSON.stringify(defaultMemoryStoreMetadata("sqlite-graph")));
+      const workingRow = db
+        .prepare("SELECT json FROM working_memory WHERE session_id = ?")
+        .get(params.sessionId) as { json?: string } | undefined;
+      const longTermRows = db
+        .prepare("SELECT json FROM long_term_memory WHERE session_id = ? ORDER BY updated_at DESC")
+        .all(params.sessionId) as Array<{ json: string }>;
+      const pendingRows = db
+        .prepare("SELECT json FROM pending_memory WHERE session_id = ? ORDER BY updated_at DESC")
+        .all(params.sessionId) as Array<{ json: string }>;
+      const permanentRows = db
+        .prepare(
+          "SELECT id, parent_id, json FROM permanent_nodes WHERE session_id = ? ORDER BY updated_at ASC",
+        )
+        .all(params.sessionId) as Array<{ id: string; parent_id: string | null; json: string }>;
+      const graphNodeRows = db
+        .prepare(
+          "SELECT json FROM memory_graph_nodes WHERE session_id = ? ORDER BY updated_at DESC",
+        )
+        .all(params.sessionId) as Array<{ json: string }>;
+      const graphEdgeRows = db
+        .prepare(
+          "SELECT json FROM memory_graph_edges WHERE session_id = ? ORDER BY updated_at DESC",
+        )
+        .all(params.sessionId) as Array<{ json: string }>;
+      const workingMemory = workingRow?.json
+        ? (JSON.parse(workingRow.json) as WorkingMemorySnapshot)
+        : {
+            sessionId: params.sessionId,
+            updatedAt: Date.now(),
+            rollingSummary: "",
+            carryForwardSummary: "",
+            activeFacts: [],
+            activeGoals: [],
+            openLoops: [],
+            recentEvents: [],
+            recentDecisions: [],
+          };
+      return {
+        workingMemory,
+        longTermMemory: longTermRows.map((row) =>
+          sanitizeLongTermEntry(JSON.parse(row.json) as LongTermMemoryEntry),
+        ),
+        pendingSignificance: pendingRows.map((row) =>
+          sanitizePendingEntry(JSON.parse(row.json) as PendingMemoryEntry),
+        ),
+        permanentMemory:
+          permanentRows.length > 0 ? collectSqliteGraphRoot(permanentRows) : createPermanentRoot(),
+        graph: sanitizeGraphSnapshot({
+          nodes: graphNodeRows.map((row) => JSON.parse(row.json) as MemoryGraphNode),
+          edges: graphEdgeRows.map((row) => JSON.parse(row.json) as MemoryGraphEdge),
+          updatedAt: Date.now(),
+        }),
+      };
+    } finally {
+      db.close();
+    }
+  }
   const backend = resolveMemoryStoreBackend(params.backendKind);
   await ensureStoreDirs(paths);
   await backend.writeJson(
@@ -3624,6 +3798,102 @@ export async function persistMemoryStoreSnapshot(params: {
   backendKind?: MemoryStoreBackendKind;
 }): Promise<void> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  if (params.backendKind === "sqlite-graph") {
+    const { DatabaseSync } = requireNodeSqlite();
+    await ensureStoreDirs(paths);
+    const dbPath = path.join(paths.rootDir, SQLITE_STORE_FILENAME);
+    const db = new DatabaseSync(dbPath);
+    try {
+      ensureSqliteGraphStoreSchema(db);
+      db.prepare(
+        `
+          INSERT INTO memory_store_metadata (key, value)
+          VALUES ('store', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `,
+      ).run(JSON.stringify(defaultMemoryStoreMetadata("sqlite-graph")));
+      db.prepare(
+        `
+          INSERT INTO working_memory (session_id, json, updated_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            json = excluded.json,
+            updated_at = excluded.updated_at
+        `,
+      ).run(params.sessionId, JSON.stringify(params.workingMemory), Date.now());
+      db.prepare("DELETE FROM long_term_memory WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM pending_memory WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM permanent_nodes WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_graph_nodes WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_graph_edges WHERE session_id = ?").run(params.sessionId);
+
+      const insertLongTerm = db.prepare(
+        `INSERT INTO long_term_memory (
+          id, session_id, concept_key, ontology_kind, active_status, permanence_status, updated_at, json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const entry of params.longTermMemory) {
+        insertLongTerm.run(
+          entry.id,
+          params.sessionId,
+          entry.conceptKey,
+          entry.ontologyKind,
+          entry.activeStatus,
+          entry.permanenceStatus,
+          entry.updatedAt,
+          JSON.stringify(entry),
+        );
+      }
+      const insertPending = db.prepare(
+        "INSERT INTO pending_memory (id, session_id, updated_at, json) VALUES (?, ?, ?, ?)",
+      );
+      for (const entry of params.pendingSignificance) {
+        insertPending.run(entry.id, params.sessionId, entry.updatedAt, JSON.stringify(entry));
+      }
+      const insertPermanent = db.prepare(
+        "INSERT INTO permanent_nodes (id, session_id, parent_id, updated_at, json) VALUES (?, ?, ?, ?, ?)",
+      );
+      for (const record of flattenPermanentNodeRecords(params.permanentMemory)) {
+        const parsed = JSON.parse(record.json) as PermanentMemoryNode;
+        insertPermanent.run(
+          record.id,
+          params.sessionId,
+          record.parentId ?? null,
+          parsed.updatedAt,
+          record.json,
+        );
+      }
+      const insertGraphNode = db.prepare(
+        "INSERT INTO memory_graph_nodes (id, session_id, kind, active_status, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)",
+      );
+      for (const node of params.graph.nodes) {
+        insertGraphNode.run(
+          node.id,
+          params.sessionId,
+          node.kind,
+          node.activeStatus,
+          node.updatedAt,
+          JSON.stringify(node),
+        );
+      }
+      const insertGraphEdge = db.prepare(
+        "INSERT INTO memory_graph_edges (session_id, from_id, to_id, type, updated_at, json) VALUES (?, ?, ?, ?, ?, ?)",
+      );
+      for (const edge of params.graph.edges) {
+        insertGraphEdge.run(
+          params.sessionId,
+          edge.from,
+          edge.to,
+          edge.type,
+          edge.updatedAt,
+          JSON.stringify(edge),
+        );
+      }
+      return;
+    } finally {
+      db.close();
+    }
+  }
   const backend = resolveMemoryStoreBackend(params.backendKind);
   await ensureStoreDirs(paths);
   await Promise.all([

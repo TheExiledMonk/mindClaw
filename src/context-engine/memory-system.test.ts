@@ -1568,4 +1568,43 @@ describe("MemorySystemContextEngine", () => {
       fs.stat(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite")),
     ).resolves.toBeTruthy();
   });
+
+  it("persists structured rows with the sqlite-graph backend", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sqlite-graph-"));
+    const sessionId = "agent:sqlite-graph";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for all migrations.",
+        ),
+        userMessage(
+          "The previous fix in src/context-engine/memory-system.ts restored carry-forward output.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const loaded = await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+    expect(loaded.longTermMemory.length).toBeGreaterThan(0);
+    expect(loaded.graph.nodes.length).toBeGreaterThan(0);
+    expect(loaded.permanentMemory.children.length).toBeGreaterThan(0);
+    await expect(
+      fs.stat(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite")),
+    ).resolves.toBeTruthy();
+  });
 });

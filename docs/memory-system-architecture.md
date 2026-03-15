@@ -17,7 +17,7 @@ The integrated memory system now has four explicit architecture layers:
    The runner can trigger `review()` on compaction and on milestone-like checkpoints, not only during explicit manual review.
 
 4. Storage backend seam
-   The store persists through a dedicated backend interface. `fs-json` remains the simplest backend, and `sqlite-doc` now stores the same logical documents in a single SQLite file for stronger persistence and easier future migration.
+   The store persists through a dedicated backend interface. `fs-json` remains the simplest backend, `sqlite-doc` stores the same logical documents in a single SQLite file, and `sqlite-graph` now persists memories, permanent nodes, graph nodes, and graph edges as first-class SQLite rows.
 
 ## Permanent Promotion Policy
 
@@ -45,7 +45,6 @@ This is still a first formalization, not a final schema.
 
 ## Next Backend Candidates
 
-- `sqlite-graph`: structured node and edge storage with transactional updates beyond document blobs
 - `sqlite-hybrid`: structured records plus lightweight embedding lookup
 - `lancedb-hybrid`: keep graph/metadata local and use vector search for recall
 

@@ -34,11 +34,17 @@ function resolveMemoryStoreBackendKind(
   runtimeContext?: ContextEngineRuntimeContext,
 ): MemoryStoreBackendKind | undefined {
   const runtimeValue = runtimeContext?.memoryStoreBackend;
-  if (runtimeValue === "fs-json" || runtimeValue === "sqlite-doc") {
+  if (
+    runtimeValue === "fs-json" ||
+    runtimeValue === "sqlite-doc" ||
+    runtimeValue === "sqlite-graph"
+  ) {
     return runtimeValue;
   }
   const envValue = process.env.OPENCLAW_MEMORY_STORE_BACKEND;
-  return envValue === "fs-json" || envValue === "sqlite-doc" ? envValue : undefined;
+  return envValue === "fs-json" || envValue === "sqlite-doc" || envValue === "sqlite-graph"
+    ? envValue
+    : undefined;
 }
 
 function selectNewMessages(

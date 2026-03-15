@@ -317,7 +317,8 @@ export type AgenticAcceptanceScenarioId =
   | "nonblocking_missing_information_alignment"
   | "clarification_payload_alignment"
   | "clarification_strategy_alignment"
-  | "memory_backed_clarification_alignment";
+  | "memory_backed_clarification_alignment"
+  | "clarification_policy_quality_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -5392,6 +5393,121 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Memory-backed blocker history can bias clarification strategy even when the current blocker is generic."
         : "Memory-backed blocker history did not bias clarification strategy correctly.",
       details: `next=${state.plannerState.nextAction ?? "none"} resume=${handoff.resumeCondition ?? "none"}`,
+    });
+  }
+
+  {
+    const acceptanceOverride = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      summary: "agentic acceptance 0/0 passed",
+    };
+    const soakOverride = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      summary: "agentic soak 0/0 passed",
+    };
+    const envVarState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the deployment task once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:environment_variable trend=watch",
+      ].join("\n"),
+    });
+    const approvalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+    const externalInputState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the import workflow once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for dataset import.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:external_input trend=watch",
+      ].join("\n"),
+    });
+    const envVarReport = runAgenticQualityGate({
+      failOnClarificationBlockers: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(envVarState),
+      acceptanceOverride,
+      soakOverride,
+    });
+    const approvalReport = runAgenticQualityGate({
+      failOnClarificationBlockers: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(approvalState),
+      acceptanceOverride,
+      soakOverride,
+    });
+    const externalInputReport = runAgenticQualityGate({
+      failOnClarificationBlockers: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(externalInputState),
+      acceptanceOverride,
+      soakOverride,
+    });
+    const passed =
+      envVarReport.failReasons.includes("diagnostics_clarification_environment_variable") &&
+      envVarReport.clarificationClasses.includes("missing_information:environment_variable") &&
+      approvalReport.failReasons.includes("diagnostics_clarification_approval") &&
+      approvalReport.clarificationClasses.includes("missing_information:approval") &&
+      externalInputReport.failReasons.includes("diagnostics_clarification_external_input") &&
+      externalInputReport.clarificationClasses.includes("missing_information:external_input");
+    scenarios.push({
+      id: "clarification_policy_quality_alignment",
+      passed,
+      summary: passed
+        ? "Release-facing quality policy can distinguish approval, env-var, and external-input clarification blockers."
+        : "Clarification blocker classes did not stay distinct when promoted into quality policy.",
+      details: `env=${envVarReport.failReasons.join("|")} approval=${approvalReport.failReasons.join("|")} external=${externalInputReport.failReasons.join("|")}`,
     });
   }
 

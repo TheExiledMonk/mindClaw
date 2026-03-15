@@ -91,6 +91,10 @@ describe("agentic acceptance suite", () => {
       (scenario) => scenario.id === "memory_backed_clarification_alignment",
     );
     expect(memoryBackedClarificationScenario?.passed).toBe(true);
+    const clarificationPolicyScenario = report.scenarios.find(
+      (scenario) => scenario.id === "clarification_policy_quality_alignment",
+    );
+    expect(clarificationPolicyScenario?.passed).toBe(true);
   });
 
   it("formats the acceptance report in summary and markdown forms", () => {

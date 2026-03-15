@@ -401,6 +401,8 @@ export type AgenticQualityGateReport = {
   clarificationTrendPolicy: "none" | "observe" | "blocking";
   soakClarificationTrendPolicy: "none" | "observe" | "blocking";
   clarificationTrendPolicyAlignment: "aligned" | "drift";
+  clarificationTrendPolicyStatus: "none" | "observe_only" | "blocking";
+  crossLayerTrendPolicyStatus: "consistent" | "divergent";
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -7638,6 +7640,14 @@ export function runAgenticQualityGate(params?: {
     soak.clarificationTrendPolicy ?? "none";
   const clarificationTrendPolicyAlignment: AgenticQualityGateReport["clarificationTrendPolicyAlignment"] =
     soakClarificationTrendPolicy === clarificationTrendPolicy ? "aligned" : "drift";
+  const clarificationTrendPolicyStatus: AgenticQualityGateReport["clarificationTrendPolicyStatus"] =
+    clarificationTrendPolicy === "blocking"
+      ? "blocking"
+      : clarificationTrendPolicy === "observe"
+        ? "observe_only"
+        : "none";
+  const crossLayerTrendPolicyStatus: AgenticQualityGateReport["crossLayerTrendPolicyStatus"] =
+    clarificationTrendPolicyAlignment === "aligned" ? "consistent" : "divergent";
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7734,6 +7744,8 @@ export function runAgenticQualityGate(params?: {
     clarificationTrendPolicy,
     soakClarificationTrendPolicy,
     clarificationTrendPolicyAlignment,
+    clarificationTrendPolicyStatus,
+    crossLayerTrendPolicyStatus,
     acceptance,
     soak,
     diagnostics,
@@ -7770,6 +7782,8 @@ export function formatAgenticQualityGateReport(
       `soak_clarification_trend_policy=${report.soakClarificationTrendPolicy}`,
       `quality_clarification_trend_policy=${report.clarificationTrendPolicy}`,
       `clarification_trend_policy_alignment=${report.clarificationTrendPolicyAlignment}`,
+      `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus}`,
+      `cross_layer_trend_policy_status=${report.crossLayerTrendPolicyStatus}`,
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
@@ -7807,6 +7821,8 @@ export function formatAgenticQualityGateReport(
     `- Soak clarification trend policy: ${report.soakClarificationTrendPolicy}`,
     `- Quality clarification trend policy: ${report.clarificationTrendPolicy}`,
     `- Clarification trend policy alignment: ${report.clarificationTrendPolicyAlignment}`,
+    `- Clarification trend policy status: ${report.clarificationTrendPolicyStatus}`,
+    `- Cross-layer trend policy status: ${report.crossLayerTrendPolicyStatus}`,
     "",
     "## Diagnostics",
     `- Summary: ${report.diagnostics.summary}`,

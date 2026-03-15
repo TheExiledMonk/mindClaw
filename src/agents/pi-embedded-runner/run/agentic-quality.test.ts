@@ -105,6 +105,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment=",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "clarification_trend_policy_status=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "cross_layer_trend_policy_status=",
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -130,6 +136,12 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Clarification trend policy alignment:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification trend policy status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Cross-layer trend policy status:",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
@@ -676,6 +688,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment=aligned",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "clarification_trend_policy_status=observe_only",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "cross_layer_trend_policy_status=consistent",
+    );
   });
 
   it("can fail the quality gate on a rising long-run clarification blocker trend", () => {
@@ -738,6 +756,8 @@ describe("agentic quality gate", () => {
     expect(report.clarificationTrendPolicy).toBe("blocking");
     expect(report.soakClarificationTrendPolicy).toBe("observe");
     expect(report.clarificationTrendPolicyAlignment).toBe("drift");
+    expect(report.clarificationTrendPolicyStatus).toBe("blocking");
+    expect(report.crossLayerTrendPolicyStatus).toBe("divergent");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_clarification_trend_policy=observe",
     );
@@ -747,6 +767,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment=drift",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "clarification_trend_policy_status=blocking",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "cross_layer_trend_policy_status=divergent",
+    );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Soak clarification trend policy: observe",
     );
@@ -755,6 +781,12 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Clarification trend policy alignment: drift",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification trend policy status: blocking",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Cross-layer trend policy status: divergent",
     );
   });
 

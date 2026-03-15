@@ -15,6 +15,8 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendSignals).toContain("approval:steady(1->1)");
     expect(report.clarificationTrendSignals).toContain("external_input:rising(0->1)");
     expect(report.clarificationTrendPolicy).toBe("observe");
+    expect(report.clarificationTrendPolicyStatus).toBe("observe_only");
+    expect(report.trendPolicyPromotionStatus).toBe("promotion_safe");
 
     const retryLifecycle = report.scenarios.find(
       (scenario) => scenario.id === "retry_replan_recover_complete",
@@ -159,6 +161,12 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "clarification_trend_policy=observe",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "clarification_trend_policy_status=observe_only",
+    );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "trend_policy_promotion_status=promotion_safe",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain("# Agentic Soak Report");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Dominant clarification profile: mixed",
@@ -166,6 +174,12 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "markdown")).toContain("Clarification trends:");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Clarification trend policy: observe",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Clarification trend policy status: observe_only",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Trend policy promotion status: promotion_safe",
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "## retry_replan_recover_complete",
@@ -178,11 +192,25 @@ describe("agentic soak suite", () => {
     });
 
     expect(report.clarificationTrendPolicy).toBe("blocking");
+    expect(report.clarificationTrendPolicyStatus).toBe("blocking");
+    expect(report.trendPolicyPromotionStatus).toBe("gated_for_trend_watch");
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "clarification_trend_policy=blocking",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "clarification_trend_policy_status=blocking",
+    );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "trend_policy_promotion_status=gated_for_trend_watch",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Clarification trend policy: blocking",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Clarification trend policy status: blocking",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Trend policy promotion status: gated_for_trend_watch",
     );
   });
 });

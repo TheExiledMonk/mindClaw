@@ -386,6 +386,8 @@ export type AgenticSoakReport = {
   dominantClarificationProfile?: AgenticQualityGateReport["clarificationProfile"];
   clarificationTrendSignals?: string[];
   clarificationTrendPolicy?: AgenticQualityGateReport["clarificationTrendPolicy"];
+  clarificationTrendPolicyStatus?: "none" | "observe_only" | "blocking";
+  trendPolicyPromotionStatus?: "promotion_safe" | "gated_for_trend_watch";
   summary: string;
 };
 
@@ -7510,6 +7512,15 @@ export function runAgenticSoakSuite(params?: {
       : params?.failOnClarificationTrend
         ? "blocking"
         : "observe",
+    clarificationTrendPolicyStatus: !hasRisingClarificationTrend
+      ? "none"
+      : params?.failOnClarificationTrend
+        ? "blocking"
+        : "observe_only",
+    trendPolicyPromotionStatus:
+      hasRisingClarificationTrend && params?.failOnClarificationTrend
+        ? "gated_for_trend_watch"
+        : "promotion_safe",
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7530,6 +7541,8 @@ export function formatAgenticSoakReport(
       `clarification_mix=${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(",") : "none"}`,
       `clarification_trends=${clarificationTrendSignals.length > 0 ? clarificationTrendSignals.join(",") : "none"}`,
       `clarification_trend_policy=${report.clarificationTrendPolicy ?? "none"}`,
+      `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "none"}`,
+      `trend_policy_promotion_status=${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
@@ -7549,6 +7562,8 @@ export function formatAgenticSoakReport(
     `Clarification mix: ${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(", ") : "none"}`,
     `Clarification trends: ${clarificationTrendSignals.length > 0 ? clarificationTrendSignals.join(", ") : "none"}`,
     `Clarification trend policy: ${report.clarificationTrendPolicy ?? "none"}`,
+    `Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "none"}`,
+    `Trend policy promotion status: ${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
     "",
     ...report.scenarios.flatMap((scenario) => [
       `## ${scenario.id}`,

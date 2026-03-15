@@ -2963,6 +2963,7 @@ function deriveRuntimeSignalCandidates(params: {
           rankedSkills?: unknown;
           prerequisiteWarnings?: unknown;
           capabilityGaps?: unknown;
+          hasViableFallback?: unknown;
           multiSkillCandidate?: unknown;
           workspaceKind?: unknown;
           capabilitySignals?: unknown;
@@ -3116,6 +3117,7 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const hasViableFallback = proceduralExecution.hasViableFallback !== false;
     const multiSkillCandidate = proceduralExecution.multiSkillCandidate === true;
     const workspaceKind =
       proceduralExecution.workspaceKind === "project" ||
@@ -3169,6 +3171,7 @@ function deriveRuntimeSignalCandidates(params: {
       rankedSkills.length > 0 ? `ranked_skills=${rankedSkills.join(",")}` : "",
       prerequisiteWarnings.length > 0 ? `skill_prereqs=${prerequisiteWarnings.join(",")}` : "",
       capabilityGaps.length > 0 ? `capability_gaps=${capabilityGaps.join(",")}` : "",
+      hasViableFallback ? "viable_fallback=true" : "viable_fallback=false",
       multiSkillCandidate ? "multi_skill_candidate=true" : "",
       `workspace_kind=${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities=${capabilitySignals.join(",")}` : "",
@@ -3197,6 +3200,7 @@ function deriveRuntimeSignalCandidates(params: {
         ? `skill prerequisites ${prerequisiteWarnings.join(", ")}`
         : "",
       capabilityGaps.length > 0 ? `capability gaps ${capabilityGaps.join(", ")}` : "",
+      !hasViableFallback ? "no viable fallback identified" : "",
       multiSkillCandidate ? "multi-skill orchestration candidate" : "",
       `workspace ${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities ${capabilitySignals.join(", ")}` : "",
@@ -3238,6 +3242,7 @@ function deriveRuntimeSignalCandidates(params: {
           []),
         ...(prerequisiteWarnings.map((warning) => `procedural:prereq:${warning}`) ?? []),
         ...(capabilityGaps.map((gap) => `procedural:capability-gap:${gap}`) ?? []),
+        hasViableFallback ? "procedural:viable-fallback" : "procedural:no-viable-fallback",
         ...(capabilitySignals.map((signal) => `procedural:capability:${signal}`) ?? []),
         ...(preferredValidationTools.map((tool) => `procedural:validation-tool:${tool}`) ?? []),
         ...(skillEnvironments.map((env) => `procedural:skill-env:${env}`) ?? []),

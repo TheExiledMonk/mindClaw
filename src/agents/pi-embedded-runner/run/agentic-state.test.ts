@@ -291,6 +291,29 @@ describe("agentic-state", () => {
     expect(state.plannerState.nextAction).toContain("acceptance-report");
   });
 
+  it("marks when fallback guidance is still not viable", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the diagnostics workflow and find a viable fallback.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    expect(state.plannerState.retryClass).toBe("same_path_retry");
+    expect(state.orchestrationState.hasViableFallback).toBe(false);
+    expect(state.orchestrationState.capabilityGaps).toContain("no_viable_fallback");
+    expect(state.failureLearningState.missingCapabilities).toContain("no_viable_fallback");
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Capability gaps: no_viable_fallback",
+    );
+  });
+
   it("escalates environment mismatches instead of recommending normal retries", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],

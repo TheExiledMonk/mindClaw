@@ -202,6 +202,7 @@ export type CompactEmbeddedPiSessionParams = {
     rankedSkills: string[];
     prerequisiteWarnings: string[];
     capabilityGaps: string[];
+    hasViableFallback: boolean;
     multiSkillCandidate: boolean;
     rationale?: string;
   };

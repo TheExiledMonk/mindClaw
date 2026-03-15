@@ -105,6 +105,7 @@ export type AgenticOrchestrationState = {
   rankedSkills: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
+  hasViableFallback: boolean;
   multiSkillCandidate: boolean;
   rationale?: string;
 };
@@ -152,6 +153,7 @@ export type ProceduralExecutionRecord = {
   rankedSkills: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
+  hasViableFallback: boolean;
   multiSkillCandidate: boolean;
   workspaceKind: "project" | "temporary" | "unknown";
   capabilitySignals: string[];
@@ -853,6 +855,11 @@ function buildOrchestrationState(params: {
   );
   const primarySkill = rankedSkills[0] ?? likelySkills[0] ?? availableSkills[0]?.name;
   const fallbackSkills = rankedSkills.filter((skill) => skill !== primarySkill).slice(0, 4);
+  const hasViableFallback =
+    fallbackSkills.length > 0 &&
+    (params.plannerState?.retryClass !== "skill_fallback" ||
+      rankedSkills[0] !== likelySkills[0] ||
+      fallbackSkills.some((skill) => alternativeSkills.includes(skill)));
   const skillChain = uniqueCompact(
     [primarySkill, ...fallbackSkills].filter((value): value is string => Boolean(value)),
     4,
@@ -870,6 +877,12 @@ function buildOrchestrationState(params: {
         ? "missing_operational_execution"
         : undefined,
       fallbackSkills.length === 0 && availableSkills.length > 1 ? "no_ranked_fallback" : undefined,
+      (params.plannerState?.status === "needs_replan" ||
+        params.plannerState?.status === "blocked" ||
+        params.plannerState?.retryClass === "skill_fallback") &&
+      !hasViableFallback
+        ? "no_viable_fallback"
+        : undefined,
     ],
     5,
   );
@@ -892,6 +905,7 @@ function buildOrchestrationState(params: {
     rankedSkills,
     prerequisiteWarnings,
     capabilityGaps,
+    hasViableFallback,
     multiSkillCandidate,
     rationale,
   };
@@ -967,7 +981,13 @@ function buildFailureLearningState(params: {
     failurePattern,
     learnFromFailure: failurePattern === "near_miss" || failurePattern === "blocked_path",
     failureReasons,
-    missingCapabilities: params.orchestrationState.capabilityGaps,
+    missingCapabilities: uniqueCompact(
+      [
+        ...params.orchestrationState.capabilityGaps,
+        !params.orchestrationState.hasViableFallback ? "no_viable_fallback" : undefined,
+      ],
+      8,
+    ),
   };
 }
 
@@ -1346,6 +1366,7 @@ export function buildProceduralExecutionRecord(params: {
     rankedSkills: resolvedRankedSkills,
     prerequisiteWarnings: params.orchestrationState.prerequisiteWarnings,
     capabilityGaps: params.orchestrationState.capabilityGaps,
+    hasViableFallback: params.orchestrationState.hasViableFallback,
     multiSkillCandidate: params.orchestrationState.multiSkillCandidate,
     workspaceKind: params.environmentState.workspaceKind,
     capabilitySignals: params.environmentState.capabilitySignals,

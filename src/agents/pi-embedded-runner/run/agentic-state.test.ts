@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { buildAgenticExecutionState, buildAgenticSystemPromptAddition } from "./agentic-state.js";
+import {
+  buildAgenticExecutionState,
+  buildAgenticSystemPromptAddition,
+  buildProceduralExecutionRecord,
+} from "./agentic-state.js";
 
 function msg(role: "user" | "assistant" | "toolResult", content: string): AgentMessage {
   return { role, content, timestamp: Date.now() } as AgentMessage;
@@ -76,5 +80,88 @@ describe("agentic-state", () => {
     ).toBe(true);
     expect(["failed", "blocked"]).toContain(state.verificationState.outcome);
     expect(state.plannerState.status).toBe("blocked");
+  });
+
+  it("builds procedural execution records for skill and workflow learning", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Plan the memory diagnostics rollout and update the markdown report workflow for the acceptance report.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics markdown template.",
+        },
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran markdown report generation successfully.",
+        },
+      ],
+      diffSignals: [
+        {
+          artifactRef: "scripts/memory-diagnostics-report.ts",
+          changeKind: "modified",
+          summary: "Updated diagnostics report generation.",
+        },
+        {
+          artifactRef: "docs/memory-system-operations.md",
+          changeKind: "modified",
+          summary: "Updated operations guidance.",
+        },
+      ],
+    });
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "acceptance-report", primaryEnv: "node" },
+        ],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics markdown template.",
+        },
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran markdown report generation successfully.",
+        },
+      ],
+      diffSignals: [
+        {
+          artifactRef: "scripts/memory-diagnostics-report.ts",
+          changeKind: "modified",
+          summary: "Updated diagnostics report generation.",
+        },
+        {
+          artifactRef: "docs/memory-system-operations.md",
+          changeKind: "modified",
+          summary: "Updated operations guidance.",
+        },
+      ],
+    });
+
+    expect(record.availableSkills).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "acceptance-report"]),
+    );
+    expect(record.toolChain).toEqual(expect.arrayContaining(["read", "exec"]));
+    expect(record.changedArtifacts).toEqual(
+      expect.arrayContaining([
+        "scripts/memory-diagnostics-report.ts",
+        "docs/memory-system-operations.md",
+      ]),
+    );
+    expect(record.templateCandidate).toBe(true);
   });
 });

@@ -89,6 +89,7 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import type {
+  ProceduralExecutionRecord,
   AgenticPlannerState,
   AgenticTaskState,
   AgenticVerificationState,
@@ -184,6 +185,7 @@ export type CompactEmbeddedPiSessionParams = {
   taskState?: AgenticTaskState;
   verificationState?: AgenticVerificationState;
   plannerState?: AgenticPlannerState;
+  proceduralExecution?: ProceduralExecutionRecord;
 };
 
 type CompactionMessageMetrics = {

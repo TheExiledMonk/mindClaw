@@ -131,7 +131,11 @@ import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
-import { buildAgenticExecutionState, buildAgenticSystemPromptAddition } from "./agentic-state.js";
+import {
+  buildAgenticExecutionState,
+  buildAgenticSystemPromptAddition,
+  buildProceduralExecutionRecord,
+} from "./agentic-state.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   selectCompactionTimeoutSnapshot,
@@ -1472,6 +1476,14 @@ export function buildAfterTurnRuntimeContext(params: {
     retrySignals,
     promptErrorSummary,
   });
+  const proceduralExecution = buildProceduralExecutionRecord({
+    skillsSnapshot: params.attempt.skillsSnapshot,
+    taskState: agenticState.taskState,
+    verificationState: agenticState.verificationState,
+    plannerState: agenticState.plannerState,
+    toolSignals,
+    diffSignals,
+  });
   return {
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
@@ -1501,6 +1513,7 @@ export function buildAfterTurnRuntimeContext(params: {
     taskState: agenticState.taskState,
     verificationState: agenticState.verificationState,
     plannerState: agenticState.plannerState,
+    proceduralExecution,
   };
 }
 

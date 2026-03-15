@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { SkillSnapshot } from "../../skills.js";
 
 export type AgenticTaskMode =
   | "coding"
@@ -50,6 +51,19 @@ export type AgenticExecutionState = {
   taskState: AgenticTaskState;
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
+};
+
+export type ProceduralExecutionRecord = {
+  version: 1;
+  availableSkills: string[];
+  likelySkills: string[];
+  toolChain: string[];
+  changedArtifacts: string[];
+  outcome: AgenticVerificationOutcome;
+  taskMode: AgenticTaskMode;
+  templateCandidate: boolean;
+  consolidationCandidate: boolean;
+  nextImprovement?: string;
 };
 
 type ToolSignal = {
@@ -413,4 +427,63 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
   ].filter((line): line is string => Boolean(line));
 
   return lines.length > 2 ? lines.join("\n") : undefined;
+}
+
+export function buildProceduralExecutionRecord(params: {
+  skillsSnapshot?: SkillSnapshot;
+  taskState: AgenticTaskState;
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+  toolSignals?: ToolSignal[];
+  diffSignals?: DiffSignal[];
+}): ProceduralExecutionRecord {
+  const availableSkills = uniqueCompact(
+    params.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
+    12,
+  );
+  const objectiveText = params.taskState.objective?.toLowerCase() ?? "";
+  const likelySkills = availableSkills.filter((skill) => {
+    const normalized = skill.toLowerCase();
+    const tokens = normalized.split(/[^a-z0-9]+/i).filter((token) => token.length >= 3);
+    return tokens.some((token) => objectiveText.includes(token));
+  });
+  const changedArtifacts = uniqueCompact(
+    params.diffSignals?.map((signal) => signal.artifactRef) ?? [],
+    8,
+  );
+  const toolChain = uniqueCompact(params.toolSignals?.map((signal) => signal.toolName) ?? [], 8);
+  const consolidationCandidate = likelySkills.length > 1;
+  const templateCandidate =
+    params.verificationState.outcome !== "failed" &&
+    params.verificationState.outcome !== "blocked" &&
+    (changedArtifacts.length > 1 || toolChain.length > 1);
+
+  let nextImprovement: string | undefined;
+  if (
+    params.verificationState.outcome === "failed" ||
+    params.verificationState.outcome === "blocked"
+  ) {
+    nextImprovement =
+      "Capture a stronger fallback or alternative execution path for this workflow.";
+  } else if (consolidationCandidate) {
+    nextImprovement =
+      "Consider consolidating overlapping skills into a more generic reusable workflow.";
+  } else if (templateCandidate && likelySkills.length === 1) {
+    nextImprovement = `Consider parameterizing ${likelySkills[0]} so it can cover similar jobs without duplication.`;
+  } else if (params.plannerState.status === "needs_replan") {
+    nextImprovement = "Improve replanning guidance for this workflow before reusing it.";
+  }
+
+  return {
+    version: 1,
+    availableSkills,
+    likelySkills,
+    toolChain,
+    changedArtifacts,
+    outcome: params.verificationState.outcome,
+    taskMode: params.taskState.taskMode,
+    templateCandidate,
+    consolidationCandidate,
+    nextImprovement,
+  };
 }

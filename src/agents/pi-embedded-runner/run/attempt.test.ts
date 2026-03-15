@@ -1255,6 +1255,10 @@ describe("buildAfterTurnRuntimeContext", () => {
       version: 1,
       status: expect.any(String),
     });
+    expect(runtimeContext.proceduralExecution).toMatchObject({
+      version: 1,
+      outcome: expect.any(String),
+    });
   });
 
   it("captures structured task, verification, and planner state for runtime context", () => {
@@ -1266,7 +1270,10 @@ describe("buildAfterTurnRuntimeContext", () => {
         agentAccountId: "acct-1",
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
-        skillsSnapshot: undefined,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "typescript-build-fix", primaryEnv: "node" }],
+        },
         senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.3-codex",
@@ -1304,6 +1311,11 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
     expect(runtimeContext.plannerState).toMatchObject({
       status: "continue",
+    });
+    expect(runtimeContext.proceduralExecution).toMatchObject({
+      availableSkills: expect.arrayContaining(["typescript-build-fix"]),
+      toolChain: expect.arrayContaining(["exec"]),
+      outcome: "verified",
     });
   });
 

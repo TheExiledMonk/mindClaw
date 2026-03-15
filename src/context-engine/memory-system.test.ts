@@ -13,6 +13,7 @@ import {
   MEMORY_SYSTEM_DIRNAME,
   retrieveMemoryContextPacket,
 } from "./memory-system-store.js";
+import type { LongTermMemoryEntry, PendingMemoryEntry, PermanentMemoryNode } from "./memory-system-store.js";
 
 const previousCwd = process.cwd();
 
@@ -26,6 +27,65 @@ function userMessage(content: string): AgentMessage {
     content,
     timestamp: Date.now(),
   } as AgentMessage;
+}
+
+function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMemoryEntry {
+  const now = Date.now();
+  return {
+    id: "ltm-default",
+    category: "strategy",
+    text: "Default durable memory.",
+    strength: 0.8,
+    evidence: ["default evidence"],
+    provenance: [
+      {
+        kind: "message",
+        detail: "default evidence",
+        recordedAt: now,
+        derivedFromMemoryIds: [],
+      },
+    ],
+    sourceType: "system_inferred",
+    confidence: 0.8,
+    importanceClass: "useful",
+    compressionState: "stable",
+    activeStatus: "active",
+    trend: "stable",
+    accessCount: 0,
+    createdAt: now,
+    lastConfirmedAt: now,
+    contradictionCount: 0,
+    relatedMemoryIds: [],
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function pendingEntry(overrides: Partial<PendingMemoryEntry> = {}): PendingMemoryEntry {
+  return {
+    ...longTermEntry({
+      activeStatus: "pending",
+      importanceClass: "temporary",
+      trend: "rising",
+      ...overrides,
+    }),
+    pendingReason:
+      overrides.pendingReason ?? "needs recurrence or stronger confirmation before durable promotion",
+  };
+}
+
+function permanentRoot(children: PermanentMemoryNode[] = []): PermanentMemoryNode {
+  return {
+    id: "root",
+    label: "permanent-memory",
+    nodeType: "root",
+    updatedAt: Date.now(),
+    evidence: [],
+    sourceMemoryIds: [],
+    confidence: 1,
+    activeStatus: "active",
+    children,
+  };
 }
 
 describe("memory system store", () => {
@@ -53,47 +113,44 @@ describe("memory system store", () => {
         ],
       }),
       longTermMemory: [
-        {
+        longTermEntry({
           id: "ltm-1",
           category: "strategy",
           text: "The memory system should sit between raw context and prompt assembly.",
           strength: 0.9,
           evidence: ["strategy"],
-          sourceType: "system_inferred",
           confidence: 0.9,
-          importanceClass: "useful",
-          compressionState: "stable",
-          activeStatus: "active",
-          accessCount: 0,
-          contradictionCount: 0,
-          updatedAt: Date.now(),
-        },
+        }),
       ],
       pendingSignificance: [],
-      permanentMemory: {
-        id: "root",
-        label: "permanent-memory",
-        updatedAt: Date.now(),
-        evidence: [],
-        children: [
+      permanentMemory: permanentRoot([
           {
             id: "projects",
             label: "projects",
+            nodeType: "context",
+            relationToParent: "contains",
             updatedAt: Date.now(),
             evidence: [],
+            sourceMemoryIds: [],
+            confidence: 1,
+            activeStatus: "active",
             children: [
               {
                 id: "projects/current-bot",
                 label: "current-bot",
+                nodeType: "context",
+                relationToParent: "contains",
                 summary: "Permanent node tree is the highest-stability memory layer.",
                 updatedAt: Date.now(),
                 evidence: [],
+                sourceMemoryIds: [],
+                confidence: 0.9,
+                activeStatus: "active",
                 children: [],
               },
             ],
           },
-        ],
-      },
+        ]),
     });
 
     expect(packet).toContain("Integrated memory packet");
@@ -126,7 +183,7 @@ describe("memory system store", () => {
         }),
         longTermMemory: [],
         pendingSignificance: [
-          {
+          pendingEntry({
             id: "pending-1",
             category: "fact",
             text: "The memory compiler should review pending significance during each integration pass.",
@@ -134,22 +191,10 @@ describe("memory system store", () => {
             evidence: ["first observation"],
             sourceType: "user_stated",
             confidence: 0.82,
-            importanceClass: "temporary",
             compressionState: "active",
-            activeStatus: "pending",
-            accessCount: 0,
-            contradictionCount: 0,
-            updatedAt: Date.now(),
-            pendingReason: "needs recurrence or stronger confirmation before durable promotion",
-          },
+          }),
         ],
-        permanentMemory: {
-          id: "root",
-          label: "permanent-memory",
-          updatedAt: Date.now(),
-          evidence: [],
-          children: [],
-        },
+        permanentMemory: permanentRoot(),
       },
       messages: [
         userMessage(
@@ -176,7 +221,7 @@ describe("memory system store", () => {
           messages: [],
         }),
         longTermMemory: [
-          {
+          longTermEntry({
             id: "ltm-latent",
             category: "strategy",
             text: "Memory compaction should preserve unresolved loops and repo-state facts.",
@@ -184,22 +229,14 @@ describe("memory system store", () => {
             evidence: ["prior project lesson"],
             sourceType: "summary_derived",
             confidence: 0.76,
-            importanceClass: "useful",
             compressionState: "latent",
-            activeStatus: "active",
-            accessCount: 0,
-            contradictionCount: 0,
+            createdAt: oldTimestamp,
+            lastConfirmedAt: oldTimestamp,
             updatedAt: oldTimestamp,
-          },
+          }),
         ],
         pendingSignificance: [],
-        permanentMemory: {
-          id: "root",
-          label: "permanent-memory",
-          updatedAt: Date.now(),
-          evidence: [],
-          children: [],
-        },
+        permanentMemory: permanentRoot(),
       },
       messages: [
         userMessage("Compaction should preserve unresolved loops and repo state while we integrate memory."),
@@ -219,7 +256,7 @@ describe("memory system store", () => {
           messages: [userMessage("We need to implement the context engine and fix tests.")],
         }),
         longTermMemory: [
-          {
+          longTermEntry({
             id: "ltm-1",
             category: "decision",
             text: "Use memory-system as the default context engine.",
@@ -228,21 +265,10 @@ describe("memory system store", () => {
             sourceType: "user_stated",
             confidence: 0.95,
             importanceClass: "critical",
-            compressionState: "stable",
-            activeStatus: "active",
-            accessCount: 0,
-            contradictionCount: 0,
-            updatedAt: Date.now(),
-          },
+          }),
         ],
         pendingSignificance: [],
-        permanentMemory: {
-          id: "root",
-          label: "permanent-memory",
-          updatedAt: Date.now(),
-          evidence: [],
-          children: [],
-        },
+        permanentMemory: permanentRoot(),
       },
       { messages: [userMessage("Implement the context engine compiler and tests.")] },
     );
@@ -250,6 +276,39 @@ describe("memory system store", () => {
     expect(packet.taskMode).toBe("coding");
     expect(packet.accessedLongTermIds).toContain("ltm-1");
     expect(packet.text).toContain("Retrieval audit");
+  });
+
+  it("extracts generalized pattern memories and marks superseded memories", () => {
+    const compiled = compileMemoryState({
+      sessionId: "session-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "session-a",
+          messages: [],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-old",
+            category: "strategy",
+            text: "Use legacy compaction instructions for memory-system context assembly.",
+            updatedAt: Date.now() - 1000 * 60 * 60,
+          }),
+        ],
+        pendingSignificance: [],
+        permanentMemory: permanentRoot(),
+      },
+      messages: [
+        userMessage("Memory-system context assembly should preserve compaction instructions across active sessions."),
+        userMessage("Memory-system context assembly should preserve compaction summaries across active sessions."),
+        userMessage("Use memory-system context assembly instead of legacy compaction instructions because the legacy path is now obsolete."),
+      ],
+    });
+
+    expect(compiled.longTermMemory.some((entry) => entry.category === "pattern")).toBe(true);
+    expect(compiled.longTermMemory.find((entry) => entry.id === "ltm-old")?.activeStatus).toBe(
+      "superseded",
+    );
+    expect(compiled.compilerNotes.some((note) => note.includes("generalized pattern"))).toBe(true);
   });
 });
 

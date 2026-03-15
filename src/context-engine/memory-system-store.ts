@@ -21,7 +21,8 @@ export type MemoryCategory =
   | "decision"
   | "strategy"
   | "entity"
-  | "episode";
+  | "episode"
+  | "pattern";
 
 export type MemoryTaskMode =
   | "coding"
@@ -39,7 +40,31 @@ export type MemorySourceType =
 
 export type MemoryImportanceClass = "critical" | "useful" | "temporary" | "discardable";
 export type MemoryCompressionState = "active" | "stable" | "compressed" | "latent";
-export type MemoryActiveStatus = "active" | "pending" | "superseded";
+export type MemoryActiveStatus = "active" | "pending" | "stale" | "superseded" | "archived";
+export type MemoryTrend = "rising" | "stable" | "fading";
+export type PermanentNodeType =
+  | "root"
+  | "entity"
+  | "pattern"
+  | "rule"
+  | "lesson"
+  | "goal"
+  | "artifact"
+  | "task"
+  | "context";
+export type PermanentNodeRelation =
+  | "contains"
+  | "derived_from"
+  | "relevant_to"
+  | "superseded_by"
+  | "supports";
+
+export type MemoryProvenanceRecord = {
+  kind: "message" | "compaction" | "derived";
+  detail: string;
+  recordedAt: number;
+  derivedFromMemoryIds?: string[];
+};
 
 export type WorkingMemorySnapshot = {
   sessionId: string;
@@ -59,14 +84,22 @@ export type LongTermMemoryEntry = {
   text: string;
   strength: number;
   evidence: string[];
+  provenance: MemoryProvenanceRecord[];
   sourceType: MemorySourceType;
   confidence: number;
   importanceClass: MemoryImportanceClass;
   compressionState: MemoryCompressionState;
   activeStatus: MemoryActiveStatus;
+  trend: MemoryTrend;
   accessCount: number;
+  createdAt: number;
   lastAccessedAt?: number;
+  lastConfirmedAt?: number;
   contradictionCount: number;
+  relatedMemoryIds: string[];
+  supersededById?: string;
+  versionScope?: string;
+  installProfileScope?: string;
   updatedAt: number;
 };
 
@@ -77,8 +110,13 @@ export type PendingMemoryEntry = LongTermMemoryEntry & {
 export type PermanentMemoryNode = {
   id: string;
   label: string;
+  nodeType: PermanentNodeType;
+  relationToParent?: PermanentNodeRelation;
   summary?: string;
   evidence: string[];
+  sourceMemoryIds: string[];
+  confidence: number;
+  activeStatus: MemoryActiveStatus;
   updatedAt: number;
   children: PermanentMemoryNode[];
 };
@@ -171,10 +209,32 @@ function uniqueIds(ids: string[]): string[] {
   return [...new Set(ids.filter(Boolean))];
 }
 
+function mergeProvenance(
+  existing: MemoryProvenanceRecord[],
+  incoming: MemoryProvenanceRecord[],
+): MemoryProvenanceRecord[] {
+  const seen = new Set<string>();
+  const merged: MemoryProvenanceRecord[] = [];
+  for (const item of [...existing, ...incoming]) {
+    const key = `${item.kind}:${normalizeComparable(item.detail)}:${(item.derivedFromMemoryIds ?? []).join(",")}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push({
+      ...item,
+      derivedFromMemoryIds: uniqueIds(item.derivedFromMemoryIds ?? []),
+    });
+  }
+  return merged.slice(-MAX_WORKING_ITEMS);
+}
+
 function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
   return {
     ...entry,
     evidence: [...entry.evidence],
+    provenance: entry.provenance.map((item) => ({ ...item, derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])] })),
+    relatedMemoryIds: [...entry.relatedMemoryIds],
   };
 }
 
@@ -182,6 +242,21 @@ function clonePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
   return {
     ...entry,
     evidence: [...entry.evidence],
+    provenance: entry.provenance.map((item) => ({ ...item, derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])] })),
+    relatedMemoryIds: [...entry.relatedMemoryIds],
+  };
+}
+
+function createProvenanceRecord(
+  kind: MemoryProvenanceRecord["kind"],
+  detail: string,
+  derivedFromMemoryIds?: string[],
+): MemoryProvenanceRecord {
+  return {
+    kind,
+    detail: clipText(detail, 180),
+    recordedAt: Date.now(),
+    derivedFromMemoryIds: uniqueIds(derivedFromMemoryIds ?? []),
   };
 }
 
@@ -425,13 +500,18 @@ export function deriveLongTermMemoryCandidates(params: {
       text: normalized,
       strength: baseStrengthForCategory(category),
       evidence: [normalized],
+      provenance: [createProvenanceRecord("message", normalized)],
       sourceType: "user_stated",
       confidence: category === "decision" ? 0.95 : 0.78,
       importanceClass: detectImportanceClass(category, normalized),
       compressionState: "active",
       activeStatus: "active",
+      trend: "rising",
       accessCount: 0,
+      createdAt: Date.now(),
+      lastConfirmedAt: Date.now(),
       contradictionCount: 0,
+      relatedMemoryIds: [],
       updatedAt: Date.now(),
     };
 
@@ -454,13 +534,18 @@ export function deriveLongTermMemoryCandidates(params: {
       text: clipText(compactionSummary, 260),
       strength: 0.88,
       evidence: [clipText(compactionSummary, 180)],
+      provenance: [createProvenanceRecord("compaction", compactionSummary)],
       sourceType: "summary_derived",
       confidence: 0.84,
       importanceClass: "useful",
       compressionState: "compressed",
       activeStatus: "active",
+      trend: "stable",
       accessCount: 0,
+      createdAt: Date.now(),
+      lastConfirmedAt: Date.now(),
       contradictionCount: 0,
+      relatedMemoryIds: [],
       updatedAt: Date.now(),
     });
   }
@@ -493,6 +578,10 @@ export function mergeLongTermMemory(
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.03);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
     current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
+    current.provenance = mergeProvenance(current.provenance, item.provenance);
+    current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
+    current.lastConfirmedAt = Date.now();
+    current.trend = "rising";
     current.importanceClass =
       current.importanceClass === "critical" || item.importanceClass === "critical"
         ? "critical"
@@ -501,6 +590,10 @@ export function mergeLongTermMemory(
           : item.importanceClass;
     current.compressionState =
       item.compressionState === "compressed" ? item.compressionState : current.compressionState;
+    current.activeStatus =
+      current.activeStatus === "superseded" && item.activeStatus !== "superseded"
+        ? item.activeStatus
+        : current.activeStatus;
     if (baseStrengthForCategory(item.category) > baseStrengthForCategory(current.category)) {
       current.category = item.category;
     }
@@ -532,6 +625,9 @@ export function mergePendingSignificance(
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.02);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
     current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
+    current.provenance = mergeProvenance(current.provenance, item.provenance);
+    current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
+    current.lastConfirmedAt = Date.now();
   }
   return [...byText.values()]
     .sort((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
@@ -636,13 +732,20 @@ function refreshLongTermLifecycle(
     let activeStatus = entry.activeStatus;
     let strength = entry.strength;
     let confidence = entry.confidence;
+    let trend: MemoryTrend = entry.trend;
 
     if (age >= LATENT_AFTER_MS && entry.accessCount <= 1) {
       compressionState = "latent";
+      if (activeStatus === "active") {
+        activeStatus = "stale";
+      }
+      trend = "fading";
     } else if (age >= COMPRESS_AFTER_MS && entry.accessCount <= 2) {
       compressionState = "compressed";
+      trend = "fading";
     } else if (entry.accessCount > 0 || age < COMPRESS_AFTER_MS) {
       compressionState = "stable";
+      trend = "stable";
     }
 
     if (compressionState === "latent" && overlap >= 2) {
@@ -650,6 +753,7 @@ function refreshLongTermLifecycle(
       activeStatus = "active";
       strength = Math.min(1, strength + 0.05);
       confidence = Math.min(1, confidence + 0.03);
+      trend = "rising";
       reactivated.push(entry.text);
     }
 
@@ -663,6 +767,7 @@ function refreshLongTermLifecycle(
       activeStatus,
       strength,
       confidence,
+      trend,
     };
   });
 
@@ -677,25 +782,82 @@ function createPermanentRoot(): PermanentMemoryNode {
   return {
     id: "root",
     label: "permanent-memory",
+    nodeType: "root",
     updatedAt: now,
     evidence: [],
+    sourceMemoryIds: [],
+    confidence: 1,
+    activeStatus: "active",
     children: [
-      { id: "identity", label: "identity", updatedAt: now, evidence: [], children: [] },
-      { id: "projects", label: "projects", updatedAt: now, evidence: [], children: [] },
-      { id: "preferences", label: "preferences", updatedAt: now, evidence: [], children: [] },
+      {
+        id: "identity",
+        label: "identity",
+        nodeType: "entity",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
+      {
+        id: "projects",
+        label: "projects",
+        nodeType: "context",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
+      {
+        id: "preferences",
+        label: "preferences",
+        nodeType: "rule",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
       {
         id: "operating-rules",
         label: "operating-rules",
+        nodeType: "rule",
+        relationToParent: "contains",
         updatedAt: now,
         evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
         children: [],
       },
-      { id: "patterns", label: "patterns", updatedAt: now, evidence: [], children: [] },
+      {
+        id: "patterns",
+        label: "patterns",
+        nodeType: "pattern",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
     ],
   };
 }
 
-function ensureChildNode(parent: PermanentMemoryNode, label: string): PermanentMemoryNode {
+function ensureChildNode(
+  parent: PermanentMemoryNode,
+  label: string,
+  nodeType: PermanentNodeType = "context",
+): PermanentMemoryNode {
   const existing = parent.children.find((child) => child.label === label);
   if (existing) {
     return existing;
@@ -703,8 +865,13 @@ function ensureChildNode(parent: PermanentMemoryNode, label: string): PermanentM
   const next: PermanentMemoryNode = {
     id: `${parent.id}/${label}`,
     label,
+    nodeType,
+    relationToParent: "contains",
     updatedAt: Date.now(),
     evidence: [],
+    sourceMemoryIds: [],
+    confidence: 0.7,
+    activeStatus: "active",
     children: [],
   };
   parent.children.push(next);
@@ -731,6 +898,8 @@ function selectPermanentBranch(category: MemoryCategory): string[] {
       return ["projects", "current-bot", "decisions"];
     case "strategy":
       return ["patterns", "strategies"];
+    case "pattern":
+      return ["patterns", "generalized"];
     case "entity":
       return ["identity"];
     case "episode":
@@ -738,6 +907,135 @@ function selectPermanentBranch(category: MemoryCategory): string[] {
     default:
       return ["operating-rules"];
   }
+}
+
+function selectPermanentNodeType(category: MemoryCategory): PermanentNodeType {
+  switch (category) {
+    case "entity":
+      return "entity";
+    case "decision":
+    case "preference":
+      return "rule";
+    case "pattern":
+      return "pattern";
+    case "episode":
+      return "lesson";
+    case "strategy":
+      return "lesson";
+    default:
+      return "context";
+  }
+}
+
+function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemoryEntry[] {
+  const eligible = entries.filter(
+    (entry) =>
+      entry.activeStatus !== "superseded" &&
+      entry.category !== "pattern" &&
+      entry.category !== "entity" &&
+      entry.category !== "preference",
+  );
+  const groups = new Map<string, LongTermMemoryEntry[]>();
+
+  for (let i = 0; i < eligible.length; i += 1) {
+    for (let j = i + 1; j < eligible.length; j += 1) {
+      const a = eligible[i];
+      const b = eligible[j];
+      const shared = tokenize(a.text).filter((token) => tokenize(b.text).includes(token));
+      if (shared.length < 3) {
+        continue;
+      }
+      const key = shared.slice(0, 4).sort().join("-");
+      const bucket = groups.get(key) ?? [];
+      bucket.push(a, b);
+      groups.set(key, bucket);
+    }
+  }
+
+  const patterns: LongTermMemoryEntry[] = [];
+  for (const [key, group] of groups.entries()) {
+    const deduped = [...new Map(group.map((entry) => [entry.id, entry])).values()];
+    if (deduped.length < 2) {
+      continue;
+    }
+    const sharedTokens = key.split("-").filter(Boolean);
+    const summary = clipText(
+      `Pattern memory: repeated ${sharedTokens.join(" ")} signals across ${deduped.length} related memories.`,
+      220,
+    );
+    patterns.push({
+      id: `pattern-${Date.now().toString(36)}-${patterns.length.toString(36)}`,
+      category: "pattern",
+      text: summary,
+      strength: Math.min(
+        0.96,
+        deduped.reduce((max, entry) => Math.max(max, entry.strength), 0.78) + 0.04,
+      ),
+      evidence: dedupeTexts(deduped.flatMap((entry) => entry.evidence), MAX_WORKING_ITEMS),
+      provenance: [
+        createProvenanceRecord(
+          "derived",
+          summary,
+          deduped.map((entry) => entry.id),
+        ),
+      ],
+      sourceType: "system_inferred",
+      confidence:
+        Math.min(
+          0.95,
+          deduped.reduce((sum, entry) => sum + entry.confidence, 0) / deduped.length,
+        ) || 0.8,
+      importanceClass: "useful",
+      compressionState: "stable",
+      activeStatus: "active",
+      trend: "rising",
+      accessCount: 0,
+      createdAt: Date.now(),
+      lastConfirmedAt: Date.now(),
+      contradictionCount: 0,
+      relatedMemoryIds: deduped.map((entry) => entry.id),
+      updatedAt: Date.now(),
+    });
+  }
+
+  return patterns;
+}
+
+function applySupersession(entries: LongTermMemoryEntry[]): {
+  entries: LongTermMemoryEntry[];
+  supersededCount: number;
+} {
+  const next = entries.map(cloneLongTermEntry);
+  let supersededCount = 0;
+
+  for (let i = 0; i < next.length; i += 1) {
+    const newer = next[i];
+    if (!/\b(replaced|replace|no longer|obsolete|superseded|fixed permanently|instead of)\b/i.test(newer.text)) {
+      continue;
+    }
+    for (let j = 0; j < next.length; j += 1) {
+      if (i === j) {
+        continue;
+      }
+      const older = next[j];
+      if (older.updatedAt > newer.updatedAt || older.activeStatus === "superseded") {
+        continue;
+      }
+      if (computeOverlapScore(older.text, new Set(tokenize(newer.text))) < 3) {
+        continue;
+      }
+      older.activeStatus = "superseded";
+      older.supersededById = newer.id;
+      older.trend = "fading";
+      older.provenance = mergeProvenance(older.provenance, [
+        createProvenanceRecord("derived", `superseded by ${newer.text}`, [newer.id]),
+      ]);
+      older.relatedMemoryIds = uniqueIds([...older.relatedMemoryIds, newer.id]);
+      supersededCount += 1;
+    }
+  }
+
+  return { entries: next, supersededCount };
 }
 
 export function mergePermanentMemoryTree(
@@ -750,8 +1048,11 @@ export function mergePermanentMemoryTree(
   for (const candidate of candidates) {
     const branch = selectPermanentBranch(candidate.category);
     let cursor = nextRoot;
-    for (const segment of branch) {
-      cursor = ensureChildNode(cursor, segment);
+    for (let index = 0; index < branch.length; index += 1) {
+      const segment = branch[index];
+      const nodeType =
+        index === branch.length - 1 ? selectPermanentNodeType(candidate.category) : "context";
+      cursor = ensureChildNode(cursor, segment, nodeType);
     }
     const leafKey = normalizeComparable(candidate.text);
     const existing = cursor.children.find(
@@ -766,13 +1067,21 @@ export function mergePermanentMemoryTree(
         [...existing.evidence, ...candidate.evidence],
         MAX_WORKING_ITEMS,
       );
+      existing.sourceMemoryIds = uniqueIds([...existing.sourceMemoryIds, candidate.id]);
+      existing.confidence = Math.min(1, Math.max(existing.confidence, candidate.confidence));
+      existing.activeStatus = candidate.activeStatus;
       continue;
     }
     cursor.children.push({
       id: `${cursor.id}/${cursor.children.length + 1}`,
       label: clipText(candidate.text, 80),
+      nodeType: selectPermanentNodeType(candidate.category),
+      relationToParent: "derived_from",
       summary: candidate.text,
       evidence: dedupeTexts(candidate.evidence, MAX_WORKING_ITEMS),
+      sourceMemoryIds: [candidate.id],
+      confidence: candidate.confidence,
+      activeStatus: candidate.activeStatus,
       updatedAt: Date.now(),
       children: [],
     });
@@ -805,18 +1114,26 @@ export function compileMemoryState(params: {
     pending: mergedPending,
     messages: params.messages,
   });
+  const patternCandidates = buildPatternMemoryEntries([
+    ...(previous?.longTermMemory ?? []),
+    ...candidates.durable,
+    ...promotedPending.durable,
+  ]);
   const lifecycle = refreshLongTermLifecycle(
     mergeLongTermMemory(previous?.longTermMemory ?? [], [
       ...candidates.durable,
       ...promotedPending.durable,
+      ...patternCandidates,
     ]),
     params.messages,
   );
-  const nextLongTerm = lifecycle.entries;
+  const supersession = applySupersession(lifecycle.entries);
+  const nextLongTerm = supersession.entries;
   const nextPending = promotedPending.remaining;
   const nextPermanent = mergePermanentMemoryTree(previous?.permanentMemory, [
     ...candidates.durable,
     ...promotedPending.durable,
+    ...patternCandidates,
   ]);
 
   const compilerNotes: string[] = [];
@@ -829,8 +1146,14 @@ export function compileMemoryState(params: {
   if (promotedPending.durable.length > 0) {
     compilerNotes.push(`promoted ${promotedPending.durable.length} pending memories after recurrence`);
   }
+  if (patternCandidates.length > 0) {
+    compilerNotes.push(`extracted ${patternCandidates.length} generalized pattern memories`);
+  }
   if (lifecycle.reactivated.length > 0) {
     compilerNotes.push(`reactivated ${lifecycle.reactivated.length} latent or compressed memories`);
+  }
+  if (supersession.supersededCount > 0) {
+    compilerNotes.push(`marked ${supersession.supersededCount} memories as superseded`);
   }
   if (params.compactionSummary?.trim()) {
     compilerNotes.push("reconsolidated compaction summary");
@@ -1035,7 +1358,7 @@ export function retrieveMemoryContextPacket(
     .slice(0, MAX_PACKET_ITEMS)
     .map(
       (item) =>
-        `${item.id.slice(0, 8)} confidence=${item.confidence.toFixed(2)} source=${item.sourceType}`,
+        `${item.id.slice(0, 8)} confidence=${item.confidence.toFixed(2)} source=${item.sourceType} status=${item.activeStatus} provenance=${item.provenance.length}`,
     );
   if (confidenceNotes.length > 0) {
     sections.push(`Confidence notes:\n- ${confidenceNotes.join("\n- ")}`);
@@ -1086,9 +1409,54 @@ export function touchRetrievedMemories(
           ...entry,
           accessCount: entry.accessCount + 1,
           lastAccessedAt: now,
+          trend: entry.compressionState === "latent" ? "rising" : entry.trend,
         }
       : entry,
   );
+}
+
+function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
+  return {
+    ...entry,
+    evidence: [...(entry.evidence ?? [])],
+    provenance: (entry.provenance ?? []).map((item) => ({
+      ...item,
+      derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])],
+    })),
+    sourceType: entry.sourceType ?? "system_inferred",
+    confidence: entry.confidence ?? 0.7,
+    importanceClass: entry.importanceClass ?? "useful",
+    compressionState: entry.compressionState ?? "stable",
+    activeStatus: entry.activeStatus ?? "active",
+    trend: entry.trend ?? "stable",
+    accessCount: entry.accessCount ?? 0,
+    createdAt: entry.createdAt ?? entry.updatedAt ?? Date.now(),
+    lastConfirmedAt: entry.lastConfirmedAt ?? entry.updatedAt ?? Date.now(),
+    contradictionCount: entry.contradictionCount ?? 0,
+    relatedMemoryIds: [...(entry.relatedMemoryIds ?? [])],
+    updatedAt: entry.updatedAt ?? Date.now(),
+  };
+}
+
+function sanitizePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
+  return {
+    ...(sanitizeLongTermEntry(entry) as PendingMemoryEntry),
+    pendingReason: entry.pendingReason ?? "needs recurrence or stronger confirmation before durable promotion",
+  };
+}
+
+function sanitizePermanentNode(node: PermanentMemoryNode): PermanentMemoryNode {
+  return {
+    ...node,
+    nodeType: node.nodeType ?? "context",
+    relationToParent: node.relationToParent,
+    evidence: [...(node.evidence ?? [])],
+    sourceMemoryIds: [...(node.sourceMemoryIds ?? [])],
+    confidence: node.confidence ?? 0.7,
+    activeStatus: node.activeStatus ?? "active",
+    updatedAt: node.updatedAt ?? Date.now(),
+    children: (node.children ?? []).map((child) => sanitizePermanentNode(child)),
+  };
 }
 
 export async function loadMemoryStoreSnapshot(params: {
@@ -1107,16 +1475,20 @@ export async function loadMemoryStoreSnapshot(params: {
     recentEvents: [],
     recentDecisions: [],
   });
-  const longTermMemory = await readJsonFile<LongTermMemoryEntry[]>(paths.longTermFile, []);
+  const longTermMemory = (await readJsonFile<LongTermMemoryEntry[]>(paths.longTermFile, [])).map(
+    (entry) => sanitizeLongTermEntry(entry),
+  );
   const pendingSignificance = await readJsonFile<PendingMemoryEntry[]>(paths.pendingFile, []);
-  const permanentMemory = await readJsonFile<PermanentMemoryNode>(
+  const permanentMemory = sanitizePermanentNode(
+    await readJsonFile<PermanentMemoryNode>(
     paths.permanentTreeFile,
     createPermanentRoot(),
+    ),
   );
   return {
     workingMemory,
     longTermMemory,
-    pendingSignificance,
+    pendingSignificance: pendingSignificance.map((entry) => sanitizePendingEntry(entry)),
     permanentMemory,
   };
 }

@@ -217,6 +217,7 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
+    "agentic:diagnostics": "node --import tsx scripts/agentic-diagnostics-report.ts",
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",

@@ -4,6 +4,7 @@ import {
   buildAgenticExecutionState,
   buildAgenticSystemPromptAddition,
   buildProceduralExecutionRecord,
+  inspectAgenticExecutionObservability,
 } from "./agentic-state.js";
 
 function msg(role: "user" | "assistant" | "toolResult", content: string): AgentMessage {
@@ -315,6 +316,30 @@ describe("agentic-state", () => {
     expect(state.governanceState.autonomyMode).toBe("escalate");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Capability gaps: no_viable_fallback",
+    );
+  });
+
+  it("builds an agentic observability report for escalation-prone states", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the diagnostics workflow and find a viable fallback.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    const report = inspectAgenticExecutionObservability(state);
+    expect(report.summary).toContain("retry=escalate");
+    expect(report.summary).toContain("fallback=missing");
+    expect(report.escalationRequired).toBe(true);
+    expect(report.hasViableFallback).toBe(false);
+    expect(report.recommendations).toContain(
+      "Add or learn a viable fallback workflow before retrying.",
     );
   });
 

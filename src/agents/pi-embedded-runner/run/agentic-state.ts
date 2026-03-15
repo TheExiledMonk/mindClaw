@@ -165,6 +165,21 @@ export type ProceduralExecutionRecord = {
   nextImprovement?: string;
 };
 
+export type AgenticExecutionObservabilityReport = {
+  summary: string;
+  retryClass: AgenticRetryClass;
+  autonomyMode: AgenticAutonomyMode;
+  riskLevel: AgenticRiskLevel;
+  primarySkill?: string;
+  suggestedSkill?: string;
+  rankedSkills: string[];
+  capabilityGaps: string[];
+  failurePattern: AgenticFailureLearningState["failurePattern"];
+  hasViableFallback: boolean;
+  escalationRequired: boolean;
+  recommendations: string[];
+};
+
 type ToolSignal = {
   toolName: string;
   status: "success" | "error";
@@ -1396,5 +1411,55 @@ export function buildProceduralExecutionRecord(params: {
     learnFromFailure: params.failureLearningState.learnFromFailure,
     failureReasons: params.failureLearningState.failureReasons,
     nextImprovement,
+  };
+}
+
+export function inspectAgenticExecutionObservability(
+  state: AgenticExecutionState,
+): AgenticExecutionObservabilityReport {
+  const recommendations = uniqueCompact(
+    [
+      state.plannerState.shouldEscalate
+        ? `Escalate: ${state.plannerState.escalationReason ?? "unknown"}`
+        : undefined,
+      state.plannerState.retryClass === "skill_fallback" && state.plannerState.suggestedSkill
+        ? `Retry with fallback skill: ${state.plannerState.suggestedSkill}`
+        : undefined,
+      !state.orchestrationState.hasViableFallback
+        ? "Add or learn a viable fallback workflow before retrying."
+        : undefined,
+      state.orchestrationState.capabilityGaps.length > 0
+        ? `Address capability gaps: ${state.orchestrationState.capabilityGaps.join(", ")}`
+        : undefined,
+      state.failureLearningState.learnFromFailure
+        ? `Retain this failure pattern for learning: ${state.failureLearningState.failurePattern}`
+        : undefined,
+    ],
+    6,
+  );
+  const summary = [
+    `retry=${state.plannerState.retryClass}`,
+    `autonomy=${state.governanceState.autonomyMode}`,
+    `risk=${state.governanceState.riskLevel}`,
+    state.orchestrationState.primarySkill ? `primary=${state.orchestrationState.primarySkill}` : "",
+    state.plannerState.suggestedSkill ? `suggested=${state.plannerState.suggestedSkill}` : "",
+    `failure=${state.failureLearningState.failurePattern}`,
+    state.orchestrationState.hasViableFallback ? "fallback=viable" : "fallback=missing",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return {
+    summary,
+    retryClass: state.plannerState.retryClass,
+    autonomyMode: state.governanceState.autonomyMode,
+    riskLevel: state.governanceState.riskLevel,
+    primarySkill: state.orchestrationState.primarySkill,
+    suggestedSkill: state.plannerState.suggestedSkill,
+    rankedSkills: state.orchestrationState.rankedSkills,
+    capabilityGaps: state.orchestrationState.capabilityGaps,
+    failurePattern: state.failureLearningState.failurePattern,
+    hasViableFallback: state.orchestrationState.hasViableFallback,
+    escalationRequired: state.plannerState.shouldEscalate,
+    recommendations,
   };
 }

@@ -1205,6 +1205,68 @@ describe("agentic-state", () => {
     );
   });
 
+  it("preserves clarification blocker subtypes in failure learning and procedural records", () => {
+    const envVarState = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Run the deployment smoke test after the required environment variable is available.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+      availableSkills: ["deployment-smoke"],
+      likelySkills: ["deployment-smoke"],
+    });
+    const approvalState = buildAgenticExecutionState({
+      messages: [msg("user", "Deploy the production hotfix once the release approval is granted.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Approval required: production deployment",
+        },
+      ],
+      availableSkills: ["production-hotfix"],
+      likelySkills: ["production-hotfix"],
+    });
+
+    expect(envVarState.failureLearningState.failureReasons).toContain(
+      "missing_information:environment_variable",
+    );
+    expect(approvalState.failureLearningState.failureReasons).toContain(
+      "missing_information:approval",
+    );
+
+    const envVarRecord = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "deployment-smoke", primaryEnv: "node" }],
+      },
+      taskState: envVarState.taskState,
+      verificationState: envVarState.verificationState,
+      plannerState: envVarState.plannerState,
+      governanceState: envVarState.governanceState,
+      orchestrationState: envVarState.orchestrationState,
+      environmentState: envVarState.environmentState,
+      failureLearningState: envVarState.failureLearningState,
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+      diffSignals: [],
+    });
+    expect(envVarRecord.failureReasons).toContain("missing_information:environment_variable");
+  });
+
   it("prefers fallback over clarification for non-blocking missing-information failures", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Repair the release notes generation flow and keep moving.")],

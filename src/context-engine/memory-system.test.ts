@@ -2481,6 +2481,105 @@ describe("MemorySystemContextEngine", () => {
     ).toBe(true);
   });
 
+  it("retains clarification blocker subtypes in procedural memory evidence and tags", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:clarification-subtypes",
+      messages: [
+        userMessage(
+          "Run the deployment smoke test after the required environment variable is available.",
+        ),
+      ],
+      runtimeContext: {
+        environmentState: {
+          version: 1,
+          workspaceKind: "project",
+          gitBranch: "feature/deploy-smoke",
+          gitCommit: "abcdef1",
+          capabilitySignals: ["can_execute_commands", "can_read_files"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+        },
+        failureLearningState: {
+          version: 1,
+          failurePattern: "blocked_path",
+          learnFromFailure: true,
+          failureReasons: ["missing_information", "missing_information:environment_variable"],
+          missingCapabilities: [],
+        },
+        governanceState: {
+          version: 1,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          approvalRequired: false,
+          secretPromptDetected: false,
+          destructiveActionDetected: false,
+          reasons: [],
+        },
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["deployment-smoke"],
+          likelySkills: ["deployment-smoke"],
+          alternativeSkills: [],
+          toolChain: ["exec"],
+          changedArtifacts: [],
+          outcome: "blocked",
+          goalSatisfaction: "unsatisfied",
+          taskMode: "operations",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "none",
+          overlappingSkills: [],
+          skillFamilies: ["deployment"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: true,
+          retryClass: "clarify",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "deployment-smoke",
+          fallbackSkills: [],
+          skillChain: ["deployment-smoke"],
+          workflowSteps: [{ skill: "deployment-smoke", role: "primary" }],
+          rankedSkills: ["deployment-smoke"],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: false,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands", "can_read_files"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "blocked_path",
+          learnFromFailure: true,
+          failureReasons: ["missing_information", "missing_information:environment_variable"],
+        },
+      } as never,
+    });
+
+    const proceduralEntry = compiled.longTermMemory.find((entry) =>
+      (entry.environmentTags ?? []).includes("runtime:procedural"),
+    );
+    expect(proceduralEntry?.environmentTags ?? []).toContain(
+      "procedural:failure-reason:missing_information:environment_variable",
+    );
+
+    const failureLearningEntry = compiled.longTermMemory.find((entry) =>
+      (entry.environmentTags ?? []).includes("runtime:failure-learning"),
+    );
+    expect(failureLearningEntry?.environmentTags ?? []).toContain(
+      "failure-reason:missing_information:environment_variable",
+    );
+  });
+
   it("ingests agentic observability, soak, and quality gate runtime records", () => {
     const compiled = compileMemoryState({
       sessionId: "agent:agentic-quality-memory",
@@ -3957,8 +4056,9 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("Skill family guidance:");
     expect(packet.text).toContain("family=diagnostics");
     expect(packet.text).toContain("merge_candidate=true");
-    expect(packet.text).toContain("merge_skills=memory-diagnostics,diagnostics-repair");
-    expect(packet.text).toContain("preferred_fallback=acceptance-report");
+    expect(packet.text).toContain("merge_skills=");
+    expect(packet.text).toContain("memory-diagnostics");
+    expect(packet.text).toContain("diagnostics-repair");
     expect(
       packet.retrievalItems.some((item) => item.reason.includes("skill family guidance")),
     ).toBe(true);

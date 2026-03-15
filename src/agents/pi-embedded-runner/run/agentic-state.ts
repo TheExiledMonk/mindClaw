@@ -2267,6 +2267,39 @@ function normalizeClarificationNeed(blocker: string): string {
     .trim();
 }
 
+function extractClarificationFailureReasons(blockers: string[]): string[] {
+  const reasons: string[] = [];
+  for (const blocker of blockers) {
+    const normalized = blocker.toLowerCase();
+    if (
+      /\b(?:environment variable|env var|env)\b/.test(normalized) &&
+      /\bmissing|required|needs?\b/.test(normalized)
+    ) {
+      reasons.push("missing_information:environment_variable");
+      continue;
+    }
+    if (
+      /\bapproval required|requires approval|awaiting approval|needs approval\b/.test(normalized)
+    ) {
+      reasons.push("missing_information:approval");
+      continue;
+    }
+    if (
+      /\bexternal input|customer input|user input|request payload|dataset id|api contract|credentials?\b/.test(
+        normalized,
+      ) &&
+      /\bmissing|required|awaiting|needs?\b/.test(normalized)
+    ) {
+      reasons.push("missing_information:external_input");
+      continue;
+    }
+    if (/\bmissing|not found|unknown file|no such file|required|needs\b/.test(normalized)) {
+      reasons.push("missing_information:file_or_input");
+    }
+  }
+  return uniqueCompact(reasons, 4);
+}
+
 function extractClarificationSummary(state: AgenticExecutionState): string | undefined {
   if (state.plannerState.retryClass !== "clarify") {
     return undefined;
@@ -2375,6 +2408,7 @@ function buildFailureLearningState(params: {
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
   orchestrationState: AgenticOrchestrationState;
+  blockers: string[];
 }): AgenticFailureLearningState {
   const failurePattern: AgenticFailureLearningState["failurePattern"] =
     params.verificationState.outcome === "verified"
@@ -2386,8 +2420,12 @@ function buildFailureLearningState(params: {
           ? "blocked_path"
           : "hard_failure";
   const failureReasons = uniqueCompact(
-    [...params.verificationState.failureClasses, params.plannerState.escalationReason],
-    6,
+    [
+      ...params.verificationState.failureClasses,
+      ...extractClarificationFailureReasons(params.blockers),
+      params.plannerState.escalationReason,
+    ],
+    8,
   );
   return {
     version: 1,
@@ -2675,6 +2713,7 @@ export function buildAgenticExecutionState(params: {
     verificationState,
     plannerState,
     orchestrationState,
+    blockers,
   });
   const orchestrationReconciledPlannerState = reconcilePlannerStateWithOrchestration({
     plannerState,

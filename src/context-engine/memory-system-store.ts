@@ -186,6 +186,8 @@ export type MemoryReviewResult = {
   archivedMemoryIds: string[];
   staleMemoryIds: string[];
   reviewedPendingIds: string[];
+  contradictoryMemoryIds: string[];
+  supersededMemoryIds: string[];
 };
 
 export type MemoryRetrievalItem = {
@@ -1369,12 +1371,24 @@ function reviewMemoryState(params: {
   const reviewedPendingIds = params.pendingSignificance
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const contradictoryMemoryIds = params.longTermMemory
+    .filter((entry) => entry.contradictionCount > 0)
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
+  const supersededMemoryIds = params.longTermMemory
+    .filter((entry) => entry.activeStatus === "superseded")
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
   const carryForwardSummary = clipText(
     [
       params.workingMemory.rollingSummary,
       params.workingMemory.activeGoals[0] ? `Top goal: ${params.workingMemory.activeGoals[0]}` : "",
       params.workingMemory.openLoops[0] ? `Open loop: ${params.workingMemory.openLoops[0]}` : "",
       params.pendingSignificance[0] ? `Pending review: ${params.pendingSignificance[0].text}` : "",
+      contradictoryMemoryIds[0]
+        ? `Contradictions need resolution: ${contradictoryMemoryIds.length}`
+        : "",
+      supersededMemoryIds[0] ? `Superseded memories to retire: ${supersededMemoryIds.length}` : "",
     ]
       .filter(Boolean)
       .join(" | "),
@@ -1386,6 +1400,8 @@ function reviewMemoryState(params: {
     archivedMemoryIds,
     staleMemoryIds,
     reviewedPendingIds,
+    contradictoryMemoryIds,
+    supersededMemoryIds,
   };
 }
 
@@ -1546,15 +1562,29 @@ export function mergePermanentMemoryTree(
       existing.sourceMemoryIds = uniqueIds([...existing.sourceMemoryIds, candidate.id]);
       existing.confidence = Math.min(1, Math.max(existing.confidence, candidate.confidence));
       existing.activeStatus = candidate.activeStatus;
+      if (candidate.activeStatus === "superseded" && candidate.supersededById) {
+        existing.relationToParent = "superseded_by";
+      }
       continue;
     }
     cursor.children.push({
       id: `${cursor.id}/${cursor.children.length + 1}`,
       label: clipText(candidate.text, 80),
       nodeType: selectPermanentNodeType(candidate.category),
-      relationToParent: "derived_from",
+      relationToParent: candidate.activeStatus === "superseded" ? "superseded_by" : "derived_from",
       summary: candidate.text,
-      evidence: dedupeTexts(candidate.evidence, MAX_WORKING_ITEMS),
+      evidence: dedupeTexts(
+        [
+          ...candidate.evidence,
+          candidate.supersededById
+            ? `Superseded by durable memory ${candidate.supersededById}.`
+            : "",
+          candidate.contradictionCount > 0
+            ? `Contradicted durable memory count: ${candidate.contradictionCount}.`
+            : "",
+        ].filter(Boolean),
+        MAX_WORKING_ITEMS,
+      ),
       sourceMemoryIds: [candidate.id],
       confidence: candidate.confidence,
       activeStatus: candidate.activeStatus,
@@ -1614,6 +1644,9 @@ export function mergePermanentMemoryTree(
         facetNode.sourceMemoryIds = uniqueIds([...facetNode.sourceMemoryIds, candidate.id]);
         facetNode.confidence = Math.min(1, Math.max(facetNode.confidence, candidate.confidence));
         facetNode.activeStatus = candidate.activeStatus;
+        if (candidate.activeStatus === "superseded") {
+          facetNode.relationToParent = "superseded_by";
+        }
         facetNode.updatedAt = Date.now();
 
         const facetLeafKey = normalizeComparable(candidate.text);
@@ -1635,6 +1668,9 @@ export function mergePermanentMemoryTree(
             Math.max(existingFacetLeaf.confidence, candidate.confidence),
           );
           existingFacetLeaf.activeStatus = candidate.activeStatus;
+          if (candidate.activeStatus === "superseded") {
+            existingFacetLeaf.relationToParent = "superseded_by";
+          }
           existingFacetLeaf.updatedAt = Date.now();
           continue;
         }
@@ -1642,9 +1678,21 @@ export function mergePermanentMemoryTree(
           id: `${facetNode.id}/${facetNode.children.length + 1}`,
           label: clipText(candidate.text, 80),
           nodeType: selectPermanentNodeType(candidate.category),
-          relationToParent: facet.relationToParent,
+          relationToParent:
+            candidate.activeStatus === "superseded" ? "superseded_by" : facet.relationToParent,
           summary: candidate.text,
-          evidence: dedupeTexts(candidate.evidence, MAX_WORKING_ITEMS),
+          evidence: dedupeTexts(
+            [
+              ...candidate.evidence,
+              candidate.supersededById
+                ? `Superseded by durable memory ${candidate.supersededById}.`
+                : "",
+              candidate.contradictionCount > 0
+                ? `Contradicted durable memory count: ${candidate.contradictionCount}.`
+                : "",
+            ].filter(Boolean),
+            MAX_WORKING_ITEMS,
+          ),
           sourceMemoryIds: [candidate.id],
           confidence: candidate.confidence,
           activeStatus: candidate.activeStatus,
@@ -1715,11 +1763,20 @@ export function compileMemoryState(params: {
     ...nextWorkingMemory,
     carryForwardSummary: review.carryForwardSummary,
   };
-  const nextPermanent = mergePermanentMemoryTree(previous?.permanentMemory, [
-    ...candidates.durable,
-    ...promotedPending.durable,
-    ...patternCandidates,
-  ]);
+  const durableCandidateIds = new Set(
+    [...candidates.durable, ...promotedPending.durable, ...patternCandidates].map(
+      (entry) => entry.id,
+    ),
+  );
+  const previousById = new Map((previous?.longTermMemory ?? []).map((entry) => [entry.id, entry]));
+  const nextPermanent = mergePermanentMemoryTree(
+    previous?.permanentMemory,
+    nextLongTerm.filter(
+      (entry) =>
+        durableCandidateIds.has(entry.id) ||
+        didDurableStateChange(previousById.get(entry.id), entry),
+    ),
+  );
   const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
 
   const compilerNotes: string[] = [];
@@ -1751,6 +1808,14 @@ export function compileMemoryState(params: {
   }
   if (review.carryForwardSummary) {
     compilerNotes.push("prepared next-session carry-forward summary");
+  }
+  if (review.contradictoryMemoryIds.length > 0) {
+    compilerNotes.push(
+      `review flagged ${review.contradictoryMemoryIds.length} contradictory memories`,
+    );
+  }
+  if (review.supersededMemoryIds.length > 0) {
+    compilerNotes.push(`review flagged ${review.supersededMemoryIds.length} superseded memories`);
   }
 
   return {
@@ -1844,6 +1909,23 @@ function includeMemoryForContext(entry: LongTermMemoryEntry, taskMode: MemoryTas
     );
   }
   return true;
+}
+
+function didDurableStateChange(
+  previous: LongTermMemoryEntry | undefined,
+  next: LongTermMemoryEntry,
+): boolean {
+  if (!previous) {
+    return true;
+  }
+  return (
+    previous.activeStatus !== next.activeStatus ||
+    previous.compressionState !== next.compressionState ||
+    previous.contradictionCount !== next.contradictionCount ||
+    previous.supersededById !== next.supersededById ||
+    previous.confidence !== next.confidence ||
+    previous.strength !== next.strength
+  );
 }
 
 function rankLongTermEntries(
@@ -2611,6 +2693,9 @@ export function runMemorySleepReview(params: {
       review.archivedMemoryIds.length > 0
         ? `sleep review archived ${review.archivedMemoryIds.length} memories`
         : "sleep review found no archival candidates",
+      review.contradictoryMemoryIds.length > 0
+        ? `sleep review flagged ${review.contradictoryMemoryIds.length} contradictory memories`
+        : "sleep review found no contradictory memories",
     ],
     review,
   };

@@ -1180,6 +1180,48 @@ describe("memory system store", () => {
     ).toBe(true);
   });
 
+  it("propagates superseded status into permanent memory leaves", () => {
+    const compiled = compileMemoryState({
+      sessionId: "permanent-state-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "permanent-state-a",
+          messages: [],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-permanent-old",
+            category: "strategy",
+            text: "Use the old memory-system workaround in src/context-engine/memory-system.ts.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            updatedAt: Date.now() - 1000 * 60 * 60,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the old workaround.",
+        ),
+      ],
+    });
+
+    const strategies = compiled.permanentMemory.children
+      .find((child) => child.label === "patterns")
+      ?.children.find((child) => child.label === "strategies");
+    const oldLeaf = strategies?.children.find((child) =>
+      child.summary?.includes("old memory-system workaround"),
+    );
+
+    expect(oldLeaf?.activeStatus).toBe("superseded");
+    expect(oldLeaf?.relationToParent).toBe("superseded_by");
+    expect(oldLeaf?.evidence.some((item) => item.includes("Superseded by durable memory"))).toBe(
+      true,
+    );
+  });
+
   it("extracts generalized pattern memories and marks superseded memories", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",
@@ -1218,6 +1260,8 @@ describe("memory system store", () => {
       "superseded",
     );
     expect(compiled.compilerNotes.some((note) => note.includes("generalized pattern"))).toBe(true);
+    expect(compiled.review.supersededMemoryIds).toContain("ltm-old");
+    expect(compiled.compilerNotes.some((note) => note.includes("review flagged"))).toBe(true);
     expect(
       compiled.longTermMemory
         .find((entry) => entry.id === "ltm-old")
@@ -1258,6 +1302,46 @@ describe("memory system store", () => {
       reviewed.longTermMemory.find((entry) => entry.id === "ltm-archivable")?.activeStatus,
     ).toBe("archived");
     expect(reviewed.review.archivedMemoryIds).toContain("ltm-archivable");
+    expect(reviewed.review.contradictoryMemoryIds).toEqual([]);
+  });
+
+  it("records contradiction and supersession pressure during review", () => {
+    const compiled = compileMemoryState({
+      sessionId: "review-pressure-a",
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "review-pressure-a",
+          messages: [],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-replace-old",
+            category: "decision",
+            text: "Use the old memory-system workaround for src/context-engine/memory-system.ts.",
+            updatedAt: Date.now() - 1000 * 60 * 60,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the old workaround.",
+        ),
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts and never drop carry-forward output.",
+        ),
+        userMessage(
+          "Do not use the permanent memory-system path in src/context-engine/memory-system.ts when debugging old transcripts.",
+        ),
+      ],
+    });
+
+    expect(compiled.review.supersededMemoryIds).toContain("ltm-replace-old");
+    expect(compiled.review.contradictoryMemoryIds.length).toBeGreaterThan(0);
+    expect(compiled.workingMemory.carryForwardSummary).toContain("Contradictions need resolution");
+    expect(compiled.workingMemory.carryForwardSummary).toContain("Superseded memories to retire");
   });
 });
 

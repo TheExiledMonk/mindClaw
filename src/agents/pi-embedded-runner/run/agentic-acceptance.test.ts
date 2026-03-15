@@ -104,8 +104,15 @@ describe("agentic acceptance suite", () => {
   it("formats the acceptance report in summary and markdown forms", () => {
     const report = runAgenticAcceptanceSuite();
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain("agentic acceptance");
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "clarification_trend_policy_alignment",
+    );
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain("warning_policy=observe");
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain("blocking_policy=blocking");
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "# Agentic Acceptance Report",
     );
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain("warning_policy=observe");
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain("blocking_policy=blocking");
   });
 });

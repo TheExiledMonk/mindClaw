@@ -5680,7 +5680,7 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
       summary: passed
         ? "Release-facing quality policy can keep rising clarification trends warning-only by default and make them release-blocking when trend gating is enabled."
         : "Rising clarification trend policy did not stay aligned between warning-only and release-blocking quality modes.",
-      details: `warning=${warningReport.failReasons.join("|") || "none"} blocking=${blockingReport.failReasons.join("|") || "none"} recommendations=${blockingReport.recommendations.join("|")}`,
+      details: `warning_policy=${warningReport.clarificationTrendPolicy} warning=${warningReport.failReasons.join("|") || "none"} blocking_policy=${blockingReport.clarificationTrendPolicy} blocking=${blockingReport.failReasons.join("|") || "none"} recommendations=${blockingReport.recommendations.join("|")}`,
     });
   }
 
@@ -5819,7 +5819,8 @@ export function formatAgenticAcceptanceReport(
     const lines = [
       report.summary,
       ...report.scenarios.map(
-        (scenario) => `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary}`,
+        (scenario) =>
+          `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary}${scenario.details ? ` details=${scenario.details}` : ""}`,
       ),
     ];
     return `${lines.join("\n")}\n`;

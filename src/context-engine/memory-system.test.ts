@@ -11,6 +11,7 @@ import {
   deriveLongTermMemoryCandidates,
   exportMemoryStoreBundle,
   importMemoryStoreBundle,
+  inspectMemoryStoreHealth,
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
   persistMemoryStoreSnapshot,
@@ -2188,6 +2189,41 @@ describe("MemorySystemContextEngine", () => {
     expect(repaired.longTermMemory[0]?.semanticKey).toBeTruthy();
     expect(repaired.longTermMemory[0]?.conceptKey).toBeTruthy();
     expect(repaired.longTermMemory[0]?.canonicalText).toBeTruthy();
+  });
+
+  it("reports memory store health with contested and stale backlog signals", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-health-"));
+    const sessionId = "agent:health";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+        userMessage(
+          "Do not use the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const health = await inspectMemoryStoreHealth({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+
+    expect(health.summary).toContain("backend=sqlite-graph");
+    expect(health.contestedConceptCount).toBeGreaterThan(0);
+    expect(Array.isArray(health.issues)).toBe(true);
   });
 
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {

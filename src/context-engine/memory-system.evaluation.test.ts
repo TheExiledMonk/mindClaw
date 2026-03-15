@@ -66,6 +66,29 @@ describe("memory system evaluation scenarios", () => {
     expect(durable?.canonicalText).toContain("memory-system");
   });
 
+  it("converges stronger paraphrases with passive phrasing onto one concept identity", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-stronger-paraphrase",
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-stronger-paraphrase",
+      previous: first,
+      messages: [
+        userMessage(
+          "The permanent path for the memory system in src/context-engine/memory-system.ts is required and should be used.",
+        ),
+      ],
+    });
+
+    const merged = second.longTermMemory.find((entry) => entry.id === first.longTermMemory[0]?.id);
+    expect(merged).toBeTruthy();
+    expect(merged?.conceptAliases.length).toBeGreaterThan(1);
+    expect(merged?.lastRevisionKind).toMatch(/reasserted|updated|narrowed/);
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",
@@ -196,6 +219,37 @@ describe("memory system evaluation scenarios", () => {
     );
     expect(contested.length).toBeGreaterThan(0);
     expect(contested.some((entry) => entry.text.includes("Do not use"))).toBe(true);
+  });
+
+  it("exposes adjudication score and gap in retrieval rationale for contested concepts", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-adjudication-rationale",
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-adjudication-rationale",
+      previous: first,
+      messages: [
+        userMessage(
+          "Do not use the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+    const packet = retrieveMemoryContextPacket(second, {
+      messages: [
+        userMessage(
+          "What should we do with the permanent memory-system path in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.includes("adjudication=") && item.reason.includes("score="),
+      ),
+    ).toBe(true);
   });
 
   it("surfaces superseded but still relevant memories as downgraded during planning", () => {

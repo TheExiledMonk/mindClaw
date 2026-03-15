@@ -228,6 +228,18 @@ export type MemoryStoreExportBundle = {
   snapshot: MemoryStoreSnapshot;
 };
 
+export type MemoryStoreHealthReport = {
+  backendKind: MemoryStoreBackendKind;
+  sessionId: string;
+  metadata: MemoryStoreMetadata;
+  issues: string[];
+  summary: string;
+  contestedConceptCount: number;
+  supersededMemoryCount: number;
+  permanentEligibleCount: number;
+  staleMemoryCount: number;
+};
+
 export type MemoryCompileResult = MemoryStoreSnapshot & {
   compilerNotes: string[];
   review: MemoryReviewResult;
@@ -645,23 +657,55 @@ function singularizeToken(token: string): string {
   return token;
 }
 
+const CANONICAL_PHRASE_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\bmemory system\b/g, "memory-system"],
+  [/\bmemory system path\b/g, "memory-system-path"],
+  [/\bpath for memory-system integration\b/g, "memory-system-path"],
+  [/\bpermanent path\b/g, "permanent memory-system-path"],
+  [/\bcarry forward\b/g, "carry-forward"],
+  [/\blong term\b/g, "long-term"],
+  [/\bnode tree\b/g, "node-tree"],
+  [/\bold workaround\b/g, "legacy-workaround"],
+  [/\bshould be used\b/g, "use"],
+  [/\bbe used\b/g, "use"],
+  [/\bneeds to use\b/g, "use"],
+  [/\bhas to use\b/g, "use"],
+  [/\bmust use\b/g, "use"],
+  [/\bshould use\b/g, "use"],
+  [/\bis required\b/g, "required"],
+  [/\bdo not use\b/g, "avoid use"],
+  [/\bmust not use\b/g, "avoid use"],
+  [/\bshould not use\b/g, "avoid use"],
+  [/\bno longer use\b/g, "stop using"],
+  [/\bshould continue from\b/g, "continue"],
+  [/\bcontinue from\b/g, "continue"],
+  [/\bused for\b/g, "use"],
+  [/\busing\b/g, "use"],
+  [/\bcompleted\b/g, "complete"],
+  [/\bfinished\b/g, "complete"],
+  [/\bresolved\b/g, "resolve"],
+  [/\bfixed\b/g, "fix"],
+];
+
+function normalizeConceptPhraseText(text: string): string {
+  let normalized = normalizeComparable(text);
+  for (const [pattern, replacement] of CANONICAL_PHRASE_REPLACEMENTS) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized;
+}
+
+function buildCanonicalTokenSignature(text: string): string[] {
+  return uniqueStrings(
+    normalizeConceptPhraseText(text)
+      .split(/\s+/)
+      .map((token) => singularizeToken(token))
+      .filter((token) => token && !CANONICAL_STOP_WORDS.has(token) && token.length >= 3),
+  ).toSorted();
+}
+
 function canonicalizeComparable(text: string): string {
-  const normalized = normalizeComparable(text)
-    .replace(/\bmemory system\b/g, "memory-system")
-    .replace(/\bmemory system path\b/g, "memory-system-path")
-    .replace(/\bpath for memory-system integration\b/g, "memory-system-path")
-    .replace(/\bpermanent path\b/g, "permanent memory-system-path")
-    .replace(/\bcarry forward\b/g, "carry-forward")
-    .replace(/\blong term\b/g, "long-term")
-    .replace(/\bnode tree\b/g, "node-tree")
-    .replace(/\bshould be used\b/g, "use")
-    .replace(/\bbe used\b/g, "use")
-    .replace(/\bold workaround\b/g, "legacy-workaround");
-  const tokens = normalized
-    .split(/\s+/)
-    .map((token) => singularizeToken(token))
-    .filter((token) => token && !CANONICAL_STOP_WORDS.has(token));
-  return tokens.join(" ").trim();
+  return buildCanonicalTokenSignature(text).join(" ").trim();
 }
 
 function stableHash(text: string): string {
@@ -909,7 +953,7 @@ function buildMemoryConceptFamilyKey(params: {
   customerScope?: string;
   artifactRefs?: string[];
 }): string {
-  let familyText = params.text
+  let familyText = normalizeConceptPhraseText(params.text)
     .replace(/\bv\d+(?:\.\d+)+(?:-\d+)?\b/gi, " ")
     .replace(/\binstall profile\s+[a-z0-9._-]+\b/gi, " ")
     .replace(/\bprofile\s+[a-z0-9._-]+\b/gi, " ")
@@ -1133,6 +1177,7 @@ function findConceptMatch(
   let best: LongTermMemoryEntry | undefined;
   let bestScore = 0;
   const incomingCanonicalTokens = new Set(tokenize(incoming.canonicalText || incoming.text));
+  const incomingSignature = new Set(buildCanonicalTokenSignature(incoming.text));
   for (const candidate of entries) {
     if (
       candidate.conceptKey &&
@@ -1176,6 +1221,11 @@ function findConceptMatch(
       candidate.canonicalText || candidate.text,
       incomingCanonicalTokens,
     );
+    const signatureOverlap = [...buildCanonicalTokenSignature(candidate.text)].filter((token) =>
+      incomingSignature.has(token),
+    ).length;
+    const signatureCoverage =
+      incomingSignature.size > 0 ? signatureOverlap / incomingSignature.size : 0;
     const aliasOverlap = Math.max(
       0,
       ...(candidate.conceptAliases ?? []).map((alias) =>
@@ -1220,12 +1270,14 @@ function findConceptMatch(
     const score =
       overlap +
       canonicalOverlap * 2 +
+      signatureOverlap * 2 +
       aliasOverlap +
       artifactOverlap * 3 +
       scopeOverlap * 2 +
       runtimeTagOverlap * 2;
     if (
       score >= 6 &&
+      signatureCoverage >= 0.45 &&
       (score > bestScore ||
         (score === bestScore &&
           ((candidate.updatedAt ?? 0) > (best?.updatedAt ?? 0) ||
@@ -4321,7 +4373,7 @@ export function retrieveMemoryContextPacket(
         return {
           kind: "long-term" as const,
           text: formatMemoryWithState(item),
-          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
           memoryId: item.id,
           conceptId: getEntryConceptId(item),
         };
@@ -4991,6 +5043,8 @@ type PersistedMemoryAdjudication = {
   winningMemoryId?: string;
   losingMemoryIds: string[];
   alternativeConceptIds: string[];
+  winningScore?: number;
+  scoreGap?: number;
   scopeSummary?: string;
   updatedAt: number;
 };
@@ -5002,6 +5056,14 @@ function sanitizePersistedMemoryAdjudication(
     ...adjudication,
     resolutionKind: adjudication.resolutionKind ?? "winner",
     alternativeConceptIds: uniqueIds(adjudication.alternativeConceptIds ?? []),
+    winningScore:
+      typeof adjudication.winningScore === "number" && Number.isFinite(adjudication.winningScore)
+        ? adjudication.winningScore
+        : undefined,
+    scoreGap:
+      typeof adjudication.scoreGap === "number" && Number.isFinite(adjudication.scoreGap)
+        ? adjudication.scoreGap
+        : undefined,
   };
 }
 
@@ -5136,6 +5198,42 @@ function buildPersistedMemoryAdjudications(params: {
   entries: LongTermMemoryEntry[];
   revisions: PersistedMemoryRevision[];
 }): PersistedMemoryAdjudication[] {
+  const scoreEntry = (entry: LongTermMemoryEntry, history: PersistedMemoryRevision[]): number => {
+    const recencyDays = Math.max(0, (Date.now() - entry.updatedAt) / (1000 * 60 * 60 * 24));
+    const recencyScore = Math.max(0, 1 - recencyDays / 30);
+    const sourceScore =
+      entry.sourceType === "direct_observation"
+        ? 0.18
+        : entry.sourceType === "user_stated"
+          ? 0.14
+          : entry.sourceType === "summary_derived"
+            ? 0.08
+            : 0.1;
+    const importanceScore =
+      entry.importanceClass === "critical"
+        ? 0.16
+        : entry.importanceClass === "useful"
+          ? 0.1
+          : entry.importanceClass === "temporary"
+            ? -0.08
+            : -0.12;
+    const revisionSupport = Math.min(0.18, (entry.revisionCount + history.length) * 0.03);
+    const artifactSupport = Math.min(0.12, (entry.artifactRefs ?? []).length * 0.04);
+    const contradictionPenalty =
+      entry.contradictionCount > 0 || entry.adjudicationStatus === "contested" ? 0.22 : 0;
+    const supersededPenalty = entry.activeStatus === "superseded" ? 0.28 : 0;
+    return (
+      entry.confidence * 0.34 +
+      entry.strength * 0.22 +
+      recencyScore * 0.12 +
+      sourceScore +
+      importanceScore +
+      revisionSupport +
+      artifactSupport -
+      contradictionPenalty -
+      supersededPenalty
+    );
+  };
   const entriesByConcept = new Map<string, LongTermMemoryEntry[]>();
   const entriesByConceptFamily = new Map<string, LongTermMemoryEntry[]>();
   for (const entry of params.entries) {
@@ -5158,9 +5256,30 @@ function buildPersistedMemoryAdjudications(params: {
   const adjudications: PersistedMemoryAdjudication[] = [];
   for (const [conceptId, conceptEntries] of entriesByConcept.entries()) {
     const history = revisionsByConcept.get(conceptId) ?? [];
-    const winner = conceptEntries.toSorted(
-      (a, b) => b.confidence - a.confidence || b.updatedAt - a.updatedAt,
-    )[0];
+    const hasConflictingEvidence =
+      history.some((revision) => revision.adjudicationStatus === "contested") ||
+      conceptEntries.some((entry) => entry.contradictionCount > 0) ||
+      conceptEntries.some((entry, index) =>
+        conceptEntries.slice(index + 1).some((other) => isContradictoryPair(entry, other)),
+      );
+    const scoredEntries = conceptEntries
+      .map((entry) => ({
+        entry,
+        score: scoreEntry(
+          entry,
+          history.filter((revision) => revision.memoryId === entry.id),
+        ),
+      }))
+      .toSorted(
+        (a, b) =>
+          b.score - a.score ||
+          b.entry.confidence - a.entry.confidence ||
+          b.entry.updatedAt - a.entry.updatedAt,
+      );
+    const winner = scoredEntries[0]?.entry;
+    const winningScore = scoredEntries[0]?.score ?? 0;
+    const runnerUpScore = scoredEntries[1]?.score ?? 0;
+    const scoreGap = winningScore - runnerUpScore;
     const conceptFamilyKey = getEntryConceptFamilyKey(winner ?? conceptEntries[0]);
     const losingMemoryIds = conceptEntries
       .filter((entry) => entry.id !== winner?.id)
@@ -5174,23 +5293,33 @@ function buildPersistedMemoryAdjudications(params: {
     );
     let status: MemoryAdjudicationStatus = winner?.adjudicationStatus ?? "authoritative";
     let resolutionKind: PersistedMemoryAdjudication["resolutionKind"] = "winner";
-    let rationale = "single authoritative concept state";
+    let rationale = "weighted evidence favors a single authoritative concept state";
     if (history.some((revision) => revision.adjudicationStatus === "contested")) {
       status = "contested";
       resolutionKind = "contested";
       rationale = "concept revision history contains contested evidence";
+    } else if (
+      hasConflictingEvidence &&
+      scoredEntries.length > 1 &&
+      scoreGap < 0.08 &&
+      conceptEntries.some((entry) => entry.activeStatus !== "superseded")
+    ) {
+      status = "contested";
+      resolutionKind = "contested";
+      rationale = "weighted evidence gap between competing concept observations is too small";
     } else if (alternativeConceptIds.length > 0) {
       status = winner?.activeStatus === "superseded" ? "superseded" : "authoritative";
       resolutionKind = "scoped_alternative";
-      rationale = "concept family includes scope-specific alternatives";
+      rationale =
+        "concept family includes scope-specific alternatives with distinct scope signatures";
     } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
       status = winner?.activeStatus === "superseded" ? "superseded" : status;
       resolutionKind = winner?.activeStatus === "superseded" ? "retired" : "winner";
-      rationale = "concept includes superseded observations";
+      rationale = "weighted winner remains after superseded observations are retired";
     } else if (history.some((revision) => revision.revisionKind === "updated")) {
-      rationale = "concept resolved through updated revision history";
+      rationale = "weighted winner is supported by updated revision history";
     } else if (history.some((revision) => revision.revisionKind === "narrowed")) {
-      rationale = "concept resolved through narrowed revision history";
+      rationale = "weighted winner is supported by narrowed revision history";
     }
     adjudications.push({
       id: `adj-${stableHash([params.sessionId, conceptId, status, winner?.id ?? "", history.map((item) => item.id).join(",")].join("::"))}`,
@@ -5202,6 +5331,8 @@ function buildPersistedMemoryAdjudications(params: {
       winningMemoryId: winner?.id,
       losingMemoryIds,
       alternativeConceptIds,
+      winningScore,
+      scoreGap: scoredEntries.length > 1 ? scoreGap : undefined,
       scopeSummary: [
         winner?.versionScope ? `version=${winner.versionScope}` : "",
         winner?.installProfileScope ? `profile=${winner.installProfileScope}` : "",
@@ -5862,4 +5993,74 @@ export async function recoverMemoryStoreFromBackup(params: {
     backendKind: targetBackend,
     allowBackupRecovery: false,
   });
+}
+
+export async function inspectMemoryStoreHealth(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryStoreHealthReport> {
+  const backendKind = params.backendKind ?? "fs-json";
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  const metadata = await loadPersistedStoreMetadata({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  const contestedConceptCount = new Set(
+    snapshot.longTermMemory
+      .filter((entry) => entry.adjudicationStatus === "contested")
+      .map((entry) => getEntryConceptId(entry)),
+  ).size;
+  const supersededMemoryCount = snapshot.longTermMemory.filter(
+    (entry) => entry.activeStatus === "superseded",
+  ).length;
+  const permanentEligibleCount = snapshot.longTermMemory.filter(
+    (entry) => entry.permanenceStatus === "eligible",
+  ).length;
+  const staleMemoryCount = snapshot.longTermMemory.filter(
+    (entry) => entry.activeStatus === "stale" || entry.compressionState === "latent",
+  ).length;
+  const issues: string[] = [];
+  if (contestedConceptCount > 0) {
+    issues.push(`contested concepts: ${contestedConceptCount}`);
+  }
+  if (supersededMemoryCount > Math.max(5, Math.floor(snapshot.longTermMemory.length * 0.25))) {
+    issues.push(`superseded memory backlog: ${supersededMemoryCount}`);
+  }
+  if (staleMemoryCount > Math.max(8, Math.floor(snapshot.longTermMemory.length * 0.35))) {
+    issues.push(`stale memory backlog: ${staleMemoryCount}`);
+  }
+  const integrityStatus: string | undefined = metadata.lastIntegrityCheckResult;
+  if (integrityStatus !== undefined && integrityStatus !== "ok") {
+    issues.push(`integrity status: ${integrityStatus}`);
+  }
+  const summary = clipText(
+    [
+      `backend=${backendKind}`,
+      `long-term=${snapshot.longTermMemory.length}`,
+      `concepts=${metadata.conceptCount ?? 0}`,
+      `contested=${contestedConceptCount}`,
+      `superseded=${supersededMemoryCount}`,
+      `stale=${staleMemoryCount}`,
+      `permanent-eligible=${permanentEligibleCount}`,
+      issues[0] ? `issues=${issues.join("; ")}` : "issues=none",
+    ].join(" | "),
+    320,
+  );
+  return {
+    backendKind,
+    sessionId: params.sessionId,
+    metadata,
+    issues,
+    summary,
+    contestedConceptCount,
+    supersededMemoryCount,
+    permanentEligibleCount,
+    staleMemoryCount,
+  };
 }

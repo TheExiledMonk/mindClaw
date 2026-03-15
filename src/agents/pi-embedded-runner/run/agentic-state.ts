@@ -705,6 +705,30 @@ function deriveAcceptanceHandoffRollups(
   };
 }
 
+function summarizeResumeBarrierProfiles(
+  profiles: AgenticHandoffReport["resumeBarrierProfile"][],
+): Pick<AgenticSoakReport, "dominantResumeBarrierProfile" | "resumeBarrierCounts"> {
+  const trackedProfiles = profiles.filter((profile) => profile !== "none");
+  const barrierCounts = new Map<
+    Exclude<AgenticHandoffReport["resumeBarrierProfile"], "none">,
+    number
+  >();
+  for (const profile of trackedProfiles) {
+    barrierCounts.set(profile, (barrierCounts.get(profile) ?? 0) + 1);
+  }
+  const barrierEntries = [...barrierCounts.entries()].toSorted((left, right) => right[1] - left[1]);
+  const topBarrierCount = barrierEntries[0]?.[1];
+  const topBarriers =
+    topBarrierCount === undefined
+      ? []
+      : barrierEntries.filter(([, count]) => count === topBarrierCount).map(([profile]) => profile);
+  return {
+    dominantResumeBarrierProfile:
+      topBarriers.length === 1 ? topBarriers[0] : topBarriers.length > 1 ? "none" : "none",
+    resumeBarrierCounts: barrierEntries.map(([profile, count]) => `${profile}:${count}`),
+  };
+}
+
 function deriveSoakEnvironmentRollups(
   scenarios: AgenticSoakScenarioResult[],
 ): Pick<AgenticSoakReport, "environmentBoundaryStatus"> {
@@ -727,28 +751,13 @@ function deriveSoakHandoffRollups(
   const guardedHandoffLifecycle = scenarios.find(
     (scenario) => scenario.id === "guarded_handoff_boundary",
   );
-  const guardedBarrierProfiles =
-    guardedHandoffLifecycle?.phases
-      .map((phase) => phase.resumeBarrierProfile)
-      .filter((profile) => profile !== "none") ?? [];
-  const barrierCounts = new Map<
-    Exclude<AgenticHandoffReport["resumeBarrierProfile"], "none">,
-    number
-  >();
-  for (const profile of guardedBarrierProfiles) {
-    barrierCounts.set(profile, (barrierCounts.get(profile) ?? 0) + 1);
-  }
-  const barrierEntries = [...barrierCounts.entries()].toSorted((left, right) => right[1] - left[1]);
-  const topBarrierCount = barrierEntries[0]?.[1];
-  const topBarriers =
-    topBarrierCount === undefined
-      ? []
-      : barrierEntries.filter(([, count]) => count === topBarrierCount).map(([profile]) => profile);
+  const barrierSummary = summarizeResumeBarrierProfiles(
+    guardedHandoffLifecycle?.phases.map((phase) => phase.resumeBarrierProfile) ?? [],
+  );
   return {
     handoffResumabilityStatus: guardedHandoffLifecycle?.passed ? "guarded_resume_paths" : "unknown",
-    dominantResumeBarrierProfile:
-      topBarriers.length === 1 ? topBarriers[0] : topBarriers.length > 1 ? "none" : "none",
-    resumeBarrierCounts: barrierEntries.map(([profile, count]) => `${profile}:${count}`),
+    dominantResumeBarrierProfile: barrierSummary.dominantResumeBarrierProfile,
+    resumeBarrierCounts: barrierSummary.resumeBarrierCounts,
   };
 }
 

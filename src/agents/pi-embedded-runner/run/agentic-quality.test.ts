@@ -117,6 +117,9 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_resume_barrier_profile=",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("failure_learning_status=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("capability_gap_status=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("dominant_capability_gap=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -154,6 +157,13 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Soak resume barrier profile:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Failure learning status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Capability gap status:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Dominant capability gap:",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
@@ -245,6 +255,15 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
       "soak_resume_barrier_profile=none",
     );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "failure_learning_status=near_miss",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "capability_gap_status=none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "dominant_capability_gap=none",
+    );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Workspace kind: project",
     );
@@ -262,6 +281,15 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Soak resume barrier profile: none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Failure learning status: near_miss",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Capability gap status: none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Dominant capability gap: none",
     );
 
     const validationThinState = buildAgenticExecutionState({
@@ -1430,6 +1458,69 @@ describe("agentic quality gate", () => {
     );
     expect(failureDerivedTemplateReport.recommendations).toContain(
       "Memory-backed template-ready families: verification@debugging/node.",
+    );
+  });
+
+  it("surfaces failure-learning and capability-gap rollups in the quality gate", () => {
+    const missingFallbackState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow and find a viable fallback.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    const report = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(missingFallbackState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(report.failureLearningStatus).toBe("hard_failure");
+    expect(report.capabilityGapStatus).toBe("present");
+    expect(report.dominantCapabilityGap).toBe("no_viable_fallback");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "failure_learning_status=hard_failure",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "capability_gap_status=present",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "dominant_capability_gap=no_viable_fallback",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Failure learning status: hard_failure",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Capability gap status: present",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Dominant capability gap: no_viable_fallback",
     );
   });
 });

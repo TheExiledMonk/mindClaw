@@ -434,6 +434,9 @@ export type AgenticQualityGateReport = {
   validationReadinessStatus: "unknown" | "observed";
   handoffResumabilityStatus: "unknown" | "guarded_resume_paths";
   soakResumeBarrierProfile: AgenticHandoffReport["resumeBarrierProfile"];
+  failureLearningStatus: AgenticFailureLearningState["failurePattern"];
+  capabilityGapStatus: "none" | "present";
+  dominantCapabilityGap?: string;
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -784,6 +787,19 @@ function deriveQualityHandoffRollups(params: {
   return {
     handoffResumabilityStatus: params.acceptance.handoffResumabilityStatus ?? "unknown",
     soakResumeBarrierProfile: params.soak.dominantResumeBarrierProfile ?? "none",
+  };
+}
+
+function deriveQualityFailureLearningRollups(
+  diagnostics: AgenticExecutionObservabilityReport,
+): Pick<
+  AgenticQualityGateReport,
+  "failureLearningStatus" | "capabilityGapStatus" | "dominantCapabilityGap"
+> {
+  return {
+    failureLearningStatus: diagnostics.failurePattern,
+    capabilityGapStatus: diagnostics.capabilityGaps.length > 0 ? "present" : "none",
+    dominantCapabilityGap: diagnostics.capabilityGaps[0],
   };
 }
 
@@ -7909,6 +7925,7 @@ export function runAgenticQualityGate(params?: {
   );
   const qualityEnvironmentRollups = deriveQualityEnvironmentRollups(diagnostics);
   const qualityHandoffRollups = deriveQualityHandoffRollups({ acceptance, soak });
+  const qualityFailureLearningRollups = deriveQualityFailureLearningRollups(diagnostics);
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -8011,6 +8028,9 @@ export function runAgenticQualityGate(params?: {
     validationReadinessStatus: qualityEnvironmentRollups.validationReadinessStatus,
     handoffResumabilityStatus: qualityHandoffRollups.handoffResumabilityStatus,
     soakResumeBarrierProfile: qualityHandoffRollups.soakResumeBarrierProfile,
+    failureLearningStatus: qualityFailureLearningRollups.failureLearningStatus,
+    capabilityGapStatus: qualityFailureLearningRollups.capabilityGapStatus,
+    dominantCapabilityGap: qualityFailureLearningRollups.dominantCapabilityGap,
     acceptance,
     soak,
     diagnostics,
@@ -8059,6 +8079,9 @@ export function formatAgenticQualityGateReport(
       `validation_readiness_status=${report.validationReadinessStatus}`,
       `handoff_resumability_status=${report.handoffResumabilityStatus}`,
       `soak_resume_barrier_profile=${report.soakResumeBarrierProfile}`,
+      `failure_learning_status=${report.failureLearningStatus}`,
+      `capability_gap_status=${report.capabilityGapStatus}`,
+      `dominant_capability_gap=${report.dominantCapabilityGap ?? "none"}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
       `clarification_profile=${report.clarificationProfile}`,
@@ -8110,6 +8133,9 @@ export function formatAgenticQualityGateReport(
     `- Validation readiness status: ${report.validationReadinessStatus}`,
     `- Handoff resumability status: ${report.handoffResumabilityStatus}`,
     `- Soak resume barrier profile: ${report.soakResumeBarrierProfile}`,
+    `- Failure learning status: ${report.failureLearningStatus}`,
+    `- Capability gap status: ${report.capabilityGapStatus}`,
+    `- Dominant capability gap: ${report.dominantCapabilityGap ?? "none"}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
     `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,

@@ -379,6 +379,83 @@ describe("agentic-state", () => {
     );
   });
 
+  it("uses durable merge-ready family guidance to prefer a sibling fallback during replanning", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the diagnostics workflow and switch to the strongest sibling path if the current one keeps failing.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report durable=true",
+      ].join("\n"),
+    });
+
+    expect(state.plannerState.retryClass).toBe("skill_fallback");
+    expect(state.plannerState.suggestedSkill).toBe("diagnostics-report");
+    expect(state.plannerState.alternativeSkills[0]).toBe("diagnostics-report");
+    expect(state.plannerState.nextAction).toContain(
+      "Prefer the sibling fallback diagnostics-report inside the durable merge-ready diagnostics family.",
+    );
+    expect(state.plannerState.rationale).toContain("merge-family-guidance");
+    expect(state.orchestrationState.primarySkill).toBe("diagnostics-report");
+    expect(state.orchestrationState.mergeCandidate).toBe(true);
+    expect(state.orchestrationState.mergeSkills).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
+    );
+  });
+
+  it("uses durable template-ready family guidance to keep replanning inside the stable family", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Fix the diagnostics workflow without creating another specialized fork."),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current implementation.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+      ].join("\n"),
+    });
+
+    expect(state.plannerState.retryClass).toBe("same_path_retry");
+    expect(state.plannerState.nextAction).toContain(
+      "Reuse and parameterize the stable diagnostics workflow around memory-diagnostics instead of creating a new fork.",
+    );
+    expect(state.plannerState.rationale).toContain("template-family-guidance");
+    expect(state.orchestrationState.primarySkill).toBe("memory-diagnostics");
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
+    expect(state.orchestrationState.rationale).toContain(
+      "template-ready diagnostics family guidance",
+    );
+  });
+
   it("uses merge-ready family guidance to merge overlapping sibling skills instead of only templating them", () => {
     const state = buildAgenticExecutionState({
       messages: [

@@ -281,7 +281,9 @@ export type AgenticAcceptanceScenarioId =
   | "template_guidance_observability_alignment"
   | "merge_guidance_observability_alignment"
   | "durable_template_family_quality_alignment"
-  | "durable_merge_family_quality_alignment";
+  | "durable_merge_family_quality_alignment"
+  | "durable_merge_family_fallback_alignment"
+  | "durable_template_family_replan_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -1214,12 +1216,37 @@ function buildPlannerState(params: {
   retrySignals?: RetrySignal[];
   availableSkills?: string[];
   likelySkills?: string[];
+  memoryRegressionSignals?: AgenticRegressionMemorySignal;
 }): AgenticPlannerState {
   const checkpointSignals = params.checkpointSignals ?? [];
   const retrySignals = params.retrySignals ?? [];
   const likelySkills = params.likelySkills ?? [];
-  const alternativeSkills = (params.availableSkills ?? []).filter(
+  const memoryRegressionSignals = params.memoryRegressionSignals ?? {
+    missingFallbackRegression: false,
+    escalationRegression: false,
+    qualityFailureReasons: [],
+    regressingSkillFamilies: [],
+    consolidationPreferredFamilies: [],
+    templatePreferredFamilies: [],
+    mergePreferredFamilies: [],
+    preferredFallbackSkills: [],
+  };
+  const rawAlternativeSkills = (params.availableSkills ?? []).filter(
     (skill) => !likelySkills.includes(skill),
+  );
+  const likelyPrimarySkill = likelySkills[0];
+  const likelyPrimaryFamily = likelyPrimarySkill ? inferSkillFamily(likelyPrimarySkill) : undefined;
+  const mergeFamilyFallbackSkills =
+    likelyPrimaryFamily &&
+    memoryRegressionSignals.mergePreferredFamilies.includes(likelyPrimaryFamily)
+      ? rawAlternativeSkills.filter((skill) => inferSkillFamily(skill) === likelyPrimaryFamily)
+      : [];
+  const alternativeSkills = uniqueCompact(
+    [
+      ...mergeFamilyFallbackSkills,
+      ...rawAlternativeSkills.filter((skill) => !mergeFamilyFallbackSkills.includes(skill)),
+    ],
+    6,
   );
   const retryFailures = retrySignals.filter((signal) => signal.outcome === "failed");
   const latestRetrySignal = retrySignals.at(-1);
@@ -1230,7 +1257,10 @@ function buildPlannerState(params: {
       : undefined;
 
   const dominantFailureClass = params.verificationState.failureClasses[0];
-  const suggestedSkill = alternativeSkills[0];
+  const templateFamilyActive =
+    Boolean(likelyPrimaryFamily) &&
+    memoryRegressionSignals.templatePreferredFamilies.includes(likelyPrimaryFamily ?? "");
+  const suggestedSkill = mergeFamilyFallbackSkills[0] ?? alternativeSkills[0];
   const shouldEscalate =
     retryFailures.length > 0 ||
     dominantFailureClass === "environment_mismatch" ||
@@ -1268,6 +1298,20 @@ function buildPlannerState(params: {
       alternativeSkills.length > 0
         ? ` Consider alternative skills: ${alternativeSkills.slice(0, 3).join(", ")}.`
         : "";
+    const mergeFallbackHint =
+      mergeFamilyFallbackSkills.length > 0
+        ? ` Prefer the sibling fallback ${mergeFamilyFallbackSkills[0]} inside the durable merge-ready ${likelyPrimaryFamily} family.`
+        : "";
+    const templateGuidanceHint =
+      templateFamilyActive && likelyPrimarySkill
+        ? ` Reuse and parameterize the stable ${likelyPrimaryFamily} workflow around ${likelyPrimarySkill} instead of creating a new fork.`
+        : "";
+    const rationaleSuffix =
+      mergeFamilyFallbackSkills.length > 0
+        ? "merge-family-guidance"
+        : templateFamilyActive
+          ? "template-family-guidance"
+          : undefined;
     return {
       version: 1,
       status: retryFailures.length > 0 ? "blocked" : "needs_replan",
@@ -1275,13 +1319,17 @@ function buildPlannerState(params: {
         ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
         : dominantFailureClass === "missing_information"
           ? "Clarify the missing input or fetch the missing prerequisite before retrying."
-          : suggestedSkill
-            ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${fallbackHint}`.trim()
-            : dominantFailureClass === "verification_failure"
-              ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
-              : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
+          : mergeFamilyFallbackSkills.length > 0
+            ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${mergeFallbackHint}${fallbackHint}`.trim()
+            : templateFamilyActive
+              ? `Do not spawn a new fork for this blocker.${templateGuidanceHint}${fallbackHint}`.trim()
+              : suggestedSkill
+                ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${fallbackHint}`.trim()
+                : dominantFailureClass === "verification_failure"
+                  ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
+                  : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
       rationale: dominantFailureClass
-        ? `${dominantFailureClass}: ${params.blockers[0]}`
+        ? `${dominantFailureClass}: ${params.blockers[0]}${rationaleSuffix ? `; ${rationaleSuffix}` : ""}`
         : params.blockers[0],
       alternativeSkills,
       retryClass,
@@ -1506,6 +1554,7 @@ function buildOrchestrationState(params: {
   };
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const currentLikelySkill = likelySkills[0];
+  const currentLikelyFamily = currentLikelySkill ? inferSkillFamily(currentLikelySkill) : undefined;
   const currentLikelyMemoryWeight = currentLikelySkill
     ? (memoryWeightedSkills.get(currentLikelySkill) ?? 0)
     : 0;
@@ -1615,6 +1664,42 @@ function buildOrchestrationState(params: {
       if (memoryRegressionSignals.preferredFallbackSkills.includes(skill.name)) {
         score += 1.75;
         reasons.push("family-guided-fallback");
+      }
+      if (
+        currentLikelyFamily &&
+        (params.plannerState?.status === "needs_replan" ||
+          params.plannerState?.status === "blocked")
+      ) {
+        if (
+          memoryRegressionSignals.mergePreferredFamilies.includes(currentLikelyFamily) &&
+          skillFamily === currentLikelyFamily
+        ) {
+          if (skill.name === currentLikelySkill) {
+            score -= 1.5;
+            reasons.push("merge-family-move");
+          } else {
+            score += 2.25;
+            reasons.push("merge-family-sibling");
+          }
+        }
+        if (
+          memoryRegressionSignals.templatePreferredFamilies.includes(currentLikelyFamily) &&
+          skillFamily === currentLikelyFamily
+        ) {
+          if (skill.name === currentLikelySkill) {
+            score += 1.75;
+            reasons.push("template-family-anchor");
+          } else {
+            score += 1;
+            reasons.push("template-family-sibling");
+          }
+        } else if (
+          memoryRegressionSignals.templatePreferredFamilies.includes(currentLikelyFamily) &&
+          skillFamily !== currentLikelyFamily
+        ) {
+          score -= 0.5;
+          reasons.push("template-family-avoid-fork");
+        }
       }
       return { skill: skill.name, score, reasons };
     })
@@ -1928,8 +2013,20 @@ function reconcilePlannerStateWithOrchestration(params: {
     qualityFailureReasons: [],
     regressingSkillFamilies: [],
     consolidationPreferredFamilies: [],
+    templatePreferredFamilies: [],
+    mergePreferredFamilies: [],
     preferredFallbackSkills: [],
   };
+  const primaryFamily = params.orchestrationState.primarySkill
+    ? inferSkillFamily(params.orchestrationState.primarySkill)
+    : undefined;
+  const templateFamilyReuseActive =
+    Boolean(primaryFamily) &&
+    !params.orchestrationState.mergeCandidate &&
+    params.orchestrationState.consolidationAction === "generalize_existing" &&
+    memoryRegressionSignals.templatePreferredFamilies.includes(primaryFamily ?? "");
+  const mergeFamilyFallbackActive =
+    params.orchestrationState.mergeCandidate && params.orchestrationState.mergeSkills.length > 1;
   const rankedAlternatives = params.orchestrationState.rankedSkills.filter(
     (skill) => !likelySkills.includes(skill),
   );
@@ -1955,6 +2052,19 @@ function reconcilePlannerStateWithOrchestration(params: {
     !params.orchestrationState.hasViableFallback &&
     (params.plannerState.status === "needs_replan" || params.plannerState.status === "blocked")
   ) {
+    if (templateFamilyReuseActive && params.orchestrationState.primarySkill) {
+      return {
+        ...params.plannerState,
+        shouldEscalate: false,
+        escalationReason: undefined,
+        nextAction: `Do not spawn a new fork for this blocker. Reuse and parameterize the stable ${primaryFamily} workflow around ${params.orchestrationState.primarySkill} instead of creating a new fork.`,
+        rationale: (params.plannerState.rationale ?? "").includes("template-family-guidance")
+          ? params.plannerState.rationale
+          : params.plannerState.rationale
+            ? `${params.plannerState.rationale}; template-family-guidance`
+            : "template-family-guidance",
+      };
+    }
     return {
       ...params.plannerState,
       retryClass: "escalate",
@@ -1976,9 +2086,11 @@ function reconcilePlannerStateWithOrchestration(params: {
     return params.plannerState;
   }
   const suggestedSkill = rankedAlternatives[0];
-  const nextAction = params.plannerState.nextAction?.includes("fallback workflow using")
-    ? `Switch to a fallback workflow using ${suggestedSkill} before retrying. Consider alternative skills: ${rankedAlternatives.slice(0, 3).join(", ")}.`
-    : params.plannerState.nextAction;
+  const nextAction = mergeFamilyFallbackActive
+    ? `Switch to a fallback workflow using ${suggestedSkill} before retrying. Prefer the sibling fallback ${suggestedSkill} inside the durable merge-ready ${inferSkillFamily(suggestedSkill)} family. Consider alternative skills: ${rankedAlternatives.slice(0, 3).join(", ")}.`
+    : params.plannerState.nextAction?.includes("fallback workflow using")
+      ? `Switch to a fallback workflow using ${suggestedSkill} before retrying. Consider alternative skills: ${rankedAlternatives.slice(0, 3).join(", ")}.`
+      : params.plannerState.nextAction;
   const rationale =
     memoryRegressionSignals.missingFallbackRegression &&
     !(params.plannerState.rationale ?? "").includes("memory-regression:no_viable_fallback")
@@ -2072,6 +2184,9 @@ export function buildAgenticExecutionState(params: {
     extractListCandidates(latestUserSummary ?? "").map((item) => truncate(item, 120)),
     4,
   );
+  const memoryRegressionSignals = extractAgenticRegressionMemorySignals(
+    params.memorySystemPromptAddition,
+  );
   const plannerState = buildPlannerState({
     objective: latestUserSummary,
     blockers,
@@ -2081,6 +2196,7 @@ export function buildAgenticExecutionState(params: {
     retrySignals: params.retrySignals,
     availableSkills: params.availableSkills,
     likelySkills: params.likelySkills,
+    memoryRegressionSignals,
   });
   const taskState: AgenticTaskState = {
     version: 1,
@@ -2125,9 +2241,6 @@ export function buildAgenticExecutionState(params: {
     taskMode: taskState.taskMode,
     preferredEnv,
   });
-  const memoryRegressionSignals = extractAgenticRegressionMemorySignals(
-    params.memorySystemPromptAddition,
-  );
   const orchestrationState = buildOrchestrationState({
     taskMode: taskState.taskMode,
     objectiveText: taskState.objective,
@@ -3725,6 +3838,96 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Durable merge-ready family trends stay visible from retrieval through the release-facing quality gate."
         : "Durable merge-ready family trends did not stay visible through the quality gate.",
       details: `merge_families=${report.mergeFamilies.join("|")} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow and switch to the strongest sibling path if the current one keeps failing.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report durable=true",
+      ].join("\n"),
+    });
+    const passed =
+      state.plannerState.retryClass === "skill_fallback" &&
+      state.plannerState.suggestedSkill === "diagnostics-report" &&
+      state.plannerState.rationale?.includes("merge-family-guidance") === true &&
+      state.orchestrationState.primarySkill === "diagnostics-report" &&
+      state.orchestrationState.mergeCandidate;
+    scenarios.push({
+      id: "durable_merge_family_fallback_alignment",
+      passed,
+      summary: passed
+        ? "Durable merge-ready family guidance promotes sibling fallback selection during replanning."
+        : "Durable merge-ready family guidance did not steer fallback replanning correctly.",
+      details: `retry=${state.plannerState.retryClass} suggested=${state.plannerState.suggestedSkill ?? "none"} primary=${state.orchestrationState.primarySkill ?? "none"}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow without creating another specialized fork.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current implementation.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+      ].join("\n"),
+    });
+    const passed =
+      state.plannerState.retryClass === "same_path_retry" &&
+      !state.plannerState.shouldEscalate &&
+      state.plannerState.rationale?.includes("template-family-guidance") === true &&
+      state.plannerState.nextAction?.includes(
+        "Reuse and parameterize the stable diagnostics workflow",
+      ) === true &&
+      state.orchestrationState.primarySkill === "memory-diagnostics" &&
+      state.orchestrationState.consolidationAction === "generalize_existing";
+    scenarios.push({
+      id: "durable_template_family_replan_alignment",
+      passed,
+      summary: passed
+        ? "Durable template-ready family guidance keeps replanning inside the stable family instead of escalating into a new fork."
+        : "Durable template-ready family guidance did not preserve stable-family replanning.",
+      details: `retry=${state.plannerState.retryClass} escalate=${state.plannerState.shouldEscalate} next=${state.plannerState.nextAction ?? "none"}`,
     });
   }
 

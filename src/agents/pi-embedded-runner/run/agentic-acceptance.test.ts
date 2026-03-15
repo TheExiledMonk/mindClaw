@@ -39,6 +39,14 @@ describe("agentic acceptance suite", () => {
       (scenario) => scenario.id === "durable_merge_family_quality_alignment",
     );
     expect(durableMergeScenario?.passed).toBe(true);
+    const durableMergeFallbackScenario = report.scenarios.find(
+      (scenario) => scenario.id === "durable_merge_family_fallback_alignment",
+    );
+    expect(durableMergeFallbackScenario?.passed).toBe(true);
+    const durableTemplateReplanScenario = report.scenarios.find(
+      (scenario) => scenario.id === "durable_template_family_replan_alignment",
+    );
+    expect(durableTemplateReplanScenario?.passed).toBe(true);
   });
 
   it("formats the acceptance report in summary and markdown forms", () => {

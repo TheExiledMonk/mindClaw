@@ -2314,6 +2314,66 @@ describe("MemorySystemContextEngine", () => {
     expect(report.authoritativeWinnerItemCount).toBeGreaterThan(0);
   });
 
+  it("ingests procedural execution records into long-term memory and retrieval", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:procedural-memory",
+      messages: [
+        userMessage(
+          "Plan the diagnostics rollout for src/context-engine/memory-system.ts and keep the acceptance workflow reusable.",
+        ),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "acceptance-report"],
+          likelySkills: ["memory-diagnostics"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: [
+            "scripts/memory-diagnostics-report.ts",
+            "src/context-engine/memory-system.ts",
+          ],
+          outcome: "verified",
+          taskMode: "planning",
+          templateCandidate: true,
+          consolidationCandidate: false,
+          nextImprovement:
+            "Consider parameterizing memory-diagnostics so it can cover acceptance reporting without duplication.",
+        },
+      } as never,
+    });
+
+    const proceduralEntries = compiled.longTermMemory.filter((entry) =>
+      (entry.environmentTags ?? []).includes("runtime:procedural"),
+    );
+    expect(proceduralEntries.length).toBeGreaterThan(0);
+    expect(
+      proceduralEntries.some(
+        (entry) =>
+          entry.text.includes("Procedural workflow") &&
+          entry.text.includes("memory-diagnostics") &&
+          entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+      ),
+    ).toBe(true);
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "For the diagnostics rollout in src/context-engine/memory-system.ts, what workflow should we reuse?",
+        ),
+      ],
+    });
+
+    expect(packet.text).toContain("Procedural guidance:");
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.text.includes("Procedural workflow") &&
+          item.text.includes("memory-diagnostics") &&
+          item.reason.includes("source=direct_observation"),
+      ),
+    ).toBe(true);
+  });
+
   it("generates a diagnostics report with health, retrieval, and acceptance summaries", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-"));
     const sessionId = "agent:diagnostics";

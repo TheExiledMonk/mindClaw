@@ -2741,6 +2741,137 @@ function deriveRuntimeSignalCandidates(params: {
     });
   }
 
+  const proceduralExecution =
+    runtime.proceduralExecution && typeof runtime.proceduralExecution === "object"
+      ? (runtime.proceduralExecution as {
+          availableSkills?: unknown;
+          likelySkills?: unknown;
+          toolChain?: unknown;
+          changedArtifacts?: unknown;
+          outcome?: unknown;
+          taskMode?: unknown;
+          templateCandidate?: unknown;
+          consolidationCandidate?: unknown;
+          nextImprovement?: unknown;
+        })
+      : undefined;
+  if (proceduralExecution) {
+    const likelySkills = uniqueStrings(
+      Array.isArray(proceduralExecution.likelySkills)
+        ? proceduralExecution.likelySkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const availableSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.availableSkills)
+        ? proceduralExecution.availableSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const toolChain = uniqueStrings(
+      Array.isArray(proceduralExecution.toolChain)
+        ? proceduralExecution.toolChain.filter(
+            (tool): tool is string => typeof tool === "string" && tool.trim().length > 0,
+          )
+        : [],
+    );
+    const changedArtifacts = uniqueStrings(
+      Array.isArray(proceduralExecution.changedArtifacts)
+        ? proceduralExecution.changedArtifacts.filter(
+            (artifact): artifact is string =>
+              typeof artifact === "string" && artifact.trim().length > 0,
+          )
+        : [],
+    );
+    const outcome =
+      proceduralExecution.outcome === "verified" ||
+      proceduralExecution.outcome === "partial" ||
+      proceduralExecution.outcome === "failed" ||
+      proceduralExecution.outcome === "blocked" ||
+      proceduralExecution.outcome === "unverified"
+        ? proceduralExecution.outcome
+        : "unverified";
+    const taskMode =
+      proceduralExecution.taskMode === "coding" ||
+      proceduralExecution.taskMode === "debugging" ||
+      proceduralExecution.taskMode === "support" ||
+      proceduralExecution.taskMode === "planning" ||
+      proceduralExecution.taskMode === "conceptual" ||
+      proceduralExecution.taskMode === "research"
+        ? proceduralExecution.taskMode
+        : "research";
+    const nextImprovement =
+      typeof proceduralExecution.nextImprovement === "string" &&
+      proceduralExecution.nextImprovement.trim().length > 0
+        ? proceduralExecution.nextImprovement.trim()
+        : undefined;
+    const proceduralEvidence = uniqueStrings([
+      likelySkills.length > 0 ? `skills=${likelySkills.join(",")}` : "",
+      toolChain.length > 0 ? `tools=${toolChain.join(",")}` : "",
+      changedArtifacts.length > 0 ? `artifacts=${changedArtifacts.join(",")}` : "",
+      nextImprovement ?? "",
+    ]).filter(Boolean);
+    const proceduralText = [
+      `Procedural workflow for ${taskMode} work`,
+      likelySkills.length > 0 ? `uses skill path ${likelySkills.join(", ")}` : "",
+      toolChain.length > 0 ? `tool chain ${toolChain.join(" -> ")}` : "",
+      changedArtifacts.length > 0 ? `on ${changedArtifacts.join(", ")}` : "",
+      `with outcome ${outcome}`,
+      nextImprovement ? `Next improvement: ${nextImprovement}` : "",
+    ]
+      .filter(Boolean)
+      .join(": ")
+      .replace(/: :/g, ":");
+
+    pushRuntimeCandidate({
+      category: "strategy",
+      text: proceduralText,
+      evidence: proceduralEvidence.length > 0 ? proceduralEvidence : [proceduralText],
+      artifactRefs: changedArtifacts,
+      environmentTags: uniqueStrings([
+        "runtime:procedural",
+        `procedural:outcome:${outcome}`,
+        `task-mode:${taskMode}`,
+        ...(toolChain.map((tool) => `tool:${tool}`) ?? []),
+        proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",
+        proceduralExecution.consolidationCandidate === true
+          ? "procedural:consolidation-candidate"
+          : "",
+      ]),
+      confidence: outcome === "verified" ? 0.88 : outcome === "partial" ? 0.78 : 0.7,
+      strength: outcome === "verified" ? 0.9 : outcome === "partial" ? 0.8 : 0.72,
+      importanceClass:
+        outcome === "verified" || likelySkills.length > 0 || toolChain.length > 1
+          ? "useful"
+          : "temporary",
+      trend:
+        proceduralExecution.templateCandidate === true ||
+        proceduralExecution.consolidationCandidate === true
+          ? "rising"
+          : "stable",
+    });
+
+    if (availableSkills.length > 0 && availableSkills.length <= 8) {
+      pushRuntimeCandidate({
+        category: "strategy",
+        text: `Available skill surface for current execution: ${availableSkills.join(", ")}`,
+        evidence: [availableSkills.join(", ")],
+        artifactRefs: changedArtifacts,
+        environmentTags: [
+          "runtime:procedural",
+          "procedural:available-skills",
+          `task-mode:${taskMode}`,
+        ],
+        confidence: 0.68,
+        strength: 0.64,
+        importanceClass: "temporary",
+        trend: "stable",
+      });
+    }
+  }
+
   return candidates;
 }
 
@@ -5212,6 +5343,15 @@ export function retrieveMemoryContextPacket(
     accessedConceptIds.push(...longTerm.map((item) => getEntryConceptId(item)));
     sections.push(
       `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
+    );
+  }
+
+  const proceduralGuidance = longTerm.filter((item) =>
+    (item.environmentTags ?? []).includes("runtime:procedural"),
+  );
+  if (proceduralGuidance.length > 0) {
+    sections.push(
+      `Procedural guidance:\n- ${proceduralGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );
   }
 

@@ -82,6 +82,9 @@ describe("agentic-state", () => {
     expect(state.verificationState.failureClasses).toContain("prompt_failure");
     expect(state.plannerState.status).toBe("blocked");
     expect(state.plannerState.rationale).toContain("prompt_failure");
+    expect(state.plannerState.retryClass).toBe("escalate");
+    expect(state.plannerState.shouldEscalate).toBe(true);
+    expect(state.plannerState.escalationReason).toBe("repeated_failure");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Do not repeat the same failing path.",
     );
@@ -105,9 +108,11 @@ describe("agentic-state", () => {
       "Do not repeat the same failing validation path",
     );
     expect(state.plannerState.alternativeSkills).toEqual([]);
+    expect(state.plannerState.retryClass).toBe("same_path_retry");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Failure classes: verification_failure",
     );
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Retry class: same_path_retry");
   });
 
   it("surfaces fallback skills when the current path is failing", () => {
@@ -127,8 +132,43 @@ describe("agentic-state", () => {
     expect(state.plannerState.alternativeSkills).toEqual(
       expect.arrayContaining(["acceptance-report", "release-checks"]),
     );
+    expect(state.plannerState.retryClass).toBe("skill_fallback");
+    expect(state.plannerState.suggestedSkill).toBe("acceptance-report");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Fallback skills to consider: acceptance-report, release-checks",
+    );
+  });
+
+  it("escalates environment mismatches instead of recommending normal retries", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Permission denied: workspace only sandbox blocked the deployment command.",
+        },
+      ],
+      availableSkills: ["deployment-recovery", "ops-checklist"],
+      likelySkills: ["deployment-recovery"],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 3,
+          summary: "Recovered after the first retry.",
+        },
+      ],
+    });
+
+    expect(state.verificationState.failureClasses).toContain("environment_mismatch");
+    expect(state.plannerState.retryClass).toBe("escalate");
+    expect(state.plannerState.shouldEscalate).toBe(true);
+    expect(state.plannerState.escalationReason).toBe("environment_mismatch");
+    expect(state.plannerState.remainingRetryBudget).toBe(2);
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Escalation required: environment_mismatch",
     );
   });
 
@@ -214,6 +254,8 @@ describe("agentic-state", () => {
     );
     expect(record.alternativeSkills).toEqual([]);
     expect(record.templateCandidate).toBe(true);
+    expect(record.retryClass).toBe("same_path_retry");
+    expect(record.shouldEscalate).toBe(false);
   });
 
   it("marks failed procedural workflows as near-miss candidates", () => {
@@ -252,6 +294,9 @@ describe("agentic-state", () => {
 
     expect(record.nearMissCandidate).toBe(true);
     expect(record.alternativeSkills).toEqual(expect.arrayContaining(["acceptance-report"]));
+    expect(record.retryClass).toBe("skill_fallback");
+    expect(record.suggestedSkill).toBe("acceptance-report");
+    expect(record.shouldEscalate).toBe(false);
     expect(record.nextImprovement).toContain("alternative skills");
   });
 });

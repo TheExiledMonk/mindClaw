@@ -2327,6 +2327,7 @@ describe("MemorySystemContextEngine", () => {
           version: 1,
           availableSkills: ["memory-diagnostics", "acceptance-report"],
           likelySkills: ["memory-diagnostics"],
+          alternativeSkills: ["acceptance-report"],
           toolChain: ["read", "exec"],
           changedArtifacts: [
             "scripts/memory-diagnostics-report.ts",
@@ -2336,6 +2337,10 @@ describe("MemorySystemContextEngine", () => {
           taskMode: "planning",
           templateCandidate: true,
           consolidationCandidate: false,
+          nearMissCandidate: false,
+          retryClass: "skill_fallback",
+          suggestedSkill: "acceptance-report",
+          shouldEscalate: false,
           nextImprovement:
             "Consider parameterizing memory-diagnostics so it can cover acceptance reporting without duplication.",
         },
@@ -2351,6 +2356,7 @@ describe("MemorySystemContextEngine", () => {
         (entry) =>
           entry.text.includes("Procedural workflow") &&
           entry.text.includes("memory-diagnostics") &&
+          entry.text.includes("retry class skill_fallback") &&
           entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
       ),
     ).toBe(true);
@@ -2369,6 +2375,7 @@ describe("MemorySystemContextEngine", () => {
         (item) =>
           item.text.includes("Procedural workflow") &&
           item.text.includes("memory-diagnostics") &&
+          item.text.includes("suggested fallback acceptance-report") &&
           item.reason.includes("source=direct_observation"),
       ),
     ).toBe(true);

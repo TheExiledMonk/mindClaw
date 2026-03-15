@@ -164,6 +164,36 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+function matchesSkillAgainstText(skillName: string, corpus: string): boolean {
+  const normalizedCorpus = corpus.toLowerCase();
+  const normalizedSkill = skillName.toLowerCase();
+  if (normalizedCorpus.includes(normalizedSkill)) {
+    return true;
+  }
+  const tokens = normalizedSkill.split(/[^a-z0-9]+/i).filter((token) => token.length >= 4);
+  return tokens.some((token) => normalizedCorpus.includes(token));
+}
+
+function extractAgentMessageText(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [];
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" && text.trim() ? [text.trim()] : [];
+    })
+    .join("\n")
+    .trim();
+}
+
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
@@ -1307,29 +1337,10 @@ export function buildAfterTurnRuntimeContext(params: {
   const availableSkillNames = uniqueStrings(
     params.attempt.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
   );
-  const extractMessageText = (message: AgentMessage): string => {
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content.trim();
-    }
-    if (!Array.isArray(content)) {
-      return "";
-    }
-    return content
-      .flatMap((block) => {
-        if (!block || typeof block !== "object") {
-          return [];
-        }
-        const text = (block as { text?: unknown }).text;
-        return typeof text === "string" && text.trim() ? [text.trim()] : [];
-      })
-      .join("\n")
-      .trim();
-  };
   const extractArtifactRefs = (text: string): string[] =>
     text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
   const extractToolSignalSummary = (message: AgentMessage): string | undefined => {
-    return extractMessageText(message) || undefined;
+    return extractAgentMessageText(message) || undefined;
   };
   const toolSignals = (params.messages ?? [])
     .filter(
@@ -1374,7 +1385,7 @@ export function buildAfterTurnRuntimeContext(params: {
     artifactRefs: string[];
   }> = (params.messages ?? [])
     .flatMap((message) => {
-      const summary = extractMessageText(message);
+      const summary = extractAgentMessageText(message);
       if (!summary) {
         return [];
       }
@@ -1484,10 +1495,10 @@ export function buildAfterTurnRuntimeContext(params: {
     promptErrorSummary,
     availableSkills: availableSkillNames,
     likelySkills: availableSkillNames.filter((skill) =>
-      (params.messages ?? [])
-        .map((message) => extractMessageText(message).toLowerCase())
-        .join(" ")
-        .includes(skill.toLowerCase()),
+      matchesSkillAgainstText(
+        skill,
+        (params.messages ?? []).map((message) => extractAgentMessageText(message)).join(" "),
+      ),
     ),
   });
   const proceduralExecution = buildProceduralExecutionRecord({
@@ -2365,12 +2376,21 @@ export async function runEmbeddedAttempt(
           activeSession.agent.replaceMessages(limited);
         }
         const agenticPromptAddition = buildAgenticSystemPromptAddition(
-          buildAgenticExecutionState({
-            messages: activeSession.messages,
-            availableSkills: uniqueStrings(
+          (() => {
+            const availableSkills = uniqueStrings(
               params.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
-            ),
-          }),
+            );
+            const promptCorpus = activeSession.messages
+              .map((message) => extractAgentMessageText(message))
+              .join(" ");
+            return buildAgenticExecutionState({
+              messages: activeSession.messages,
+              availableSkills,
+              likelySkills: availableSkills.filter((skill) =>
+                matchesSkillAgainstText(skill, promptCorpus),
+              ),
+            });
+          })(),
         );
         if (agenticPromptAddition) {
           systemPromptText = prependSystemPromptAddition({

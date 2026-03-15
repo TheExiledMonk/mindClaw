@@ -2746,12 +2746,18 @@ function deriveRuntimeSignalCandidates(params: {
       ? (runtime.proceduralExecution as {
           availableSkills?: unknown;
           likelySkills?: unknown;
+          alternativeSkills?: unknown;
           toolChain?: unknown;
           changedArtifacts?: unknown;
           outcome?: unknown;
           taskMode?: unknown;
           templateCandidate?: unknown;
           consolidationCandidate?: unknown;
+          nearMissCandidate?: unknown;
+          retryClass?: unknown;
+          suggestedSkill?: unknown;
+          shouldEscalate?: unknown;
+          escalationReason?: unknown;
           nextImprovement?: unknown;
         })
       : undefined;
@@ -2766,6 +2772,13 @@ function deriveRuntimeSignalCandidates(params: {
     const availableSkills = uniqueStrings(
       Array.isArray(proceduralExecution.availableSkills)
         ? proceduralExecution.availableSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const alternativeSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.alternativeSkills)
+        ? proceduralExecution.alternativeSkills.filter(
             (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
           )
         : [],
@@ -2807,18 +2820,48 @@ function deriveRuntimeSignalCandidates(params: {
       proceduralExecution.nextImprovement.trim().length > 0
         ? proceduralExecution.nextImprovement.trim()
         : undefined;
+    const retryClass =
+      proceduralExecution.retryClass === "same_path_retry" ||
+      proceduralExecution.retryClass === "skill_fallback" ||
+      proceduralExecution.retryClass === "environment_fix" ||
+      proceduralExecution.retryClass === "clarify" ||
+      proceduralExecution.retryClass === "escalate"
+        ? proceduralExecution.retryClass
+        : "same_path_retry";
+    const suggestedSkill =
+      typeof proceduralExecution.suggestedSkill === "string" &&
+      proceduralExecution.suggestedSkill.trim().length > 0
+        ? proceduralExecution.suggestedSkill.trim()
+        : undefined;
+    const shouldEscalate = proceduralExecution.shouldEscalate === true;
+    const escalationReason =
+      proceduralExecution.escalationReason === "repeated_failure" ||
+      proceduralExecution.escalationReason === "environment_mismatch" ||
+      proceduralExecution.escalationReason === "missing_information" ||
+      proceduralExecution.escalationReason === "low_confidence" ||
+      proceduralExecution.escalationReason === "unknown"
+        ? proceduralExecution.escalationReason
+        : undefined;
     const proceduralEvidence = uniqueStrings([
       likelySkills.length > 0 ? `skills=${likelySkills.join(",")}` : "",
+      alternativeSkills.length > 0 ? `alt_skills=${alternativeSkills.join(",")}` : "",
       toolChain.length > 0 ? `tools=${toolChain.join(",")}` : "",
       changedArtifacts.length > 0 ? `artifacts=${changedArtifacts.join(",")}` : "",
+      `retry=${retryClass}`,
+      suggestedSkill ? `suggested_skill=${suggestedSkill}` : "",
+      shouldEscalate ? `escalate=${escalationReason ?? "unknown"}` : "",
       nextImprovement ?? "",
     ]).filter(Boolean);
     const proceduralText = [
       `Procedural workflow for ${taskMode} work`,
       likelySkills.length > 0 ? `uses skill path ${likelySkills.join(", ")}` : "",
+      alternativeSkills.length > 0 ? `fallback skills ${alternativeSkills.join(", ")}` : "",
       toolChain.length > 0 ? `tool chain ${toolChain.join(" -> ")}` : "",
       changedArtifacts.length > 0 ? `on ${changedArtifacts.join(", ")}` : "",
       `with outcome ${outcome}`,
+      `retry class ${retryClass}`,
+      suggestedSkill ? `suggested fallback ${suggestedSkill}` : "",
+      shouldEscalate ? `requires escalation ${escalationReason ?? "unknown"}` : "",
       nextImprovement ? `Next improvement: ${nextImprovement}` : "",
     ]
       .filter(Boolean)
@@ -2833,22 +2876,28 @@ function deriveRuntimeSignalCandidates(params: {
       environmentTags: uniqueStrings([
         "runtime:procedural",
         `procedural:outcome:${outcome}`,
+        `procedural:retry:${retryClass}`,
         `task-mode:${taskMode}`,
         ...(toolChain.map((tool) => `tool:${tool}`) ?? []),
+        ...(alternativeSkills.map((skill) => `skill:${skill}`) ?? []),
+        suggestedSkill ? `procedural:suggested-skill:${suggestedSkill}` : "",
+        shouldEscalate ? `procedural:escalate:${escalationReason ?? "unknown"}` : "",
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",
         proceduralExecution.consolidationCandidate === true
           ? "procedural:consolidation-candidate"
           : "",
+        proceduralExecution.nearMissCandidate === true ? "procedural:near-miss" : "",
       ]),
       confidence: outcome === "verified" ? 0.88 : outcome === "partial" ? 0.78 : 0.7,
       strength: outcome === "verified" ? 0.9 : outcome === "partial" ? 0.8 : 0.72,
       importanceClass:
-        outcome === "verified" || likelySkills.length > 0 || toolChain.length > 1
+        outcome === "verified" || likelySkills.length > 0 || toolChain.length > 1 || shouldEscalate
           ? "useful"
           : "temporary",
       trend:
         proceduralExecution.templateCandidate === true ||
-        proceduralExecution.consolidationCandidate === true
+        proceduralExecution.consolidationCandidate === true ||
+        proceduralExecution.nearMissCandidate === true
           ? "rising"
           : "stable",
     });

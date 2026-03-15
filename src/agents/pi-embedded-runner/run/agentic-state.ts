@@ -18,6 +18,18 @@ export type AgenticVerificationOutcome =
   | "failed"
   | "blocked";
 export type AgenticPlannerStatus = "continue" | "needs_replan" | "blocked" | "complete";
+export type AgenticRetryClass =
+  | "same_path_retry"
+  | "skill_fallback"
+  | "environment_fix"
+  | "clarify"
+  | "escalate";
+export type AgenticEscalationReason =
+  | "repeated_failure"
+  | "environment_mismatch"
+  | "missing_information"
+  | "low_confidence"
+  | "unknown";
 export type AgenticFailureClass =
   | "tool_failure"
   | "verification_failure"
@@ -56,6 +68,11 @@ export type AgenticPlannerState = {
   nextAction?: string;
   rationale?: string;
   alternativeSkills: string[];
+  retryClass: AgenticRetryClass;
+  suggestedSkill?: string;
+  shouldEscalate: boolean;
+  escalationReason?: AgenticEscalationReason;
+  remainingRetryBudget?: number;
 };
 
 export type AgenticExecutionState = {
@@ -76,6 +93,10 @@ export type ProceduralExecutionRecord = {
   templateCandidate: boolean;
   consolidationCandidate: boolean;
   nearMissCandidate: boolean;
+  retryClass: AgenticRetryClass;
+  suggestedSkill?: string;
+  shouldEscalate: boolean;
+  escalationReason?: AgenticEscalationReason;
   nextImprovement?: string;
 };
 
@@ -351,6 +372,37 @@ function buildPlannerState(params: {
   const alternativeSkills = (params.availableSkills ?? []).filter(
     (skill) => !likelySkills.includes(skill),
   );
+  const retryFailures = retrySignals.filter((signal) => signal.outcome === "failed");
+  const latestRetrySignal = retrySignals.at(-1);
+  const remainingRetryBudget =
+    typeof latestRetrySignal?.maxAttempts === "number" &&
+    typeof latestRetrySignal.attempt === "number"
+      ? Math.max(0, latestRetrySignal.maxAttempts - latestRetrySignal.attempt)
+      : undefined;
+
+  const dominantFailureClass = params.verificationState.failureClasses[0];
+  const suggestedSkill = alternativeSkills[0];
+  const shouldEscalate =
+    retryFailures.length > 0 ||
+    dominantFailureClass === "environment_mismatch" ||
+    (dominantFailureClass === "missing_information" && alternativeSkills.length === 0);
+  const escalationReason: AgenticEscalationReason | undefined =
+    retryFailures.length > 0
+      ? "repeated_failure"
+      : dominantFailureClass === "environment_mismatch"
+        ? "environment_mismatch"
+        : dominantFailureClass === "missing_information" && alternativeSkills.length === 0
+          ? "missing_information"
+          : params.verificationState.outcome === "blocked"
+            ? "low_confidence"
+            : undefined;
+  const retryClass: AgenticRetryClass = shouldEscalate
+    ? "escalate"
+    : dominantFailureClass === "missing_information"
+      ? "clarify"
+      : suggestedSkill
+        ? "skill_fallback"
+        : "same_path_retry";
   if (checkpointSignals.some((signal) => signal.kind === "completion")) {
     return {
       version: 1,
@@ -358,11 +410,11 @@ function buildPlannerState(params: {
       nextAction: "Confirm final deliverable and prepare handoff or follow-up notes.",
       rationale: "A completion checkpoint was observed in the current execution flow.",
       alternativeSkills: [],
+      retryClass: "same_path_retry",
+      shouldEscalate: false,
     };
   }
   if (params.blockers.length > 0) {
-    const retryFailures = retrySignals.filter((signal) => signal.outcome === "failed");
-    const dominantFailureClass = params.verificationState.failureClasses[0];
     const fallbackHint =
       alternativeSkills.length > 0
         ? ` Consider alternative skills: ${alternativeSkills.slice(0, 3).join(", ")}.`
@@ -370,16 +422,24 @@ function buildPlannerState(params: {
     return {
       version: 1,
       status: retryFailures.length > 0 ? "blocked" : "needs_replan",
-      nextAction:
-        retryFailures.length > 0
-          ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
-          : dominantFailureClass === "verification_failure"
-            ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
-            : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
+      nextAction: shouldEscalate
+        ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
+        : dominantFailureClass === "missing_information"
+          ? "Clarify the missing input or fetch the missing prerequisite before retrying."
+          : suggestedSkill
+            ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${fallbackHint}`.trim()
+            : dominantFailureClass === "verification_failure"
+              ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
+              : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
       rationale: dominantFailureClass
         ? `${dominantFailureClass}: ${params.blockers[0]}`
         : params.blockers[0],
       alternativeSkills,
+      retryClass,
+      suggestedSkill,
+      shouldEscalate,
+      escalationReason,
+      remainingRetryBudget,
     };
   }
   if (params.activeArtifacts.length > 0) {
@@ -392,6 +452,9 @@ function buildPlannerState(params: {
           ? "Recent work has evidence behind it, so the next step is forward progress."
           : "Work is active, but more verification is still needed.",
       alternativeSkills: [],
+      retryClass: "same_path_retry",
+      shouldEscalate: false,
+      remainingRetryBudget,
     };
   }
   return {
@@ -402,6 +465,11 @@ function buildPlannerState(params: {
       : "Clarify or restate the current objective before continuing.",
     rationale: params.verificationState.outcome === "blocked" ? "Execution is blocked." : undefined,
     alternativeSkills,
+    retryClass,
+    suggestedSkill,
+    shouldEscalate,
+    escalationReason,
+    remainingRetryBudget,
   };
 }
 
@@ -522,6 +590,10 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.plannerState.alternativeSkills.length > 0
       ? `Fallback skills to consider: ${state.plannerState.alternativeSkills.slice(0, 3).join(", ")}`
       : undefined;
+  const retryGuidance = `Retry class: ${state.plannerState.retryClass}`;
+  const escalationGuidance = state.plannerState.shouldEscalate
+    ? `Escalation required: ${state.plannerState.escalationReason ?? "unknown"}`
+    : undefined;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -537,6 +609,8 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
       : undefined,
     `Verification state: ${state.verificationState.outcome}`,
     failureGuidance,
+    retryGuidance,
+    escalationGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
     fallbackSkillGuidance,
     antiRepeatGuidance,
@@ -582,6 +656,8 @@ export function buildProceduralExecutionRecord(params: {
   let nextImprovement: string | undefined;
   if (nearMissCandidate && alternativeSkills.length > 0) {
     nextImprovement = `Capture why the primary path fell short and compare it with alternative skills such as ${alternativeSkills.slice(0, 3).join(", ")}.`;
+  } else if (params.plannerState.shouldEscalate) {
+    nextImprovement = `Document why this workflow now requires escalation${params.plannerState.escalationReason ? ` (${params.plannerState.escalationReason})` : ""} before reuse.`;
   } else if (
     params.verificationState.outcome === "failed" ||
     params.verificationState.outcome === "blocked"
@@ -609,6 +685,10 @@ export function buildProceduralExecutionRecord(params: {
     templateCandidate,
     consolidationCandidate,
     nearMissCandidate,
+    retryClass: params.plannerState.retryClass,
+    suggestedSkill: params.plannerState.suggestedSkill,
+    shouldEscalate: params.plannerState.shouldEscalate,
+    escalationReason: params.plannerState.escalationReason,
     nextImprovement,
   };
 }

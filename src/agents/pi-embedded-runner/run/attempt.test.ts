@@ -1311,11 +1311,69 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
     expect(runtimeContext.plannerState).toMatchObject({
       status: "continue",
+      retryClass: "same_path_retry",
+      shouldEscalate: false,
     });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       availableSkills: expect.arrayContaining(["typescript-build-fix"]),
       toolChain: expect.arrayContaining(["exec"]),
       outcome: "verified",
+      retryClass: "same_path_retry",
+    });
+  });
+
+  it("captures retry class and escalation guidance for fallback-worthy failures", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [
+            { name: "memory-diagnostics", primaryEnv: "node" },
+            { name: "acceptance-report", primaryEnv: "node" },
+          ],
+        },
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow and stop the failing validation path.",
+          timestamp: Date.now(),
+        } as never,
+        {
+          role: "toolResult",
+          toolName: "exec",
+          isError: true,
+          content: "Validation failed again for the diagnostics workflow.",
+          timestamp: Date.now(),
+        } as never,
+      ],
+    });
+
+    expect(runtimeContext.plannerState).toMatchObject({
+      status: "needs_replan",
+      retryClass: "skill_fallback",
+      suggestedSkill: "acceptance-report",
+      shouldEscalate: false,
+    });
+    expect(runtimeContext.proceduralExecution).toMatchObject({
+      nearMissCandidate: true,
+      retryClass: "skill_fallback",
+      suggestedSkill: "acceptance-report",
+      shouldEscalate: false,
     });
   });
 

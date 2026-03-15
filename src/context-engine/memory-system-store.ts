@@ -397,6 +397,7 @@ export type MemoryAgenticTrendReport = {
   effectiveSkills: string[];
   effectiveFamilies: string[];
   weakeningSkills: string[];
+  recoveringSkills: string[];
   latestSummaries: string[];
   trend: "stable" | "watch" | "regressing";
   summary: string;
@@ -836,7 +837,7 @@ function inferSkillFamilyFromName(skill: string): string {
   return parts[0] ?? normalized;
 }
 
-function deriveSkillEffectivenessGuidance(entries: LongTermMemoryEntry[]): Array<{
+type ProceduralSkillSignal = {
   skill: string;
   family: string;
   taskMode: string;
@@ -844,21 +845,11 @@ function deriveSkillEffectivenessGuidance(entries: LongTermMemoryEntry[]): Array
   env: string;
   validation: string;
   score: number;
-  evidenceCount: number;
-}> {
-  const scores = new Map<
-    string,
-    {
-      skill: string;
-      family: string;
-      taskMode: string;
-      workspaceKind: string;
-      env: string;
-      validation: string;
-      score: number;
-      evidenceCount: number;
-    }
-  >();
+  updatedAt: number;
+};
+
+function collectProceduralSkillSignals(entries: LongTermMemoryEntry[]): ProceduralSkillSignal[] {
+  const signals: ProceduralSkillSignal[] = [];
   for (const entry of entries) {
     const rankedSkills = (entry.environmentTags ?? [])
       .filter((tag) => tag.startsWith("procedural:ranked-skill:"))
@@ -932,23 +923,67 @@ function deriveSkillEffectivenessGuidance(entries: LongTermMemoryEntry[]): Array
       : 0;
     const baseScore =
       outcomeWeight + goalWeight + fallbackPenalty + escalationPenalty + nearMissPenalty;
+    const updatedAt = entry.updatedAt ?? entry.createdAt ?? 0;
     for (const skill of candidateSkills) {
-      const family = inferSkillFamilyFromName(skill);
-      const key = [skill, taskMode, workspaceKind, env, validation].join("|");
-      const bucket = scores.get(key) ?? {
+      signals.push({
         skill,
-        family,
+        family: inferSkillFamilyFromName(skill),
         taskMode,
         workspaceKind,
         env,
         validation,
-        score: 0,
-        evidenceCount: 0,
-      };
-      bucket.score += baseScore;
-      bucket.evidenceCount += 1;
-      scores.set(key, bucket);
+        score: baseScore,
+        updatedAt,
+      });
     }
+  }
+  return signals;
+}
+
+function deriveSkillEffectivenessGuidance(entries: LongTermMemoryEntry[]): Array<{
+  skill: string;
+  family: string;
+  taskMode: string;
+  workspaceKind: string;
+  env: string;
+  validation: string;
+  score: number;
+  evidenceCount: number;
+}> {
+  const scores = new Map<
+    string,
+    {
+      skill: string;
+      family: string;
+      taskMode: string;
+      workspaceKind: string;
+      env: string;
+      validation: string;
+      score: number;
+      evidenceCount: number;
+    }
+  >();
+  for (const signal of collectProceduralSkillSignals(entries)) {
+    const key = [
+      signal.skill,
+      signal.taskMode,
+      signal.workspaceKind,
+      signal.env,
+      signal.validation,
+    ].join("|");
+    const bucket = scores.get(key) ?? {
+      skill: signal.skill,
+      family: signal.family,
+      taskMode: signal.taskMode,
+      workspaceKind: signal.workspaceKind,
+      env: signal.env,
+      validation: signal.validation,
+      score: 0,
+      evidenceCount: 0,
+    };
+    bucket.score += signal.score;
+    bucket.evidenceCount += 1;
+    scores.set(key, bucket);
   }
   return [...scores.values()]
     .map((value) => ({
@@ -966,6 +1001,24 @@ function deriveSkillEffectivenessGuidance(entries: LongTermMemoryEntry[]): Array
         b.score - a.score || b.evidenceCount - a.evidenceCount || a.skill.localeCompare(b.skill),
     )
     .slice(0, 6);
+}
+
+function deriveRecoveringScopedSkills(entries: LongTermMemoryEntry[]): string[] {
+  const signalsByKey = new Map<string, ProceduralSkillSignal[]>();
+  for (const signal of collectProceduralSkillSignals(entries)) {
+    const key = `${signal.skill}@${signal.taskMode}/${signal.env}`;
+    const bucket = signalsByKey.get(key) ?? [];
+    bucket.push(signal);
+    signalsByKey.set(key, bucket);
+  }
+  return [...signalsByKey.entries()]
+    .flatMap(([key, signals]) => {
+      const sortedSignals = signals.toSorted((a, b) => b.updatedAt - a.updatedAt);
+      const latestSignal = sortedSignals[0];
+      const earlierNegative = sortedSignals.slice(1).some((signal) => signal.score < 0);
+      return latestSignal && latestSignal.score > 0 && earlierNegative ? [key] : [];
+    })
+    .slice(0, 3);
 }
 
 function normalizeComparable(text: string): string {
@@ -8095,6 +8148,7 @@ function inspectMemoryAgenticTrends(
     .filter((item) => item.score <= -0.5)
     .slice(0, 3)
     .map((item) => `${item.skill}@${item.taskMode}/${item.env}`);
+  const recoveringSkills = deriveRecoveringScopedSkills(proceduralEntries);
   const latestSummaries = agenticEntries.slice(0, 3).map((entry) => clipText(entry.text, 160));
   const trend =
     failingQualityGateSignals > 0 || failingSoakSignals > 0
@@ -8115,6 +8169,7 @@ function inspectMemoryAgenticTrends(
     effectiveSkills,
     effectiveFamilies,
     weakeningSkills,
+    recoveringSkills,
     latestSummaries,
     trend,
     summary: clipText(
@@ -8127,6 +8182,7 @@ function inspectMemoryAgenticTrends(
         `quality_failures=${failingQualityGateSignals}`,
         effectiveSkills.length > 0 ? `effective=${effectiveSkills.join(",")}` : "",
         weakeningSkills.length > 0 ? `weakening=${weakeningSkills.join(",")}` : "",
+        recoveringSkills.length > 0 ? `recovering=${recoveringSkills.join(",")}` : "",
         qualityFailureReasons.length > 0 ? `reasons=${qualityFailureReasons.join(",")}` : "",
       ]
         .filter(Boolean)
@@ -8206,6 +8262,11 @@ export async function generateMemoryDiagnosticsReport(params: {
     ...(agenticTrends?.weakeningSkills.length
       ? ["review weakening scoped skills before extending or promoting the current workflow family"]
       : []),
+    ...(agenticTrends?.recoveringSkills.length
+      ? [
+          "confirm recovering scoped skills stay stable before promoting the recovered workflow family",
+        ]
+      : []),
   ]);
   const summary = clipText(
     [
@@ -8261,6 +8322,11 @@ export function formatMemoryDiagnosticsReport(
       if (report.agenticTrends.weakeningSkills.length > 0) {
         lines.push(`agentic_weakening_skills: ${report.agenticTrends.weakeningSkills.join(", ")}`);
       }
+      if (report.agenticTrends.recoveringSkills.length > 0) {
+        lines.push(
+          `agentic_recovering_skills: ${report.agenticTrends.recoveringSkills.join(", ")}`,
+        );
+      }
     }
     if (report.failedAcceptanceScenarios.length > 0) {
       lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
@@ -8312,6 +8378,7 @@ export function formatMemoryDiagnosticsReport(
       `- Effective skills: ${report.agenticTrends.effectiveSkills.length > 0 ? report.agenticTrends.effectiveSkills.join(", ") : "none"}`,
       `- Effective families: ${report.agenticTrends.effectiveFamilies.length > 0 ? report.agenticTrends.effectiveFamilies.join(", ") : "none"}`,
       `- Weakening skills: ${report.agenticTrends.weakeningSkills.length > 0 ? report.agenticTrends.weakeningSkills.join(", ") : "none"}`,
+      `- Recovering skills: ${report.agenticTrends.recoveringSkills.length > 0 ? report.agenticTrends.recoveringSkills.join(", ") : "none"}`,
       `- Latest summaries: ${report.agenticTrends.latestSummaries.length > 0 ? report.agenticTrends.latestSummaries.join("; ") : "none"}`,
       "",
     );

@@ -440,4 +440,33 @@ describe("memory system evaluation scenarios", () => {
       ),
     ).toBe(false);
   });
+
+  it("converges memories through entity aliases like branch and artifact basename", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-entity-alias-convergence",
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-entity-alias-convergence",
+      previous: first,
+      messages: [
+        userMessage(
+          "The permanent path in memory-system.ts on branch feature/memory-v2 should be used.",
+        ),
+      ],
+    });
+
+    const merged = second.longTermMemory.find((entry) => entry.id === first.longTermMemory[0]?.id);
+    expect(merged).toBeTruthy();
+    expect(merged?.entityAliases).toContain("feature/memory-v2");
+    expect(merged?.entityAliases).toContain("memory-system.ts");
+    expect(merged?.conceptAliases.length).toBeGreaterThan(1);
+  });
 });

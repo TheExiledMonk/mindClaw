@@ -2302,6 +2302,46 @@ describe("MemorySystemContextEngine", () => {
     expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(4);
   });
 
+  it("materializes entity aliases from scope, artifact, and branch context", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-entity-aliases-"));
+    const sessionId = "agent:entity-aliases";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const loaded = await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+    const durable = loaded.longTermMemory[0];
+
+    expect(durable?.entityAliases).toContain("profile-a");
+    expect(durable?.entityAliases).toContain("feature/memory-v2");
+    expect(durable?.entityAliases).toContain("memory-system.ts");
+  });
+
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-revisions-"));
     const sessionId = "agent:sqlite-revisions";

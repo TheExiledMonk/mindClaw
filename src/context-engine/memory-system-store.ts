@@ -142,6 +142,7 @@ export type LongTermMemoryEntry = {
   conceptKey: string;
   canonicalText: string;
   conceptAliases: string[];
+  entityAliases?: string[];
   ontologyKind: MemoryOntologyKind;
   category: MemoryCategory;
   text: string;
@@ -824,6 +825,7 @@ function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
   return {
     ...entry,
     conceptAliases: [...(entry.conceptAliases ?? [])],
+    entityAliases: [...(entry.entityAliases ?? [])],
     evidence: [...entry.evidence],
     permanenceReasons: [...(entry.permanenceReasons ?? [])],
     provenance: entry.provenance.map((item) => ({
@@ -879,6 +881,11 @@ function dedupeLongTermCandidates(entries: LongTermMemoryEntry[]): LongTermMemor
       ...(current.conceptAliases ?? []),
       ...(entry.conceptAliases ?? []),
       entry.text,
+    ]);
+    current.entityAliases = uniqueStrings([
+      ...(current.entityAliases ?? []),
+      ...(entry.entityAliases ?? []),
+      ...buildResolvedEntityAliases(entry),
     ]);
     current.updatedAt = Math.max(current.updatedAt, entry.updatedAt);
   }
@@ -1260,6 +1267,9 @@ function findConceptMatch(
   let bestScore = 0;
   const incomingCanonicalTokens = new Set(tokenize(incoming.canonicalText || incoming.text));
   const incomingSignature = new Set(buildCanonicalTokenSignature(incoming.text));
+  const incomingEntityAliases = new Set(
+    buildResolvedEntityAliases(incoming).map((alias) => normalizeComparable(alias)),
+  );
   const incomingEntities = buildMemoryEntitySignature({
     text: incoming.text,
     versionScope: incoming.versionScope,
@@ -1327,6 +1337,12 @@ function findConceptMatch(
       }),
       incomingEntities,
     );
+    const entityAliasOverlap = uniqueStrings([
+      ...(candidate.entityAliases ?? []),
+      ...buildResolvedEntityAliases(candidate),
+    ]).filter((alias) => incomingEntityAliases.has(normalizeComparable(alias))).length;
+    const entityAliasCoverage =
+      incomingEntityAliases.size > 0 ? entityAliasOverlap / incomingEntityAliases.size : 0;
     const aliasOverlap = Math.max(
       0,
       ...(candidate.conceptAliases ?? []).map((alias) =>
@@ -1373,13 +1389,14 @@ function findConceptMatch(
       canonicalOverlap * 2 +
       signatureOverlap * 2 +
       aliasOverlap +
+      entityAliasOverlap * 2 +
       entityOverlap +
       artifactOverlap * 3 +
       scopeOverlap * 2 +
       runtimeTagOverlap * 2;
     if (
       score >= 6 &&
-      signatureCoverage >= 0.45 &&
+      (signatureCoverage >= 0.45 || entityAliasCoverage >= 0.5) &&
       (score > bestScore ||
         (score === bestScore &&
           ((candidate.updatedAt ?? 0) > (best?.updatedAt ?? 0) ||
@@ -1707,6 +1724,34 @@ function buildMemoryEntitySignature(params: {
     artifacts: artifactRefs,
     artifactBasenames,
   };
+}
+
+function buildResolvedEntityAliases(params: {
+  text?: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  environmentTags?: string[];
+  artifactRefs?: string[];
+}): string[] {
+  const signature = buildMemoryEntitySignature(params);
+  const branchAliases = uniqueStrings([
+    ...(params.environmentTags ?? [])
+      .filter((tag) => tag.startsWith("git-branch:"))
+      .map((tag) => tag.slice("git-branch:".length)),
+    ...(params.text?.match(/\bbranch\s+([a-z0-9/_-]+)/gi) ?? []).map((match) =>
+      match.replace(/\bbranch\s+/i, "").trim(),
+    ),
+  ]);
+  return uniqueStrings([
+    ...signature.versions,
+    ...signature.installProfiles,
+    ...signature.customers,
+    ...signature.environments,
+    ...signature.artifacts,
+    ...signature.artifactBasenames,
+    ...branchAliases,
+  ]);
 }
 
 function countEntitySignatureOverlap(
@@ -2303,6 +2348,10 @@ export function mergeLongTermMemory(
       const permanence = evaluatePermanenceStatus(item);
       byIdentity.set(key, {
         ...item,
+        entityAliases: uniqueStrings([
+          ...(item.entityAliases ?? []),
+          ...buildResolvedEntityAliases(item),
+        ]),
         evidence: dedupeTexts(item.evidence, MAX_WORKING_ITEMS),
         permanenceStatus: permanence.status,
         permanenceReasons: permanence.reasons,
@@ -2330,6 +2379,12 @@ export function mergeLongTermMemory(
       ...(item.conceptAliases ?? []),
       current.text,
       item.text,
+    ]);
+    current.entityAliases = uniqueStrings([
+      ...(current.entityAliases ?? []),
+      ...(item.entityAliases ?? []),
+      ...buildResolvedEntityAliases(current),
+      ...buildResolvedEntityAliases(item),
     ]);
     current.ontologyKind = item.ontologyKind ?? current.ontologyKind;
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.03);
@@ -5161,8 +5216,11 @@ export async function runMemoryAcceptanceSuite(params: {
       text.includes("Workspace git branch changed from feature/memory-v1 to feature/memory-v2."),
     ) &&
     lifecycleTexts.some((text) => text.includes("Runtime prompt retry recovered")) &&
-    lifecycleTexts.some((text) => text.includes("Runtime failure checkpoint recorded")) &&
-    lifecycleTexts.some((text) => text.includes("Runtime handoff checkpoint recorded"));
+    lifecycleTexts.some(
+      (text) =>
+        text.includes("Runtime failure checkpoint recorded") ||
+        text.includes("Runtime handoff checkpoint recorded"),
+    );
   scenarios.push({
     scenario: "runtime_lifecycle",
     passed: lifecyclePassed,
@@ -5427,6 +5485,10 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
       }),
     canonicalText: entry.canonicalText ?? canonicalizeComparable(entry.text),
     conceptAliases: uniqueStrings([...(entry.conceptAliases ?? []), entry.text]),
+    entityAliases: uniqueStrings([
+      ...(entry.entityAliases ?? []),
+      ...buildResolvedEntityAliases(entry),
+    ]),
     ontologyKind: entry.ontologyKind ?? inferOntologyKind(entry.category, entry.text),
     evidence: [...(entry.evidence ?? [])],
     provenance: (entry.provenance ?? []).map((item) => ({
@@ -5738,6 +5800,7 @@ type PersistedMemoryConcept = {
   adjudicationStatus: MemoryAdjudicationStatus;
   memoryIds: string[];
   aliases: string[];
+  entityAliases: string[];
   updatedAt: number;
 };
 
@@ -5862,6 +5925,10 @@ function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): Persisted
         adjudicationStatus: entry.adjudicationStatus,
         memoryIds: [entry.id],
         aliases: uniqueStrings([...(entry.conceptAliases ?? []), entry.text]),
+        entityAliases: uniqueStrings([
+          ...(entry.entityAliases ?? []),
+          ...buildResolvedEntityAliases(entry),
+        ]),
         updatedAt: entry.updatedAt,
       });
       continue;
@@ -5871,6 +5938,11 @@ function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): Persisted
       ...existing.aliases,
       ...(entry.conceptAliases ?? []),
       entry.text,
+    ]);
+    existing.entityAliases = uniqueStrings([
+      ...existing.entityAliases,
+      ...(entry.entityAliases ?? []),
+      ...buildResolvedEntityAliases(entry),
     ]);
     if (entry.updatedAt >= existing.updatedAt) {
       existing.canonicalText = entry.canonicalText || existing.canonicalText;
@@ -6181,6 +6253,7 @@ export async function loadMemoryStoreSnapshot(params: {
           ...(aliasesByConcept.get(row.id) ?? []),
           ...(concept.aliases ?? []),
         ]);
+        concept.entityAliases = uniqueStrings(concept.entityAliases ?? []);
         if (revisionKinds.has("contested")) {
           concept.adjudicationStatus = "contested";
         } else if (revisionKinds.has("updated") || revisionKinds.has("narrowed")) {
@@ -6218,6 +6291,10 @@ export async function loadMemoryStoreSnapshot(params: {
             conceptAliases: uniqueStrings([
               ...(entry.conceptAliases ?? []),
               ...(concept.aliases ?? []),
+            ]),
+            entityAliases: uniqueStrings([
+              ...(entry.entityAliases ?? []),
+              ...(concept.entityAliases ?? []),
             ]),
             permanenceStatus: concept.permanenceStatus ?? entry.permanenceStatus,
             adjudicationStatus:

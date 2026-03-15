@@ -315,6 +315,22 @@ export type MemoryRetrievalObservabilityReport = {
   summary: string;
 };
 
+export type MemoryAcceptanceScenarioResult = {
+  scenario: "drift_stability" | "scope_isolation" | "contested_visibility" | "backend_parity";
+  passed: boolean;
+  summary: string;
+  details: string[];
+};
+
+export type MemoryAcceptanceReport = {
+  passed: boolean;
+  scenarioCount: number;
+  passedCount: number;
+  failedCount: number;
+  scenarios: MemoryAcceptanceScenarioResult[];
+  summary: string;
+};
+
 type MemoryStorePaths = {
   rootDir: string;
   sessionsDir: string;
@@ -4877,6 +4893,201 @@ export function inspectMemoryRetrievalObservability(
     topReasons,
     summary,
   };
+}
+
+export async function runMemoryAcceptanceSuite(params: {
+  workspaceDir: string;
+  sessionIdPrefix?: string;
+  backendKinds?: MemoryStoreBackendKind[];
+}): Promise<MemoryAcceptanceReport> {
+  const sessionIdPrefix = params.sessionIdPrefix ?? "acceptance";
+  const backendKinds = params.backendKinds ?? ["fs-json", "sqlite-graph"];
+  const scenarios: MemoryAcceptanceScenarioResult[] = [];
+
+  const driftTurns = [
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+    "The permanent path for the memory system in src/context-engine/memory-system.ts should be used.",
+    "We need to use the permanent memory-system path in src/context-engine/memory-system.ts.",
+    "The required path for memory-system integration in src/context-engine/memory-system.ts is the permanent one.",
+    "Use that permanent memory-system path in src/context-engine/memory-system.ts for this rollout.",
+    "The permanent path in src/context-engine/memory-system.ts is the path we should continue with.",
+  ];
+  let driftCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:drift`,
+    messages: [userMessageForSuite(driftTurns[0])],
+  });
+  for (const turn of driftTurns.slice(1)) {
+    driftCompiled = compileMemoryState({
+      sessionId: `${sessionIdPrefix}:drift`,
+      previous: driftCompiled,
+      messages: [userMessageForSuite(turn)],
+    });
+  }
+  const driftConstraints = driftCompiled.longTermMemory.filter(
+    (entry) =>
+      entry.ontologyKind === "constraint" &&
+      entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+  );
+  const driftConceptCount = new Set(driftConstraints.map((entry) => entry.conceptKey)).size;
+  scenarios.push({
+    scenario: "drift_stability",
+    passed: driftConstraints.length > 0 && driftConceptCount === 1,
+    summary: `drift constraints=${driftConstraints.length} concepts=${driftConceptCount}`,
+    details: driftConstraints.map(
+      (entry) => `${entry.id}:${entry.conceptKey}:${entry.conceptAliases.length}`,
+    ),
+  });
+
+  const scopeTurns = [
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+    "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-b.",
+    "For install profile profile-a, continue using the permanent memory-system path in src/context-engine/memory-system.ts.",
+    "For install profile profile-b, the permanent memory-system path in src/context-engine/memory-system.ts should be used.",
+  ];
+  let scopeCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:scope`,
+    messages: [userMessageForSuite(scopeTurns[0])],
+  });
+  for (const turn of scopeTurns.slice(1)) {
+    scopeCompiled = compileMemoryState({
+      sessionId: `${sessionIdPrefix}:scope`,
+      previous: scopeCompiled,
+      messages: [userMessageForSuite(turn)],
+    });
+  }
+  const scopePacket = retrieveMemoryContextPacket(scopeCompiled, {
+    messages: [
+      userMessageForSuite(
+        "For install profile profile-b, use the permanent memory-system path in src/context-engine/memory-system.ts.",
+      ),
+    ],
+  });
+  const leakedScopeItems = scopePacket.retrievalItems.filter(
+    (item) => item.reason.includes("profile=profile-a") && item.text.includes("profile-a"),
+  );
+  scenarios.push({
+    scenario: "scope_isolation",
+    passed: leakedScopeItems.length === 0,
+    summary: `scope query returned ${scopePacket.retrievalItems.length} items; leaked=${leakedScopeItems.length}`,
+    details: scopePacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
+  const contestedFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:contested`,
+    messages: [
+      userMessageForSuite(
+        "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+      ),
+    ],
+  });
+  const contestedSecond = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:contested`,
+    previous: contestedFirst,
+    messages: [
+      userMessageForSuite(
+        "Do not use the permanent memory-system path in src/context-engine/memory-system.ts.",
+      ),
+    ],
+  });
+  const contestedPacket = retrieveMemoryContextPacket(contestedSecond, {
+    messages: [
+      userMessageForSuite(
+        "What should we do with the permanent memory-system path in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const contestedVisible = contestedPacket.retrievalItems.some(
+    (item) => item.reason.includes("adjudication=contested") || item.kind === "contradiction",
+  );
+  scenarios.push({
+    scenario: "contested_visibility",
+    passed: contestedVisible,
+    summary: `contested retrieval visible=${contestedVisible}`,
+    details: contestedPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
+  const parityCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:parity`,
+    messages: [
+      userMessageForSuite(
+        "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+      ),
+      userMessageForSuite(
+        "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-a.",
+      ),
+    ],
+  });
+  const paritySessionId = `${sessionIdPrefix}:parity-store`;
+  const paritySnapshots: Array<{ backend: MemoryStoreBackendKind; snapshot: MemoryStoreSnapshot }> =
+    [];
+  for (const backendKind of backendKinds) {
+    await persistMemoryStoreSnapshot({
+      workspaceDir: params.workspaceDir,
+      sessionId: `${paritySessionId}:${backendKind}`,
+      backendKind,
+      workingMemory: parityCompiled.workingMemory,
+      longTermMemory: parityCompiled.longTermMemory,
+      pendingSignificance: parityCompiled.pendingSignificance,
+      permanentMemory: parityCompiled.permanentMemory,
+      graph: parityCompiled.graph,
+    });
+    const loaded = await loadMemoryStoreSnapshot({
+      workspaceDir: params.workspaceDir,
+      sessionId: `${paritySessionId}:${backendKind}`,
+      backendKind,
+    });
+    paritySnapshots.push({ backend: backendKind, snapshot: loaded });
+  }
+  const parityReference = paritySnapshots[0];
+  const parityPassed = paritySnapshots.every(({ snapshot }) => {
+    const refConcepts = new Set(
+      parityReference.snapshot.longTermMemory.map((entry) => entry.conceptKey),
+    );
+    const currentConcepts = new Set(snapshot.longTermMemory.map((entry) => entry.conceptKey));
+    return (
+      snapshot.longTermMemory.length === parityReference.snapshot.longTermMemory.length &&
+      snapshot.pendingSignificance.length === parityReference.snapshot.pendingSignificance.length &&
+      snapshot.graph.nodes.length === parityReference.snapshot.graph.nodes.length &&
+      snapshot.graph.edges.length === parityReference.snapshot.graph.edges.length &&
+      refConcepts.size === currentConcepts.size &&
+      [...refConcepts].every((item) => currentConcepts.has(item))
+    );
+  });
+  scenarios.push({
+    scenario: "backend_parity",
+    passed: parityPassed,
+    summary: `backends=${backendKinds.join(",")} parity=${parityPassed}`,
+    details: paritySnapshots.map(
+      ({ backend, snapshot }) =>
+        `${backend}: long-term=${snapshot.longTermMemory.length} pending=${snapshot.pendingSignificance.length} graph=${snapshot.graph.nodes.length}/${snapshot.graph.edges.length}`,
+    ),
+  });
+
+  const passedCount = scenarios.filter((scenario) => scenario.passed).length;
+  const failedCount = scenarios.length - passedCount;
+  return {
+    passed: failedCount === 0,
+    scenarioCount: scenarios.length,
+    passedCount,
+    failedCount,
+    scenarios,
+    summary: clipText(
+      `acceptance scenarios=${scenarios.length} passed=${passedCount} failed=${failedCount}`,
+      220,
+    ),
+  };
+}
+
+function userMessageForSuite(content: string): AgentMessage {
+  return {
+    role: "user",
+    content,
+    timestamp: Date.now(),
+  } as AgentMessage;
 }
 
 export function runMemorySleepReview(params: {

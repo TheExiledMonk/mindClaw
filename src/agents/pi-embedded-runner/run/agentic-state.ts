@@ -7477,6 +7477,10 @@ export function runAgenticQualityGate(params?: {
     (!params?.failOnWeakeningSkills || weakeningSkills.length === 0) &&
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
   const soakClarificationProfile = soak.dominantClarificationProfile ?? "none";
+  const soakClarificationTrends = soak.clarificationTrendSignals ?? [];
+  const risingClarificationTrend = soakClarificationTrends.find((trend) =>
+    trend.includes(":rising("),
+  );
   const recommendations = uniqueCompact(
     [
       diagnostics.autonomyMode === "approval_required"
@@ -7498,6 +7502,9 @@ export function runAgenticQualityGate(params?: {
       soakClarificationProfile !== "mixed" &&
       clarificationProfile !== soakClarificationProfile
         ? `Current clarification blocker differs from long-run blocker mix: current=${clarificationProfile} soak=${soakClarificationProfile}.`
+        : undefined,
+      risingClarificationTrend
+        ? `Long-run clarification blocker trend is rising: ${risingClarificationTrend}.`
         : undefined,
       diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"
         ? "Capture an observed validation command before allowing another retry on project work."
@@ -7563,12 +7570,14 @@ export function formatAgenticQualityGateReport(
   if (format === "summary") {
     const soakClarificationProfile = report.soak.dominantClarificationProfile ?? "none";
     const soakClarificationMix = report.soak.clarificationProfileCounts ?? [];
+    const soakClarificationTrends = report.soak.clarificationTrendSignals ?? [];
     const lines = [
       report.summary,
       `acceptance=${report.acceptance.summary}`,
       `soak=${report.soak.summary}`,
       `soak_clarification_profile=${soakClarificationProfile}`,
       `soak_clarification_mix=${soakClarificationMix.length > 0 ? soakClarificationMix.join(",") : "none"}`,
+      `soak_clarification_trends=${soakClarificationTrends.length > 0 ? soakClarificationTrends.join(",") : "none"}`,
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
@@ -7585,6 +7594,7 @@ export function formatAgenticQualityGateReport(
   }
   const soakClarificationProfile = report.soak.dominantClarificationProfile ?? "none";
   const soakClarificationMix = report.soak.clarificationProfileCounts ?? [];
+  const soakClarificationTrends = report.soak.clarificationTrendSignals ?? [];
   const lines = [
     "# Agentic Quality Gate Report",
     "",
@@ -7601,6 +7611,7 @@ export function formatAgenticQualityGateReport(
     `- Passed: ${report.soakPassed ? "yes" : "no"}`,
     `- Clarification profile: ${soakClarificationProfile}`,
     `- Clarification mix: ${soakClarificationMix.length > 0 ? soakClarificationMix.join(", ") : "none"}`,
+    `- Clarification trends: ${soakClarificationTrends.length > 0 ? soakClarificationTrends.join(", ") : "none"}`,
     "",
     "## Diagnostics",
     `- Summary: ${report.diagnostics.summary}`,

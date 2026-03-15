@@ -93,6 +93,9 @@ describe("agentic quality gate", () => {
       "soak_clarification_profile=",
     );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("soak_clarification_mix=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_trends=",
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -109,6 +112,7 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Effectiveness");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification profile:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification mix:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification trends:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Template-ready families:",
@@ -624,6 +628,7 @@ describe("agentic quality gate", () => {
         scenarios: [],
         clarificationProfileCounts: ["environment_variable:3", "approval:1"],
         dominantClarificationProfile: "environment_variable",
+        clarificationTrendSignals: ["environment_variable:falling(2->1)", "approval:rising(0->1)"],
         summary: "agentic soak 0/0 passed",
       },
     });
@@ -631,11 +636,17 @@ describe("agentic quality gate", () => {
     expect(report.recommendations).toContain(
       "Current clarification blocker differs from long-run blocker mix: current=approval soak=environment_variable.",
     );
+    expect(report.recommendations).toContain(
+      "Long-run clarification blocker trend is rising: approval:rising(0->1).",
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_clarification_profile=environment_variable",
     );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_clarification_mix=environment_variable:3,approval:1",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_trends=environment_variable:falling(2->1),approval:rising(0->1)",
     );
   });
 

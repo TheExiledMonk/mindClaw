@@ -1670,13 +1670,83 @@ describe("MemorySystemContextEngine", () => {
       const aliasCount = db
         .prepare("SELECT COUNT(*) AS count FROM memory_concept_aliases WHERE session_id = ?")
         .get(sessionId) as { count: number };
+      const revisionCount = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_revisions WHERE session_id = ?")
+        .get(sessionId) as { count: number };
       const conceptRow = db
         .prepare("SELECT canonical_text FROM memory_concepts WHERE session_id = ? LIMIT 1")
         .get(sessionId) as { canonical_text: string } | undefined;
 
       expect(conceptCount.count).toBeGreaterThan(0);
       expect(aliasCount.count).toBeGreaterThan(0);
+      expect(revisionCount.count).toBeGreaterThan(0);
       expect(conceptRow?.canonical_text).toBeTruthy();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists contested and superseded revision history rows in sqlite-graph", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-revisions-"));
+    const sessionId = "agent:sqlite-revisions";
+    const snapshot = compileMemoryState({
+      sessionId,
+      previous: {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId,
+          messages: [],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-old-revision",
+            category: "decision",
+            text: "Use the old memory-system workaround for src/context-engine/memory-system.ts.",
+            updatedAt: Date.now() - 1000 * 60 * 60,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the old workaround.",
+        ),
+        userMessage(
+          "Do not use the permanent memory-system path in src/context-engine/memory-system.ts when debugging old transcripts.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      const contested = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_revisions WHERE session_id = ? AND adjudication_status = 'contested'",
+        )
+        .get(sessionId) as { count: number };
+      const superseded = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_revisions WHERE session_id = ? AND active_status = 'superseded'",
+        )
+        .get(sessionId) as { count: number };
+
+      expect(contested.count).toBeGreaterThan(0);
+      expect(superseded.count).toBeGreaterThan(0);
     } finally {
       db.close();
     }

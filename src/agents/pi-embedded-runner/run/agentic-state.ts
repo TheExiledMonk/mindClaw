@@ -383,6 +383,7 @@ export type AgenticSoakReport = {
   clarificationProfileCounts?: string[];
   dominantClarificationProfile?: AgenticQualityGateReport["clarificationProfile"];
   clarificationTrendSignals?: string[];
+  clarificationTrendPolicy?: AgenticQualityGateReport["clarificationTrendPolicy"];
   summary: string;
 };
 
@@ -5866,7 +5867,9 @@ function buildSoakPhaseResult(params: {
   };
 }
 
-export function runAgenticSoakSuite(): AgenticSoakReport {
+export function runAgenticSoakSuite(params?: {
+  failOnClarificationTrend?: boolean;
+}): AgenticSoakReport {
   const scenarios: AgenticSoakScenarioResult[] = [];
 
   {
@@ -7420,6 +7423,9 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
   );
   const clarificationSummary = summarizeClarificationProfiles(clarificationProfiles);
   const clarificationTrendSignals = summarizeClarificationProfileTrends(clarificationProfiles);
+  const hasRisingClarificationTrend = clarificationTrendSignals.some((trend) =>
+    trend.includes(":rising("),
+  );
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7429,6 +7435,11 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     clarificationProfileCounts: clarificationSummary.counts,
     dominantClarificationProfile: clarificationSummary.dominantProfile,
     clarificationTrendSignals,
+    clarificationTrendPolicy: !hasRisingClarificationTrend
+      ? "none"
+      : params?.failOnClarificationTrend
+        ? "blocking"
+        : "observe",
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7448,6 +7459,7 @@ export function formatAgenticSoakReport(
       `clarification_profile=${report.dominantClarificationProfile ?? "none"}`,
       `clarification_mix=${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(",") : "none"}`,
       `clarification_trends=${clarificationTrendSignals.length > 0 ? clarificationTrendSignals.join(",") : "none"}`,
+      `clarification_trend_policy=${report.clarificationTrendPolicy ?? "none"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
@@ -7466,6 +7478,7 @@ export function formatAgenticSoakReport(
     `Dominant clarification profile: ${report.dominantClarificationProfile ?? "none"}`,
     `Clarification mix: ${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(", ") : "none"}`,
     `Clarification trends: ${clarificationTrendSignals.length > 0 ? clarificationTrendSignals.join(", ") : "none"}`,
+    `Clarification trend policy: ${report.clarificationTrendPolicy ?? "none"}`,
     "",
     ...report.scenarios.flatMap((scenario) => [
       `## ${scenario.id}`,

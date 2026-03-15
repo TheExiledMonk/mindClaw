@@ -14,6 +14,7 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendSignals).toContain("environment_variable:steady(1->1)");
     expect(report.clarificationTrendSignals).toContain("approval:steady(1->1)");
     expect(report.clarificationTrendSignals).toContain("external_input:rising(0->1)");
+    expect(report.clarificationTrendPolicy).toBe("observe");
 
     const retryLifecycle = report.scenarios.find(
       (scenario) => scenario.id === "retry_replan_recover_complete",
@@ -155,13 +156,33 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain("clarification_profile=mixed");
     expect(formatAgenticSoakReport(report, "summary")).toContain("clarification_mix=");
     expect(formatAgenticSoakReport(report, "summary")).toContain("clarification_trends=");
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "clarification_trend_policy=observe",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain("# Agentic Soak Report");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Dominant clarification profile: mixed",
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain("Clarification trends:");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Clarification trend policy: observe",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "## retry_replan_recover_complete",
+    );
+  });
+
+  it("can mark soak clarification trend policy as blocking when trend gating is enabled", () => {
+    const report = runAgenticSoakSuite({
+      failOnClarificationTrend: true,
+    });
+
+    expect(report.clarificationTrendPolicy).toBe("blocking");
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "clarification_trend_policy=blocking",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Clarification trend policy: blocking",
     );
   });
 });

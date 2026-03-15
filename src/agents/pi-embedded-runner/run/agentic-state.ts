@@ -277,6 +277,15 @@ export type AgenticHandoffReport = {
   activeArtifacts: string[];
   blockers: string[];
   operatorMode: "continue" | "pause" | "approval_required" | "escalate";
+  resumabilityStatus: "ready" | "approval_gated" | "prerequisite_gated" | "escalation_gated";
+  resumeBarrierProfile:
+    | "none"
+    | "operator_approval"
+    | "environment_variable"
+    | "approval"
+    | "external_input"
+    | "generic_prerequisite"
+    | "escalation";
   operatorReason?: string;
   nextAction?: string;
   suggestedSkill?: string;
@@ -3623,6 +3632,28 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
         : state.plannerState.retryClass === "clarify"
           ? "pause"
           : "continue";
+  const resumabilityStatus: AgenticHandoffReport["resumabilityStatus"] =
+    operatorMode === "approval_required"
+      ? "approval_gated"
+      : operatorMode === "escalate"
+        ? "escalation_gated"
+        : operatorMode === "pause"
+          ? "prerequisite_gated"
+          : "ready";
+  const resumeBarrierProfile: AgenticHandoffReport["resumeBarrierProfile"] =
+    operatorMode === "approval_required"
+      ? "operator_approval"
+      : operatorMode === "escalate"
+        ? "escalation"
+        : clarificationReason === "missing_information:environment_variable"
+          ? "environment_variable"
+          : clarificationReason === "missing_information:approval"
+            ? "approval"
+            : clarificationReason === "missing_information:external_input"
+              ? "external_input"
+              : operatorMode === "pause"
+                ? "generic_prerequisite"
+                : "none";
   const resumeCondition =
     operatorMode === "approval_required"
       ? "Wait for operator approval before resuming protected or high-risk work."
@@ -3677,6 +3708,8 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
     activeArtifacts: state.taskState.activeArtifacts,
     blockers: state.taskState.blockers,
     operatorMode,
+    resumabilityStatus,
+    resumeBarrierProfile,
     operatorReason,
     nextAction: state.plannerState.nextAction,
     suggestedSkill: state.plannerState.suggestedSkill,
@@ -3701,6 +3734,8 @@ export function formatAgenticHandoffReport(
         ? `clarification=${report.clarificationSummary}`
         : "clarification=none",
       `operator=${report.operatorMode}${report.operatorReason ? ` reason=${report.operatorReason}` : ""}`,
+      `resumability=${report.resumabilityStatus}`,
+      `resume_barrier=${report.resumeBarrierProfile}`,
       report.nextAction ? `next=${report.nextAction}` : "next=none",
       report.pendingSteps.length > 0
         ? `pending=${report.pendingSteps.join(" | ")}`
@@ -3723,6 +3758,8 @@ export function formatAgenticHandoffReport(
     `- Clarification: ${report.clarificationSummary ?? "none"}`,
     `- Objective: ${report.objective ?? "none"}`,
     `- Operator mode: ${report.operatorMode}`,
+    `- Resumability status: ${report.resumabilityStatus}`,
+    `- Resume barrier: ${report.resumeBarrierProfile}`,
     `- Operator reason: ${report.operatorReason ?? "none"}`,
     `- Next action: ${report.nextAction ?? "none"}`,
     `- Suggested skill: ${report.suggestedSkill ?? "none"}`,

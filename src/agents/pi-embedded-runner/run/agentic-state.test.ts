@@ -1055,7 +1055,11 @@ describe("agentic-state", () => {
 
     const report = buildAgenticHandoffReport(state);
     expect(report.resumePrompt).toContain("Resume");
+    expect(report.resumabilityStatus).toBe("ready");
+    expect(report.resumeBarrierProfile).toBe("none");
     expect(report.pendingSteps.length).toBeGreaterThan(0);
+    expect(formatAgenticHandoffReport(report, "summary")).toContain("resumability=ready");
+    expect(formatAgenticHandoffReport(report, "summary")).toContain("resume_barrier=none");
     expect(formatAgenticHandoffReport(report, "summary")).toContain("resume=");
     expect(formatAgenticHandoffReport(report, "markdown")).toContain("# Agentic Handoff Report");
   });
@@ -1092,11 +1096,19 @@ describe("agentic-state", () => {
     });
     const protectedReport = buildAgenticHandoffReport(protectedBranchState);
     expect(protectedReport.operatorMode).toBe("approval_required");
+    expect(protectedReport.resumabilityStatus).toBe("approval_gated");
+    expect(protectedReport.resumeBarrierProfile).toBe("operator_approval");
     expect(protectedReport.progressSummary).toContain("pending=");
     expect(protectedReport.resumeCondition).toContain("Wait for operator approval");
     expect(protectedReport.resumePrompt).toContain("Resume after approval");
     expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain(
       "operator=approval_required",
+    );
+    expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain(
+      "resumability=approval_gated",
+    );
+    expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain(
+      "resume_barrier=operator_approval",
     );
     expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain("progress=");
 
@@ -1131,10 +1143,18 @@ describe("agentic-state", () => {
     });
     const validationReport = buildAgenticHandoffReport(validationThinState);
     expect(validationReport.operatorMode).toBe("pause");
+    expect(validationReport.resumabilityStatus).toBe("prerequisite_gated");
+    expect(validationReport.resumeBarrierProfile).toBe("generic_prerequisite");
     expect(validationReport.resumeCondition).toContain("Capture an observed validation command");
     expect(validationReport.resumePrompt).toContain("Resume after prerequisites are restored");
     expect(validationReport.assumptions.length).toBeGreaterThan(0);
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Operator mode:");
+    expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain(
+      "Resumability status: prerequisite_gated",
+    );
+    expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain(
+      "Resume barrier: generic_prerequisite",
+    );
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Progress:");
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Assumptions:");
   });

@@ -588,6 +588,8 @@ describe("agentic-state", () => {
     expect(report.escalationRequired).toBe(true);
     expect(report.hasViableFallback).toBe(false);
     expect(report.goalSatisfaction).toBeDefined();
+    expect(report.stabilityState).toBe("neutral");
+    expect(report.stabilitySkills).toEqual([]);
     expect(report.recommendations).toContain(
       "Add or learn a viable fallback workflow before retrying.",
     );
@@ -615,6 +617,9 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "effective_skills=",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "stability_state=neutral",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
@@ -623,6 +628,50 @@ describe("agentic-state", () => {
     );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "Effective skills:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Stability state:",
+    );
+  });
+
+  it("surfaces stable-reuse guidance in the observability report", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Extend the stable acceptance-report workflow instead of forking another verification skill.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Validated the stable acceptance-report path successfully.",
+        },
+      ],
+      availableSkills: ["acceptance-report"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=acceptance-report family=verification task_mode=debugging workspace=project env=node validation=exec score=2.50 evidence=4",
+        "Skill stability guidance:",
+        "- skill=acceptance-report task_mode=debugging env=node state=stable_reuse",
+      ].join("\n"),
+    });
+
+    const report = inspectAgenticExecutionObservability(state);
+    expect(report.stabilityState).toBe("stable_reuse");
+    expect(report.stabilitySkills).toContain("acceptance-report");
+    expect(report.recommendations).toContain(
+      "Stable reusable skills can be extended: acceptance-report",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "stability_state=stable_reuse",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Stability state: stable_reuse",
     );
   });
 

@@ -220,6 +220,8 @@ export type AgenticExecutionObservabilityReport = {
   rankedSkills: string[];
   effectiveSkills: string[];
   effectiveFamilies: string[];
+  stabilityState: AgenticOrchestrationState["stabilityState"];
+  stabilitySkills: string[];
   consolidationAction: AgenticConsolidationAction;
   overlappingSkills: string[];
   capabilityGaps: string[];
@@ -263,6 +265,7 @@ export type AgenticAcceptanceScenarioId =
   | "goal_satisfaction_downgrades_verified_checks"
   | "long_run_recovery_reaches_goal_satisfaction"
   | "weakening_skills_quality_gate"
+  | "stable_reuse_observability_alignment"
   | "recovering_skills_guidance_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
@@ -2350,6 +2353,14 @@ export function inspectAgenticExecutionObservability(
       state.orchestrationState.consolidationAction !== "none"
         ? `Prefer ${state.orchestrationState.consolidationAction} for overlapping skills${state.orchestrationState.overlappingSkills.length > 0 ? `: ${state.orchestrationState.overlappingSkills.join(", ")}` : ""}.`
         : undefined,
+      state.orchestrationState.stabilityState === "stable_reuse" &&
+      state.orchestrationState.stabilitySkills.length > 0
+        ? `Stable reusable skills can be extended: ${state.orchestrationState.stabilitySkills.join(", ")}`
+        : undefined,
+      state.orchestrationState.stabilityState === "recovered_watch" &&
+      state.orchestrationState.stabilitySkills.length > 0
+        ? `Recovered skills remain under watch: ${state.orchestrationState.stabilitySkills.join(", ")}`
+        : undefined,
       state.failureLearningState.learnFromFailure
         ? `Retain this failure pattern for learning: ${state.failureLearningState.failurePattern}`
         : undefined,
@@ -2378,6 +2389,8 @@ export function inspectAgenticExecutionObservability(
     rankedSkills: state.orchestrationState.rankedSkills,
     effectiveSkills: state.orchestrationState.effectiveSkills,
     effectiveFamilies: state.orchestrationState.effectiveFamilies,
+    stabilityState: state.orchestrationState.stabilityState,
+    stabilitySkills: state.orchestrationState.stabilitySkills,
     consolidationAction: state.orchestrationState.consolidationAction,
     overlappingSkills: state.orchestrationState.overlappingSkills,
     capabilityGaps: state.orchestrationState.capabilityGaps,
@@ -2409,6 +2422,10 @@ export function formatAgenticExecutionObservabilityReport(
       report.effectiveFamilies.length > 0
         ? `effective_families=${report.effectiveFamilies.join(">")}`
         : "effective_families=none",
+      `stability_state=${report.stabilityState}`,
+      report.stabilitySkills.length > 0
+        ? `stability_skills=${report.stabilitySkills.join(">")}`
+        : "stability_skills=none",
       report.workflowSteps.length > 0
         ? `workflow=${report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(">")}`
         : "workflow=none",
@@ -2435,6 +2452,8 @@ export function formatAgenticExecutionObservabilityReport(
     `- Ranked skills: ${report.rankedSkills.length > 0 ? report.rankedSkills.join(" > ") : "none"}`,
     `- Effective skills: ${report.effectiveSkills.length > 0 ? report.effectiveSkills.join(" > ") : "none"}`,
     `- Effective families: ${report.effectiveFamilies.length > 0 ? report.effectiveFamilies.join(", ") : "none"}`,
+    `- Stability state: ${report.stabilityState}`,
+    `- Stability skills: ${report.stabilitySkills.length > 0 ? report.stabilitySkills.join(", ") : "none"}`,
     `- Workflow chain: ${report.workflowSteps.length > 0 ? report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ") : "none"}`,
     `- Consolidation action: ${report.consolidationAction}`,
     `- Overlapping skills: ${report.overlappingSkills.length > 0 ? report.overlappingSkills.join(", ") : "none"}`,
@@ -3191,6 +3210,56 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Recovered long-run execution can converge on a fully satisfied goal state."
         : "Recovered long-run execution did not reach a fully satisfied goal state.",
       details: `${state.verificationState.outcome}:${state.verificationState.goalSatisfaction}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Extend the stable acceptance-report workflow instead of forking another verification skill.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Validated the stable acceptance-report path successfully.",
+        },
+      ],
+      availableSkills: ["acceptance-report"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=acceptance-report family=verification task_mode=debugging workspace=project env=node validation=exec score=2.50 evidence=4",
+        "Skill stability guidance:",
+        "- skill=acceptance-report task_mode=debugging env=node state=stable_reuse",
+      ].join("\n"),
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const summary = formatAgenticExecutionObservabilityReport(report, "summary");
+    const markdown = formatAgenticExecutionObservabilityReport(report, "markdown");
+    const passed =
+      state.orchestrationState.stabilityState === "stable_reuse" &&
+      report.stabilityState === "stable_reuse" &&
+      report.stabilitySkills.includes("acceptance-report") &&
+      report.recommendations.some((recommendation) =>
+        recommendation.includes("Stable reusable skills can be extended"),
+      ) &&
+      summary.includes("stability_state=stable_reuse") &&
+      markdown.includes("Stability state: stable_reuse");
+    scenarios.push({
+      id: "stable_reuse_observability_alignment",
+      passed,
+      summary: passed
+        ? "Stable-reuse skills stay visible in operator diagnostics and support explicit reuse guidance."
+        : "Stable-reuse guidance did not stay aligned across orchestration and observability.",
+      details: `stability=${report.stabilityState} skills=${report.stabilitySkills.join("|")} recommendations=${report.recommendations.join("|")}`,
     });
   }
 

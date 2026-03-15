@@ -712,7 +712,7 @@ describe("memory system store", () => {
       compiled.graph.edges.some(
         (edge) =>
           edge.to === "artifact:src/context-engine/memory-system.ts" &&
-          edge.type === "derived_from",
+          edge.type === "confirmed_by",
       ),
     ).toBe(true);
   });
@@ -736,6 +736,40 @@ describe("memory system store", () => {
     ).toBe(true);
     expect(
       artifacts?.children.some((child) => child.summary === "docs/memory-system-integration.md"),
+    ).toBe(true);
+  });
+
+  it("adds artifact-scoped constraint and outcome branches into the permanent tree", () => {
+    const compiled = compileMemoryState({
+      sessionId: "artifact-tree-branches-a",
+      messages: [
+        userMessage(
+          "Use src/context-engine/memory-system.ts as the required integration path for the migration constraint.",
+        ),
+        userMessage(
+          "The previous fix in src/context-engine/memory-system.ts has restored carry-forward output after regression.",
+        ),
+      ],
+    });
+
+    const projects = compiled.permanentMemory.children.find((child) => child.label === "projects");
+    const currentBot = projects?.children.find((child) => child.label === "current-bot");
+    const artifacts = currentBot?.children.find((child) => child.label === "artifacts");
+    const memorySystemArtifact = artifacts?.children.find(
+      (child) => child.summary === "src/context-engine/memory-system.ts",
+    );
+    const constraints = memorySystemArtifact?.children.find(
+      (child) => child.label === "constraints",
+    );
+    const outcomes = memorySystemArtifact?.children.find((child) => child.label === "outcomes");
+
+    expect(
+      constraints?.children.some((child) => child.summary?.includes("required integration path")),
+    ).toBe(true);
+    expect(
+      outcomes?.children.some((child) =>
+        child.summary?.includes("has restored carry-forward output"),
+      ),
     ).toBe(true);
   });
 

@@ -1390,14 +1390,14 @@ function reviewMemoryState(params: {
 }
 
 function selectArtifactRelationType(entry: LongTermMemoryEntry): MemoryRelationType {
-  if (entry.category === "pattern" || entry.category === "strategy") {
-    return "derived_from";
-  }
   if (
     entry.category === "episode" ||
     /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(entry.text)
   ) {
     return "confirmed_by";
+  }
+  if (entry.category === "pattern" || entry.category === "strategy") {
+    return "derived_from";
   }
   if (
     entry.category === "decision" ||
@@ -1485,6 +1485,35 @@ function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSn
   };
 }
 
+function selectArtifactFacetLabel(entry: LongTermMemoryEntry): {
+  label: "constraints" | "patterns" | "outcomes";
+  nodeType: PermanentNodeType;
+  relationToParent: PermanentNodeRelation;
+} {
+  if (
+    entry.category === "episode" ||
+    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(entry.text)
+  ) {
+    return {
+      label: "outcomes",
+      nodeType: "lesson",
+      relationToParent: "supports",
+    };
+  }
+  if (entry.category === "pattern" || entry.category === "strategy") {
+    return {
+      label: "patterns",
+      nodeType: "pattern",
+      relationToParent: "derived_from",
+    };
+  }
+  return {
+    label: "constraints",
+    nodeType: "rule",
+    relationToParent: "relevant_to",
+  };
+}
+
 export function mergePermanentMemoryTree(
   root: PermanentMemoryNode | undefined,
   candidates: LongTermMemoryEntry[],
@@ -1544,32 +1573,78 @@ export function mergePermanentMemoryTree(
       }
       for (const ref of candidate.artifactRefs) {
         const artifactKey = normalizeComparable(ref);
-        const existingArtifact = artifactCursor.children.find(
+        let artifactNode = artifactCursor.children.find(
           (child) => normalizeComparable(child.summary ?? child.label) === artifactKey,
         );
-        if (existingArtifact) {
-          existingArtifact.updatedAt = Date.now();
-          existingArtifact.evidence = dedupeTexts(
-            [...existingArtifact.evidence, candidate.text, ...candidate.evidence],
+        if (artifactNode) {
+          artifactNode.updatedAt = Date.now();
+          artifactNode.evidence = dedupeTexts(
+            [...artifactNode.evidence, candidate.text, ...candidate.evidence],
             MAX_WORKING_ITEMS,
           );
-          existingArtifact.sourceMemoryIds = uniqueIds([
-            ...existingArtifact.sourceMemoryIds,
+          artifactNode.sourceMemoryIds = uniqueIds([...artifactNode.sourceMemoryIds, candidate.id]);
+          artifactNode.confidence = Math.min(
+            1,
+            Math.max(artifactNode.confidence, candidate.confidence),
+          );
+        } else {
+          artifactNode = {
+            id: `${artifactCursor.id}/${artifactCursor.children.length + 1}`,
+            label: path.basename(ref),
+            nodeType: "artifact",
+            relationToParent: "linked_to",
+            summary: ref,
+            evidence: dedupeTexts([candidate.text, ...candidate.evidence], MAX_WORKING_ITEMS),
+            sourceMemoryIds: [candidate.id],
+            confidence: candidate.confidence,
+            activeStatus: candidate.activeStatus,
+            updatedAt: Date.now(),
+            children: [],
+          };
+          artifactCursor.children.push(artifactNode);
+        }
+        const facet = selectArtifactFacetLabel(candidate);
+        const facetNode = ensureChildNode(artifactNode, facet.label, facet.nodeType);
+        facetNode.nodeType = facet.nodeType;
+        facetNode.relationToParent = facet.relationToParent;
+        facetNode.evidence = dedupeTexts(
+          [...facetNode.evidence, candidate.text, ...candidate.evidence],
+          MAX_WORKING_ITEMS,
+        );
+        facetNode.sourceMemoryIds = uniqueIds([...facetNode.sourceMemoryIds, candidate.id]);
+        facetNode.confidence = Math.min(1, Math.max(facetNode.confidence, candidate.confidence));
+        facetNode.activeStatus = candidate.activeStatus;
+        facetNode.updatedAt = Date.now();
+
+        const facetLeafKey = normalizeComparable(candidate.text);
+        const existingFacetLeaf = facetNode.children.find(
+          (child) => normalizeComparable(child.summary ?? child.label) === facetLeafKey,
+        );
+        if (existingFacetLeaf) {
+          existingFacetLeaf.summary = candidate.text;
+          existingFacetLeaf.evidence = dedupeTexts(
+            [...existingFacetLeaf.evidence, ...candidate.evidence],
+            MAX_WORKING_ITEMS,
+          );
+          existingFacetLeaf.sourceMemoryIds = uniqueIds([
+            ...existingFacetLeaf.sourceMemoryIds,
             candidate.id,
           ]);
-          existingArtifact.confidence = Math.min(
+          existingFacetLeaf.confidence = Math.min(
             1,
-            Math.max(existingArtifact.confidence, candidate.confidence),
+            Math.max(existingFacetLeaf.confidence, candidate.confidence),
           );
+          existingFacetLeaf.activeStatus = candidate.activeStatus;
+          existingFacetLeaf.updatedAt = Date.now();
           continue;
         }
-        artifactCursor.children.push({
-          id: `${artifactCursor.id}/${artifactCursor.children.length + 1}`,
-          label: path.basename(ref),
-          nodeType: "artifact",
-          relationToParent: "linked_to",
-          summary: ref,
-          evidence: dedupeTexts([candidate.text, ...candidate.evidence], MAX_WORKING_ITEMS),
+        facetNode.children.push({
+          id: `${facetNode.id}/${facetNode.children.length + 1}`,
+          label: clipText(candidate.text, 80),
+          nodeType: selectPermanentNodeType(candidate.category),
+          relationToParent: facet.relationToParent,
+          summary: candidate.text,
+          evidence: dedupeTexts(candidate.evidence, MAX_WORKING_ITEMS),
           sourceMemoryIds: [candidate.id],
           confidence: candidate.confidence,
           activeStatus: candidate.activeStatus,
@@ -1809,6 +1884,12 @@ function rankLongTermEntries(
 function classifyArtifactAnchorBucket(
   entry: LongTermMemoryEntry,
 ): "constraint" | "pattern" | "outcome" | undefined {
+  if (
+    entry.category === "episode" ||
+    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(entry.text)
+  ) {
+    return "outcome";
+  }
   if (entry.category === "pattern" || entry.category === "strategy") {
     return "pattern";
   }
@@ -1818,12 +1899,6 @@ function classifyArtifactAnchorBucket(
     /\b(must|required|always|never|constraint|preserve|keep|use)\b/i.test(entry.text)
   ) {
     return "constraint";
-  }
-  if (
-    entry.category === "episode" ||
-    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(entry.text)
-  ) {
-    return "outcome";
   }
   return undefined;
 }

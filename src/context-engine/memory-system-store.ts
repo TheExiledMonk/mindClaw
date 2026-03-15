@@ -273,6 +273,7 @@ export type MemoryContextPacket = {
 type MemoryStorePaths = {
   rootDir: string;
   sessionsDir: string;
+  backupFile: string;
   metadataFile: string;
   workingFile: string;
   longTermFile: string;
@@ -288,6 +289,7 @@ function resolveStorePaths(workspaceDir: string, sessionId: string): MemoryStore
   return {
     rootDir,
     sessionsDir,
+    backupFile: path.join(sessionsDir, `${safeSessionId}.bundle.json`),
     metadataFile: path.join(rootDir, STORE_METADATA_FILENAME),
     workingFile: path.join(sessionsDir, `${safeSessionId}.json`),
     longTermFile: path.join(rootDir, LONG_TERM_FILENAME),
@@ -568,6 +570,22 @@ async function loadPersistedStoreMetadata(params: {
     ),
     backend.kind,
   );
+}
+
+function buildMemoryStoreExportBundle(params: {
+  sessionId: string;
+  backendKind: MemoryStoreBackendKind;
+  metadata: MemoryStoreMetadata;
+  snapshot: MemoryStoreSnapshot;
+}): MemoryStoreExportBundle {
+  return {
+    version: 1,
+    exportedAt: Date.now(),
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    metadata: params.metadata,
+    snapshot: params.snapshot,
+  };
 }
 
 function clipText(text: string, max = 220): string {
@@ -5447,6 +5465,13 @@ export async function persistMemoryStoreSnapshot(params: {
   backendKind?: MemoryStoreBackendKind;
 }): Promise<void> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  const snapshot: MemoryStoreSnapshot = {
+    workingMemory: params.workingMemory,
+    longTermMemory: params.longTermMemory,
+    pendingSignificance: params.pendingSignificance,
+    permanentMemory: params.permanentMemory,
+    graph: params.graph,
+  };
   if (params.backendKind === "sqlite-graph") {
     const { DatabaseSync } = requireNodeSqlite();
     await ensureStoreDirs(paths);
@@ -5480,13 +5505,7 @@ export async function persistMemoryStoreSnapshot(params: {
         JSON.stringify(
           buildSnapshotStoreMetadata({
             backend: "sqlite-graph",
-            snapshot: {
-              workingMemory: params.workingMemory,
-              longTermMemory: params.longTermMemory,
-              pendingSignificance: params.pendingSignificance,
-              permanentMemory: params.permanentMemory,
-              graph: params.graph,
-            },
+            snapshot,
             previous: {
               ...metadata,
               schemaVersion: migrationState.schemaVersion,
@@ -5659,6 +5678,24 @@ export async function persistMemoryStoreSnapshot(params: {
           JSON.stringify(edge),
         );
       }
+      const persistedMetadata = buildSnapshotStoreMetadata({
+        backend: "sqlite-graph",
+        snapshot,
+        previous: {
+          ...metadata,
+          schemaVersion: migrationState.schemaVersion,
+          lastAppliedMigration: migrationState.lastAppliedMigration,
+        },
+      });
+      await writeJsonFile(
+        paths.backupFile,
+        buildMemoryStoreExportBundle({
+          sessionId: params.sessionId,
+          backendKind: "sqlite-graph",
+          metadata: persistedMetadata,
+          snapshot,
+        }),
+      );
       return;
     } finally {
       db.close();
@@ -5678,21 +5715,28 @@ export async function persistMemoryStoreSnapshot(params: {
       paths.metadataFile,
       buildSnapshotStoreMetadata({
         backend: backend.kind,
-        snapshot: {
-          workingMemory: params.workingMemory,
-          longTermMemory: params.longTermMemory,
-          pendingSignificance: params.pendingSignificance,
-          permanentMemory: params.permanentMemory,
-          graph: params.graph,
-        },
+        snapshot,
         previous: metadata,
       }) satisfies MemoryStoreMetadata,
     ),
-    backend.writeJson(paths.workingFile, params.workingMemory),
-    backend.writeJson(paths.longTermFile, params.longTermMemory),
-    backend.writeJson(paths.pendingFile, params.pendingSignificance),
-    backend.writeJson(paths.permanentTreeFile, params.permanentMemory),
-    backend.writeJson(paths.graphFile, params.graph),
+    backend.writeJson(paths.workingFile, snapshot.workingMemory),
+    backend.writeJson(paths.longTermFile, snapshot.longTermMemory),
+    backend.writeJson(paths.pendingFile, snapshot.pendingSignificance),
+    backend.writeJson(paths.permanentTreeFile, snapshot.permanentMemory),
+    backend.writeJson(paths.graphFile, snapshot.graph),
+    writeJsonFile(
+      paths.backupFile,
+      buildMemoryStoreExportBundle({
+        sessionId: params.sessionId,
+        backendKind: backend.kind,
+        metadata: buildSnapshotStoreMetadata({
+          backend: backend.kind,
+          snapshot,
+          previous: metadata,
+        }),
+        snapshot,
+      }),
+    ),
   ]);
 }
 
@@ -5712,14 +5756,12 @@ export async function exportMemoryStoreBundle(params: {
     sessionId: params.sessionId,
     backendKind,
   });
-  return {
-    version: 1,
-    exportedAt: Date.now(),
+  return buildMemoryStoreExportBundle({
     sessionId: params.sessionId,
     backendKind,
     metadata,
     snapshot,
-  };
+  });
 }
 
 export async function importMemoryStoreBundle(params: {
@@ -5775,5 +5817,29 @@ export async function repairMemoryStoreSnapshot(params: {
     workspaceDir: params.workspaceDir,
     sessionId: params.sessionId,
     backendKind,
+  });
+}
+
+export async function recoverMemoryStoreFromBackup(params: {
+  workspaceDir: string;
+  sessionId: string;
+  targetSessionId?: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryStoreSnapshot> {
+  const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  const bundle = await readJsonFile<MemoryStoreExportBundle | null>(paths.backupFile, null);
+  if (!bundle) {
+    throw new Error(`memory store backup not found for session ${params.sessionId}`);
+  }
+  await importMemoryStoreBundle({
+    workspaceDir: params.workspaceDir,
+    bundle,
+    targetSessionId: params.targetSessionId,
+    backendKind: params.backendKind,
+  });
+  return loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.targetSessionId ?? params.sessionId,
+    backendKind: params.backendKind ?? bundle.backendKind,
   });
 }

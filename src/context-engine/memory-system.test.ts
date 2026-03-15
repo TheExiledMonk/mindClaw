@@ -14,6 +14,7 @@ import {
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
   persistMemoryStoreSnapshot,
+  recoverMemoryStoreFromBackup,
   repairMemoryStoreSnapshot,
   retrieveMemoryContextPacket,
   runMemorySleepReview,
@@ -1909,6 +1910,45 @@ describe("MemorySystemContextEngine", () => {
     });
     expect(bundle.metadata.backend).toBe("sqlite-graph");
     expect(imported.longTermMemory[0]?.text).toContain("permanent memory-system path");
+  });
+
+  it("recovers memory store state from backup after sqlite corruption", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-backup-recovery-"));
+    const sessionId = "agent:bundle-recovery";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for all migrations.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    await fs.writeFile(
+      path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"),
+      "not-a-valid-sqlite-db",
+      "utf8",
+    );
+
+    const recovered = await recoverMemoryStoreFromBackup({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+      targetSessionId: "agent:bundle-recovered",
+    });
+
+    expect(recovered.longTermMemory[0]?.text).toContain("permanent memory-system path");
   });
 
   it("uses the sqlite backend when requested through runtime context", async () => {

@@ -5635,17 +5635,10 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         "- reasons=missing_information:approval trend=watch",
       ].join("\n"),
     });
-    const risingTrendSoakOverride: AgenticSoakReport = {
-      passed: true,
-      totalScenarios: 0,
-      passedScenarios: 0,
-      failedScenarioIds: [],
-      scenarios: [],
-      clarificationProfileCounts: ["environment_variable:2", "approval:1"],
-      dominantClarificationProfile: "environment_variable",
-      clarificationTrendSignals: ["approval:rising(0->1)"],
-      summary: "agentic soak 0/0 passed",
-    };
+    const warningSoakReport = runAgenticSoakSuite();
+    const blockingSoakReport = runAgenticSoakSuite({
+      failOnClarificationTrend: true,
+    });
     const acceptanceOverride: AgenticAcceptanceReport = {
       passed: true,
       totalScenarios: 0,
@@ -5657,31 +5650,37 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     const warningReport = runAgenticQualityGate({
       diagnosticsOverride: inspectAgenticExecutionObservability(approvalState),
       acceptanceOverride,
-      soakOverride: risingTrendSoakOverride,
+      soakOverride: warningSoakReport,
     });
     const blockingReport = runAgenticQualityGate({
       failOnClarificationTrend: true,
       diagnosticsOverride: inspectAgenticExecutionObservability(approvalState),
       acceptanceOverride,
-      soakOverride: risingTrendSoakOverride,
+      soakOverride: blockingSoakReport,
     });
     const passed =
+      warningSoakReport.clarificationTrendPolicy === "observe" &&
+      blockingSoakReport.clarificationTrendPolicy === "blocking" &&
       warningReport.passed &&
       warningReport.diagnosticsPassed &&
+      warningReport.clarificationTrendPolicy === warningSoakReport.clarificationTrendPolicy &&
       warningReport.recommendations.includes(
-        "Long-run clarification blocker trend is rising: approval:rising(0->1).",
+        "Long-run clarification blocker trend is rising: external_input:rising(0->1).",
       ) &&
-      !warningReport.failReasons.includes("diagnostics_clarification_trend_approval") &&
+      !warningReport.failReasons.some((reason) =>
+        reason.startsWith("diagnostics_clarification_trend_"),
+      ) &&
       !blockingReport.passed &&
       !blockingReport.diagnosticsPassed &&
-      blockingReport.failReasons.includes("diagnostics_clarification_trend_approval");
+      blockingReport.clarificationTrendPolicy === blockingSoakReport.clarificationTrendPolicy &&
+      blockingReport.failReasons.includes("diagnostics_clarification_trend_external_input");
     scenarios.push({
       id: "clarification_trend_policy_alignment",
       passed,
       summary: passed
         ? "Release-facing quality policy can keep rising clarification trends warning-only by default and make them release-blocking when trend gating is enabled."
         : "Rising clarification trend policy did not stay aligned between warning-only and release-blocking quality modes.",
-      details: `warning_policy=${warningReport.clarificationTrendPolicy} warning=${warningReport.failReasons.join("|") || "none"} blocking_policy=${blockingReport.clarificationTrendPolicy} blocking=${blockingReport.failReasons.join("|") || "none"} recommendations=${blockingReport.recommendations.join("|")}`,
+      details: `soak_warning_policy=${warningSoakReport.clarificationTrendPolicy} warning_policy=${warningReport.clarificationTrendPolicy} warning=${warningReport.failReasons.join("|") || "none"} soak_blocking_policy=${blockingSoakReport.clarificationTrendPolicy} blocking_policy=${blockingReport.clarificationTrendPolicy} blocking=${blockingReport.failReasons.join("|") || "none"} recommendations=${blockingReport.recommendations.join("|")}`,
     });
   }
 

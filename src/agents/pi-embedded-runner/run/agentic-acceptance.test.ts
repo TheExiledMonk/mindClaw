@@ -107,12 +107,24 @@ describe("agentic acceptance suite", () => {
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment",
     );
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "soak_warning_policy=observe",
+    );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain("warning_policy=observe");
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "soak_blocking_policy=blocking",
+    );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain("blocking_policy=blocking");
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "# Agentic Acceptance Report",
     );
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
+      "soak_warning_policy=observe",
+    );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain("warning_policy=observe");
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
+      "soak_blocking_policy=blocking",
+    );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain("blocking_policy=blocking");
   });
 });

@@ -277,7 +277,9 @@ export type AgenticAcceptanceScenarioId =
   | "stable_reuse_observability_alignment"
   | "stable_reuse_promotion_alignment"
   | "promotion_guidance_memory_alignment"
-  | "recovering_skills_guidance_alignment";
+  | "recovering_skills_guidance_alignment"
+  | "template_guidance_observability_alignment"
+  | "merge_guidance_observability_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -299,7 +301,8 @@ export type AgenticSoakScenarioId =
   | "retry_replan_recover_complete"
   | "handoff_resume_completion"
   | "effectiveness_drift_recovery"
-  | "recovered_watch_stabilization";
+  | "recovered_watch_stabilization"
+  | "consolidation_mode_transition";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -3498,6 +3501,95 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   }
 
   {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Turn the stable diagnostics workflow into a reusable template instead of creating another specialized fork.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=memory-diagnostics family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.30 evidence=3",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing template_candidate=true primary=memory-diagnostics",
+      ].join("\n"),
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const summary = formatAgenticExecutionObservabilityReport(report, "summary");
+    const markdown = formatAgenticExecutionObservabilityReport(report, "markdown");
+    const passed =
+      state.orchestrationState.consolidationAction === "generalize_existing" &&
+      !state.orchestrationState.mergeCandidate &&
+      report.recommendations.some((recommendation) =>
+        recommendation.includes("Prefer generalize_existing"),
+      ) &&
+      summary.includes("merge_skills=none") &&
+      markdown.includes("Merge candidate: no");
+    scenarios.push({
+      id: "template_guidance_observability_alignment",
+      passed,
+      summary: passed
+        ? "Template-ready family guidance stays distinct from merge guidance in observability."
+        : "Template-ready generalization did not remain distinct from merge guidance.",
+      details: `consolidation=${report.consolidationAction} merge=${report.mergeCandidate} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Merge the overlapping diagnostics sibling workflows into one reusable path instead of keeping both forks.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const summary = formatAgenticExecutionObservabilityReport(report, "summary");
+    const markdown = formatAgenticExecutionObservabilityReport(report, "markdown");
+    const passed =
+      state.orchestrationState.consolidationAction === "generalize_existing" &&
+      state.orchestrationState.mergeCandidate &&
+      report.mergeSkills.length >= 2 &&
+      report.mergeSkills.includes("memory-diagnostics") &&
+      report.mergeSkills.includes("diagnostics-report") &&
+      report.recommendations.some((recommendation) =>
+        recommendation.includes("Merge overlapping sibling skills"),
+      ) &&
+      summary.includes("merge_skills=") &&
+      markdown.includes("Merge candidate: yes");
+    scenarios.push({
+      id: "merge_guidance_observability_alignment",
+      passed,
+      summary: passed
+        ? "Merge-ready family guidance stays visible as a distinct operator recommendation."
+        : "Merge-ready family guidance did not stay visible through observability.",
+      details: `consolidation=${report.consolidationAction} merge=${report.mergeSkills.join("|")} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
     const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
@@ -4247,6 +4339,107 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     });
   }
 
+  {
+    const templateState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Generalize the stable diagnostics workflow into a reusable template without creating another fork.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=memory-diagnostics family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.20 evidence=4",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing template_candidate=true primary=memory-diagnostics",
+      ].join("\n"),
+    });
+    const templateReport = inspectAgenticExecutionObservability(templateState);
+    const mergeState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Merge the overlapping diagnostics siblings into one reusable workflow after repeated overlap evidence.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+    const mergeReport = inspectAgenticExecutionObservability(mergeState);
+    const mergeGate = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: mergeReport,
+    });
+    const phases = [
+      buildSoakPhaseResult({
+        label: "template_generalization",
+        state: templateState,
+        passed:
+          templateState.orchestrationState.consolidationAction === "generalize_existing" &&
+          !templateState.orchestrationState.mergeCandidate &&
+          templateReport.recommendations.some((recommendation) =>
+            recommendation.includes("Prefer generalize_existing"),
+          ),
+        details: `merge=${templateReport.mergeCandidate} recommendations=${templateReport.recommendations.join("|")}`,
+      }),
+      buildSoakPhaseResult({
+        label: "merge_consolidation",
+        state: mergeState,
+        passed:
+          mergeState.orchestrationState.consolidationAction === "generalize_existing" &&
+          mergeState.orchestrationState.mergeCandidate &&
+          mergeReport.mergeSkills.length >= 2 &&
+          mergeGate.diagnostics.recommendations.some((recommendation) =>
+            recommendation.includes("Merge overlapping sibling skills"),
+          ),
+        details: `merge=${mergeReport.mergeSkills.join("|")} recommendations=${mergeGate.diagnostics.recommendations.join("|")}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "consolidation_mode_transition",
+      passed,
+      summary: passed
+        ? "Long-run consolidation can stay template-oriented for one stable path and later shift into merge-oriented sibling consolidation."
+        : "Template-vs-merge consolidation modes did not stay distinct across the soak lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
   const failedScenarioIds = scenarios
     .filter((scenario) => !scenario.passed)
     .map((scenario) => scenario.id);
@@ -4307,6 +4500,7 @@ export function runAgenticQualityGate(params?: {
   failOnMissingFallback?: boolean;
   failOnWeakeningSkills?: boolean;
   failOnRecoveringSkills?: boolean;
+  diagnosticsOverride?: AgenticExecutionObservabilityReport;
   acceptanceOverride?: AgenticAcceptanceReport;
   soakOverride?: AgenticSoakReport;
   memoryTrend?: {
@@ -4319,10 +4513,13 @@ export function runAgenticQualityGate(params?: {
 }): AgenticQualityGateReport {
   const acceptance = params?.acceptanceOverride ?? runAgenticAcceptanceSuite();
   const soak = params?.soakOverride ?? runAgenticSoakSuite();
-  const diagnosticsState = buildAgenticExecutionState({
-    messages: params?.messages ?? [],
-  });
-  const diagnostics = inspectAgenticExecutionObservability(diagnosticsState);
+  const diagnostics =
+    params?.diagnosticsOverride ??
+    inspectAgenticExecutionObservability(
+      buildAgenticExecutionState({
+        messages: params?.messages ?? [],
+      }),
+    );
   const weakeningSkills = uniqueCompact(params?.memoryTrend?.weakeningSkills ?? [], 6);
   const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
   const recoveringSkills = uniqueCompact(params?.memoryTrend?.recoveringSkills ?? [], 6);
@@ -4352,6 +4549,14 @@ export function runAgenticQualityGate(params?: {
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
   const recommendations = uniqueCompact(
     [
+      diagnostics.consolidationAction === "generalize_existing" &&
+      diagnostics.mergeCandidate &&
+      diagnostics.mergeSkills.length > 0
+        ? `Merge-ready consolidation is active for sibling skills: ${diagnostics.mergeSkills.join(", ")}.`
+        : undefined,
+      diagnostics.consolidationAction === "generalize_existing" && !diagnostics.mergeCandidate
+        ? "Template-ready consolidation is active; parameterize the stable workflow instead of creating a new fork."
+        : undefined,
       weakeningSkills.length > 0
         ? "Review weakening scoped skills before promoting or extending the current workflow family."
         : undefined,

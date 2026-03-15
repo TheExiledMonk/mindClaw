@@ -5,7 +5,7 @@ describe("agentic soak suite", () => {
   it("passes the built-in soak scenarios", () => {
     const report = runAgenticSoakSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(4);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(5);
     expect(report.failedScenarioIds).toEqual([]);
 
     const retryLifecycle = report.scenarios.find(
@@ -33,6 +33,15 @@ describe("agentic soak suite", () => {
     expect(recoveredWatchLifecycle?.phases.at(-1)?.passed).toBe(true);
     expect(recoveredWatchLifecycle?.phases.at(-1)?.details).toContain(
       "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+    );
+
+    const consolidationLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "consolidation_mode_transition",
+    );
+    expect(consolidationLifecycle?.phases[0]?.passed).toBe(true);
+    expect(consolidationLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(consolidationLifecycle?.phases.at(-1)?.details).toContain(
+      "Merge overlapping sibling skills",
     );
   });
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { requireNodeSqlite } from "../memory/sqlite.js";
 import type { ContextEngineRuntimeContext } from "./types.js";
 
 export const MEMORY_SYSTEM_DIRNAME = ".openclaw-memory";
@@ -10,6 +11,7 @@ const PENDING_FILENAME = "pending-significance.json";
 const PERMANENT_TREE_FILENAME = "permanent-tree.json";
 const GRAPH_FILENAME = "memory-graph.json";
 const STORE_METADATA_FILENAME = "store-metadata.json";
+const SQLITE_STORE_FILENAME = "memory-store.sqlite";
 const MAX_WORKING_ITEMS = 6;
 const MAX_LONG_TERM_ITEMS = 48;
 const MAX_PENDING_ITEMS = 64;
@@ -198,7 +200,7 @@ export type MemoryStoreSnapshot = {
   graph: MemoryGraphSnapshot;
 };
 
-export type MemoryStoreBackendKind = "fs-json";
+export type MemoryStoreBackendKind = "fs-json" | "sqlite-doc";
 
 export type MemoryStoreMetadata = {
   backend: MemoryStoreBackendKind;
@@ -294,8 +296,77 @@ const fsJsonMemoryStoreBackend: MemoryStoreBackend = {
   writeJson: writeJsonFile,
 };
 
+function resolveSqliteStoreLocation(filePath: string): { dbPath: string; key: string } {
+  const fileDir = path.dirname(filePath);
+  const rootDir = path.basename(fileDir) === SESSIONS_DIRNAME ? path.dirname(fileDir) : fileDir;
+  return {
+    dbPath: path.join(rootDir, SQLITE_STORE_FILENAME),
+    key: path.relative(rootDir, filePath),
+  };
+}
+
+function ensureSqliteStoreSchema(db: import("node:sqlite").DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_store_documents (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+}
+
+async function readSqliteJsonFile<T>(filePath: string, fallback: T): Promise<T> {
+  const { DatabaseSync } = requireNodeSqlite();
+  const { dbPath, key } = resolveSqliteStoreLocation(filePath);
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    ensureSqliteStoreSchema(db);
+    const row = db.prepare("SELECT value FROM memory_store_documents WHERE key = ?").get(key) as
+      | { value?: string }
+      | undefined;
+    if (!row?.value) {
+      return fallback;
+    }
+    return JSON.parse(row.value) as T;
+  } catch {
+    return fallback;
+  } finally {
+    db.close();
+  }
+}
+
+async function writeSqliteJsonFile(filePath: string, value: unknown): Promise<void> {
+  const { DatabaseSync } = requireNodeSqlite();
+  const { dbPath, key } = resolveSqliteStoreLocation(filePath);
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    ensureSqliteStoreSchema(db);
+    db.prepare(
+      `
+        INSERT INTO memory_store_documents (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `,
+    ).run(key, JSON.stringify(value), Date.now());
+  } finally {
+    db.close();
+  }
+}
+
+const sqliteDocMemoryStoreBackend: MemoryStoreBackend = {
+  kind: "sqlite-doc",
+  readJson: readSqliteJsonFile,
+  writeJson: writeSqliteJsonFile,
+};
+
 function resolveMemoryStoreBackend(kind?: MemoryStoreBackendKind): MemoryStoreBackend {
   switch (kind ?? "fs-json") {
+    case "sqlite-doc":
+      return sqliteDocMemoryStoreBackend;
     case "fs-json":
     default:
       return fsJsonMemoryStoreBackend;
@@ -694,6 +765,7 @@ function findConceptMatch(
   }
   let best: LongTermMemoryEntry | undefined;
   let bestScore = 0;
+  const incomingCanonicalTokens = new Set(tokenize(incoming.canonicalText || incoming.text));
   for (const candidate of entries) {
     if (
       candidate.conceptKey &&
@@ -712,6 +784,16 @@ function findConceptMatch(
       continue;
     }
     const overlap = computeOverlapScore(candidate.text, new Set(tokenize(incoming.text)));
+    const canonicalOverlap = computeOverlapScore(
+      candidate.canonicalText || candidate.text,
+      incomingCanonicalTokens,
+    );
+    const aliasOverlap = Math.max(
+      0,
+      ...(candidate.conceptAliases ?? []).map((alias) =>
+        computeOverlapScore(alias, incomingCanonicalTokens),
+      ),
+    );
     const artifactOverlap = (candidate.artifactRefs ?? []).filter((ref) =>
       (incoming.artifactRefs ?? []).includes(ref),
     ).length;
@@ -724,7 +806,8 @@ function findConceptMatch(
       Number(
         candidate.customerScope === incoming.customerScope && Boolean(candidate.customerScope),
       );
-    const score = overlap + artifactOverlap * 3 + scopeOverlap * 2;
+    const score =
+      overlap + canonicalOverlap * 2 + aliasOverlap + artifactOverlap * 3 + scopeOverlap * 2;
     if (
       score >= 6 &&
       (score > bestScore ||

@@ -10,6 +10,7 @@ import {
   deriveLongTermMemoryCandidates,
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
+  persistMemoryStoreSnapshot,
   retrieveMemoryContextPacket,
   runMemorySleepReview,
 } from "./memory-system-store.js";
@@ -1503,5 +1504,68 @@ describe("MemorySystemContextEngine", () => {
     expect(snapshot.workingMemory.carryForwardSummary).toBeTruthy();
     expect(reviewed?.contradictoryMemoryIds).toEqual(expect.any(Array));
     expect(reviewed?.supersededMemoryIds).toEqual(expect.any(Array));
+  });
+
+  it("persists and reloads memory snapshots with the sqlite backend", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sqlite-"));
+    const sessionId = "agent:sqlite";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for all migrations.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-doc",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const loaded = await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-doc",
+    });
+    expect(loaded.longTermMemory[0]?.text).toContain("permanent memory-system path");
+    await expect(
+      fs.stat(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("uses the sqlite backend when requested through runtime context", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-engine-sqlite-"));
+    process.chdir(tempDir);
+
+    const engine = new MemorySystemContextEngine();
+    await engine.afterTurn({
+      sessionId: "sess-sqlite",
+      sessionKey: "agent:sqlite-runtime",
+      sessionFile: path.join(tempDir, "session.jsonl"),
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for v2026.3.13-1.",
+        ),
+      ],
+      prePromptMessageCount: 0,
+      runtimeContext: { workspaceDir: tempDir, memoryStoreBackend: "sqlite-doc" },
+    });
+
+    const snapshot = await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId: "agent:sqlite-runtime",
+      backendKind: "sqlite-doc",
+    });
+    expect(snapshot.longTermMemory.length).toBeGreaterThan(0);
+    await expect(
+      fs.stat(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite")),
+    ).resolves.toBeTruthy();
   });
 });

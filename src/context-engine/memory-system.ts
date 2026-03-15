@@ -34,11 +34,11 @@ function resolveMemoryStoreBackendKind(
   runtimeContext?: ContextEngineRuntimeContext,
 ): MemoryStoreBackendKind | undefined {
   const runtimeValue = runtimeContext?.memoryStoreBackend;
-  if (runtimeValue === "fs-json") {
+  if (runtimeValue === "fs-json" || runtimeValue === "sqlite-doc") {
     return runtimeValue;
   }
   const envValue = process.env.OPENCLAW_MEMORY_STORE_BACKEND;
-  return envValue === "fs-json" ? envValue : undefined;
+  return envValue === "fs-json" || envValue === "sqlite-doc" ? envValue : undefined;
 }
 
 function selectNewMessages(

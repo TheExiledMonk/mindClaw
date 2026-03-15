@@ -12,6 +12,7 @@ export type AgenticTaskMode =
 
 export type AgenticConfidence = "low" | "medium" | "high";
 export type AgenticRiskLevel = "low" | "medium" | "high";
+export type AgenticGoalSatisfaction = "satisfied" | "uncertain" | "unsatisfied";
 export type AgenticVerificationOutcome =
   | "unverified"
   | "verified"
@@ -78,9 +79,12 @@ export type AgenticTaskState = {
 export type AgenticVerificationState = {
   version: 1;
   outcome: AgenticVerificationOutcome;
+  goalSatisfaction: AgenticGoalSatisfaction;
   evidence: string[];
+  goalSignals: string[];
   checksRun: string[];
   failingChecks: string[];
+  unresolvedCriteria: string[];
   failureClasses: AgenticFailureClass[];
 };
 
@@ -161,6 +165,7 @@ export type ProceduralExecutionRecord = {
   toolChain: string[];
   changedArtifacts: string[];
   outcome: AgenticVerificationOutcome;
+  goalSatisfaction: AgenticGoalSatisfaction;
   taskMode: AgenticTaskMode;
   planSteps: AgenticPlanStep[];
   templateCandidate: boolean;
@@ -212,6 +217,8 @@ export type AgenticExecutionObservabilityReport = {
   hasViableFallback: boolean;
   escalationRequired: boolean;
   planSteps: AgenticPlanStep[];
+  goalSatisfaction: AgenticGoalSatisfaction;
+  unresolvedCriteria: string[];
   recommendations: string[];
 };
 
@@ -242,7 +249,9 @@ export type AgenticAcceptanceScenarioId =
   | "memory_guided_workflow_chain"
   | "workflow_chain_persists_to_memory"
   | "skill_consolidation_prefers_existing"
-  | "consolidation_persists_to_memory";
+  | "consolidation_persists_to_memory"
+  | "goal_satisfaction_downgrades_verified_checks"
+  | "long_run_recovery_reaches_goal_satisfaction";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -512,6 +521,52 @@ function extractListCandidates(text: string): string[] {
     .slice(0, 4);
 }
 
+function tokenizeCriterion(text: string): string[] {
+  const stopwords = new Set([
+    "with",
+    "from",
+    "this",
+    "that",
+    "then",
+    "than",
+    "into",
+    "onto",
+    "about",
+    "after",
+    "before",
+    "during",
+    "while",
+    "where",
+    "when",
+    "keep",
+    "make",
+    "have",
+    "your",
+    "their",
+    "work",
+    "final",
+    "report",
+    "prepare",
+    "continue",
+  ]);
+  return uniqueCompact(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4 && !stopwords.has(token)),
+    10,
+  );
+}
+
+function criterionIsSatisfied(criterion: string, corpus: string): boolean {
+  const tokens = tokenizeCriterion(criterion);
+  if (tokens.length === 0) {
+    return false;
+  }
+  const matches = tokens.filter((token) => corpus.includes(token)).length;
+  return matches >= Math.max(1, Math.min(2, Math.ceil(tokens.length / 2)));
+}
+
 function buildPlanSteps(params: {
   objective?: string;
   subtasks: string[];
@@ -729,13 +784,15 @@ function buildVerificationState(params: {
   checkpointSignals?: CheckpointSignal[];
   retrySignals?: RetrySignal[];
   promptErrorSummary?: string;
+  objective?: string;
+  successCriteria?: string[];
 }): AgenticVerificationState {
   const toolSignals = params.toolSignals ?? [];
   const checkpointSignals = params.checkpointSignals ?? [];
   const checksRun = uniqueCompact(
     toolSignals
       .filter((signal) =>
-        /\b(test|typecheck|lint|build|compile|verify|check)\b/i.test(
+        /\b(test|typecheck|lint|build|compile|verify|check|validation)\b/i.test(
           `${signal.toolName} ${signal.summary}`,
         ),
       )
@@ -756,6 +813,20 @@ function buildVerificationState(params: {
       ...checkpointSignals.map((signal) => `${signal.kind}: ${truncate(signal.summary, 96)}`),
     ],
     8,
+  );
+  const goalCriteria = uniqueCompact([...(params.successCriteria ?? []), params.objective], 5);
+  const goalCorpus = [
+    ...toolSignals.map((signal) => `${signal.toolName} ${signal.summary}`.toLowerCase()),
+    ...checkpointSignals.map((signal) => `${signal.kind} ${signal.summary}`.toLowerCase()),
+  ].join("\n");
+  const goalSignals = uniqueCompact(
+    checkpointSignals
+      .filter((signal) => signal.kind === "completion" || signal.kind === "handoff")
+      .map((signal) => `${signal.kind}: ${truncate(signal.summary, 96)}`),
+    6,
+  );
+  const unresolvedCriteria = goalCriteria.filter(
+    (criterion) => !criterionIsSatisfied(criterion, goalCorpus),
   );
   const failureClasses = classifyFailureSignals({
     toolSignals,
@@ -781,13 +852,27 @@ function buildVerificationState(params: {
   ) {
     outcome = "partial";
   }
+  const goalSatisfaction: AgenticGoalSatisfaction =
+    goalCriteria.length === 0
+      ? "uncertain"
+      : unresolvedCriteria.length === 0
+        ? "satisfied"
+        : outcome === "verified" || outcome === "partial"
+          ? "uncertain"
+          : "unsatisfied";
+  if (outcome === "verified" && goalSatisfaction !== "satisfied") {
+    outcome = "partial";
+  }
 
   return {
     version: 1,
     outcome,
+    goalSatisfaction,
     evidence,
+    goalSignals,
     checksRun,
     failingChecks,
+    unresolvedCriteria,
     failureClasses,
   };
 }
@@ -1243,7 +1328,7 @@ function buildOrchestrationState(params: {
   );
   const overlapSignals = detectOverlappingSkills(rankedSkills);
   const multiSkillCandidate =
-    (chainedWorkflow || memoryMultiSkillHint) &&
+    (chainedWorkflow || memoryMultiSkillHint || rankedSkills.length > 1) &&
     (params.plannerState?.retryClass === "skill_fallback" ||
       prerequisiteWarnings.length > 0 ||
       params.taskMode === "planning" ||
@@ -1476,6 +1561,9 @@ export function buildAgenticExecutionState(params: {
     checkpointSignals: params.checkpointSignals,
     retrySignals: params.retrySignals,
     promptErrorSummary: params.promptErrorSummary,
+    objective: latestUserSummary,
+    successCriteria:
+      successCriteria.length > 0 ? successCriteria : latestUserSummary ? [latestUserSummary] : [],
   });
   const taskMode = inferTaskMode(corpus);
   const subtasks = uniqueCompact(
@@ -1588,6 +1676,11 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.verificationState.failureClasses.length > 0
       ? `Failure classes: ${state.verificationState.failureClasses.join(", ")}`
       : undefined;
+  const goalGuidance = `Goal satisfaction: ${state.verificationState.goalSatisfaction}`;
+  const unresolvedGoalGuidance =
+    state.verificationState.unresolvedCriteria.length > 0
+      ? `Unresolved success criteria: ${state.verificationState.unresolvedCriteria.join(" | ")}`
+      : undefined;
   const antiRepeatGuidance =
     state.plannerState.status === "needs_replan" || state.plannerState.status === "blocked"
       ? "Do not repeat the same failing path. Change strategy, narrow scope, or escalate."
@@ -1659,6 +1752,8 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
       ? `Current blockers: ${state.taskState.blockers.join(" | ")}`
       : undefined,
     `Verification state: ${state.verificationState.outcome}`,
+    goalGuidance,
+    unresolvedGoalGuidance,
     failureGuidance,
     retryGuidance,
     escalationGuidance,
@@ -1795,6 +1890,7 @@ export function buildProceduralExecutionRecord(params: {
     toolChain,
     changedArtifacts,
     outcome: params.verificationState.outcome,
+    goalSatisfaction: params.verificationState.goalSatisfaction,
     taskMode: params.taskState.taskMode,
     planSteps: params.taskState.planSteps,
     templateCandidate,
@@ -1884,6 +1980,8 @@ export function inspectAgenticExecutionObservability(
     hasViableFallback: state.orchestrationState.hasViableFallback,
     escalationRequired: state.plannerState.shouldEscalate,
     planSteps: state.taskState.planSteps,
+    goalSatisfaction: state.verificationState.goalSatisfaction,
+    unresolvedCriteria: state.verificationState.unresolvedCriteria,
     recommendations,
   };
 }
@@ -1904,6 +2002,7 @@ export function formatAgenticExecutionObservabilityReport(
         ? `workflow=${report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(">")}`
         : "workflow=none",
       `consolidation=${report.consolidationAction}`,
+      `goal=${report.goalSatisfaction}`,
       report.recommendations.length > 0
         ? `recommendations=${report.recommendations.join(" | ")}`
         : "recommendations=none",
@@ -1926,6 +2025,8 @@ export function formatAgenticExecutionObservabilityReport(
     `- Workflow chain: ${report.workflowSteps.length > 0 ? report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ") : "none"}`,
     `- Consolidation action: ${report.consolidationAction}`,
     `- Overlapping skills: ${report.overlappingSkills.length > 0 ? report.overlappingSkills.join(", ") : "none"}`,
+    `- Goal satisfaction: ${report.goalSatisfaction}`,
+    `- Unresolved criteria: ${report.unresolvedCriteria.length > 0 ? report.unresolvedCriteria.join(" | ") : "none"}`,
     `- Failure pattern: ${report.failurePattern}`,
     `- Viable fallback: ${report.hasViableFallback ? "yes" : "no"}`,
     `- Escalation required: ${report.escalationRequired ? "yes" : "no"}`,
@@ -2598,6 +2699,85 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Consolidation recommendations persist into procedural execution memory."
         : "Consolidation recommendations did not persist into procedural memory.",
       details: `${record.consolidationAction}:${record.overlappingSkills.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow and prepare the final operator handoff summary.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pnpm exec vitest successfully for diagnostics validation.",
+        },
+      ],
+    });
+    const passed =
+      state.verificationState.goalSatisfaction !== "satisfied" &&
+      state.verificationState.outcome === "partial" &&
+      state.verificationState.unresolvedCriteria.length > 0;
+    scenarios.push({
+      id: "goal_satisfaction_downgrades_verified_checks",
+      passed,
+      summary: passed
+        ? "Passing checks alone no longer count as full success when the stated goal is still unresolved."
+        : "Verified checks still overstate success when the user goal is unresolved.",
+      details: `${state.verificationState.outcome}:${state.verificationState.goalSatisfaction}:${state.verificationState.unresolvedCriteria.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, rerun validation, and prepare the final handoff summary.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 2,
+          maxAttempts: 3,
+          summary: "Recovered after retrying the workflow.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran diagnostics validation and produced the final handoff summary.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary:
+            "Diagnostics workflow fixed, validation rerun, and final handoff summary prepared.",
+        },
+      ],
+    });
+    const passed =
+      state.verificationState.goalSatisfaction === "satisfied" &&
+      state.verificationState.outcome === "verified" &&
+      state.taskState.planSteps.every((step) => step.status !== "blocked");
+    scenarios.push({
+      id: "long_run_recovery_reaches_goal_satisfaction",
+      passed,
+      summary: passed
+        ? "Recovered long-run execution can converge on a fully satisfied goal state."
+        : "Recovered long-run execution did not reach a fully satisfied goal state.",
+      details: `${state.verificationState.outcome}:${state.verificationState.goalSatisfaction}`,
     });
   }
 

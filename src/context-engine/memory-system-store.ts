@@ -2946,6 +2946,7 @@ function deriveRuntimeSignalCandidates(params: {
           toolChain?: unknown;
           changedArtifacts?: unknown;
           outcome?: unknown;
+          goalSatisfaction?: unknown;
           taskMode?: unknown;
           templateCandidate?: unknown;
           consolidationCandidate?: unknown;
@@ -3025,6 +3026,12 @@ function deriveRuntimeSignalCandidates(params: {
       proceduralExecution.outcome === "unverified"
         ? proceduralExecution.outcome
         : "unverified";
+    const goalSatisfaction =
+      proceduralExecution.goalSatisfaction === "satisfied" ||
+      proceduralExecution.goalSatisfaction === "uncertain" ||
+      proceduralExecution.goalSatisfaction === "unsatisfied"
+        ? proceduralExecution.goalSatisfaction
+        : "uncertain";
     const taskMode =
       proceduralExecution.taskMode === "coding" ||
       proceduralExecution.taskMode === "debugging" ||
@@ -3245,6 +3252,7 @@ function deriveRuntimeSignalCandidates(params: {
       `retry=${retryClass}`,
       `autonomy=${autonomyMode}`,
       `risk=${riskLevel}`,
+      `goal_satisfaction=${goalSatisfaction}`,
       `failure_pattern=${failurePattern}`,
       suggestedSkill ? `suggested_skill=${suggestedSkill}` : "",
       shouldEscalate ? `escalate=${escalationReason ?? "unknown"}` : "",
@@ -3283,6 +3291,7 @@ function deriveRuntimeSignalCandidates(params: {
       toolChain.length > 0 ? `tool chain ${toolChain.join(" -> ")}` : "",
       changedArtifacts.length > 0 ? `on ${changedArtifacts.join(", ")}` : "",
       `with outcome ${outcome}`,
+      `goal satisfaction ${goalSatisfaction}`,
       `failure pattern ${failurePattern}`,
       `retry class ${retryClass}`,
       `autonomy mode ${autonomyMode}`,
@@ -3303,6 +3312,7 @@ function deriveRuntimeSignalCandidates(params: {
       environmentTags: uniqueStrings([
         "runtime:procedural",
         `procedural:outcome:${outcome}`,
+        `procedural:goal-satisfaction:${goalSatisfaction}`,
         `procedural:retry:${retryClass}`,
         `procedural:autonomy:${autonomyMode}`,
         `procedural:risk:${riskLevel}`,

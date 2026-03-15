@@ -5,7 +5,7 @@ describe("agentic acceptance suite", () => {
   it("passes the built-in acceptance scenarios", () => {
     const report = runAgenticAcceptanceSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(14);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(16);
     expect(report.failedScenarioIds).toEqual([]);
   });
 

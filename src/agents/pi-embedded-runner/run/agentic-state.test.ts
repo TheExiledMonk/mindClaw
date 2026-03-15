@@ -54,6 +54,7 @@ describe("agentic-state", () => {
     expect(state.taskState.activeArtifacts).toContain("src/context-engine/memory-system.ts");
     expect(state.taskState.planSteps.every((step) => step.status !== "blocked")).toBe(true);
     expect(state.verificationState.outcome).toBe("verified");
+    expect(state.verificationState.goalSatisfaction).toBe("satisfied");
     expect(state.plannerState.status).toBe("complete");
     expect(state.governanceState.autonomyMode).toBe("continue");
     expect(state.orchestrationState.primarySkill).toBeUndefined();
@@ -360,6 +361,26 @@ describe("agentic-state", () => {
     expect(buildAgenticSystemPromptAddition(state)).toContain("Consolidation guidance:");
   });
 
+  it("downgrades verified checks when the user goal is still unresolved", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Fix the diagnostics workflow and prepare the final operator handoff summary."),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pnpm exec vitest successfully for diagnostics validation.",
+        },
+      ],
+    });
+
+    expect(state.verificationState.goalSatisfaction).not.toBe("satisfied");
+    expect(state.verificationState.outcome).toBe("partial");
+    expect(state.verificationState.unresolvedCriteria.length).toBeGreaterThan(0);
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Goal satisfaction:");
+  });
+
   it("marks when fallback guidance is still not viable", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Fix the diagnostics workflow and find a viable fallback.")],
@@ -406,6 +427,7 @@ describe("agentic-state", () => {
     expect(report.summary).toContain("fallback=missing");
     expect(report.escalationRequired).toBe(true);
     expect(report.hasViableFallback).toBe(false);
+    expect(report.goalSatisfaction).toBeDefined();
     expect(report.recommendations).toContain(
       "Add or learn a viable fallback workflow before retrying.",
     );

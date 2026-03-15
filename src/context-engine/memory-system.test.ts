@@ -2359,6 +2359,7 @@ describe("MemorySystemContextEngine", () => {
             "src/context-engine/memory-system.ts",
           ],
           outcome: "verified",
+          goalSatisfaction: "satisfied",
           taskMode: "planning",
           templateCandidate: true,
           consolidationCandidate: false,
@@ -2407,6 +2408,7 @@ describe("MemorySystemContextEngine", () => {
           (entry.environmentTags ?? []).includes("procedural:retry:skill_fallback") &&
           (entry.environmentTags ?? []).includes("procedural:primary-skill:memory-diagnostics") &&
           (entry.environmentTags ?? []).includes("procedural:failure-pattern:near_miss") &&
+          (entry.environmentTags ?? []).includes("procedural:goal-satisfaction:satisfied") &&
           (entry.environmentTags ?? []).includes("procedural:ranked-skill:1:acceptance-report") &&
           (entry.environmentTags ?? []).includes(
             "procedural:consolidation-action:extend_existing",

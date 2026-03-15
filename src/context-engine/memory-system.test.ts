@@ -71,6 +71,8 @@ function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMe
     compressionState: "stable",
     activeStatus: "active",
     adjudicationStatus: "authoritative",
+    revisionCount: 0,
+    lastRevisionKind: "new",
     trend: "stable",
     accessCount: 0,
     createdAt: now,
@@ -112,6 +114,26 @@ function permanentRoot(children: PermanentMemoryNode[] = []): PermanentMemoryNod
     activeStatus: "active",
     children,
   };
+}
+
+function findPermanentNodeBySummary(
+  node: PermanentMemoryNode,
+  pattern: string | RegExp,
+): PermanentMemoryNode | undefined {
+  const matches =
+    typeof pattern === "string"
+      ? node.summary?.includes(pattern)
+      : Boolean(node.summary && pattern.test(node.summary));
+  if (matches) {
+    return node;
+  }
+  for (const child of node.children) {
+    const match = findPermanentNodeBySummary(child, pattern);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
 }
 
 function emptyGraph() {
@@ -1226,11 +1248,9 @@ describe("memory system store", () => {
       ],
     });
 
-    const strategies = compiled.permanentMemory.children
-      .find((child) => child.label === "patterns")
-      ?.children.find((child) => child.label === "strategies");
-    const oldLeaf = strategies?.children.find((child) =>
-      child.summary?.includes("old memory-system workaround"),
+    const oldLeaf = findPermanentNodeBySummary(
+      compiled.permanentMemory,
+      "old memory-system workaround",
     );
 
     expect(oldLeaf?.activeStatus).toBe("superseded");

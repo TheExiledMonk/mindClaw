@@ -7,8 +7,11 @@ The integrated memory system now has four explicit architecture layers:
 1. Concept identity
    Each durable memory carries a `semanticKey`, stable `id`, `ontologyKind`, and adjudication state.
 
+   Equivalent memories can now also attach through a second-stage concept matcher when wording changes but category, artifact, and scope overlap still indicate the same concept.
+
 2. Revision and adjudication
    Contradictions move memories into a contested state. Supersession marks old memories as superseded and carries that status into retrieval, review, and permanent memory.
+   Durable merges also classify revisions as `reasserted`, `updated`, `narrowed`, or `contested`.
 
 3. Runtime checkpoints
    The runner can trigger `review()` on compaction and on milestone-like checkpoints, not only during explicit manual review.

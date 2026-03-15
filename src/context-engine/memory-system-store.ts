@@ -53,6 +53,7 @@ export type MemoryImportanceClass = "critical" | "useful" | "temporary" | "disca
 export type MemoryCompressionState = "active" | "stable" | "compressed" | "latent";
 export type MemoryActiveStatus = "active" | "pending" | "stale" | "superseded" | "archived";
 export type MemoryAdjudicationStatus = "authoritative" | "contested" | "superseded";
+export type MemoryRevisionKind = "new" | "reasserted" | "updated" | "narrowed" | "contested";
 export type MemoryTrend = "rising" | "stable" | "fading";
 export type PermanentNodeType =
   | "root"
@@ -146,6 +147,8 @@ export type LongTermMemoryEntry = {
   compressionState: MemoryCompressionState;
   activeStatus: MemoryActiveStatus;
   adjudicationStatus: MemoryAdjudicationStatus;
+  revisionCount: number;
+  lastRevisionKind: MemoryRevisionKind;
   trend: MemoryTrend;
   accessCount: number;
   createdAt: number;
@@ -396,6 +399,24 @@ function mergeRelations(existing: MemoryRelation[], incoming: MemoryRelation[]):
   return [...merged.values()].toSorted((a, b) => b.weight - a.weight).slice(0, MAX_WORKING_ITEMS);
 }
 
+function dedupeLongTermCandidates(entries: LongTermMemoryEntry[]): LongTermMemoryEntry[] {
+  const bySemanticKey = new Map<string, LongTermMemoryEntry>();
+  for (const entry of entries) {
+    const key = entry.semanticKey || normalizeComparable(entry.text);
+    const current = bySemanticKey.get(key);
+    if (!current) {
+      bySemanticKey.set(key, cloneLongTermEntry(entry));
+      continue;
+    }
+    current.evidence = dedupeTexts([...current.evidence, ...entry.evidence], MAX_WORKING_ITEMS);
+    current.provenance = mergeProvenance(current.provenance, entry.provenance);
+    current.strength = Math.max(current.strength, entry.strength);
+    current.confidence = Math.max(current.confidence, entry.confidence);
+    current.updatedAt = Math.max(current.updatedAt, entry.updatedAt);
+  }
+  return [...bySemanticKey.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
+}
+
 function createEmptyGraph(): MemoryGraphSnapshot {
   return {
     nodes: [],
@@ -424,14 +445,14 @@ function inferOntologyKind(category: MemoryCategory, text: string): MemoryOntolo
   ) {
     return "constraint";
   }
-  if (category === "pattern" || category === "strategy") {
-    return "pattern";
-  }
   if (
     category === "episode" ||
     /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(text)
   ) {
     return "outcome";
+  }
+  if (category === "pattern" || category === "strategy") {
+    return "pattern";
   }
   if (category === "entity") {
     return "entity";
@@ -453,6 +474,28 @@ function inferAdjudicationStatus(params: {
     return "contested";
   }
   return "authoritative";
+}
+
+function classifyRevisionKind(
+  current: Pick<LongTermMemoryEntry, "text" | "category">,
+  incoming: Pick<LongTermMemoryEntry, "text" | "category">,
+): MemoryRevisionKind {
+  if (normalizeComparable(current.text) === normalizeComparable(incoming.text)) {
+    return "reasserted";
+  }
+  if (isContradictoryPair(current as LongTermMemoryEntry, incoming as LongTermMemoryEntry)) {
+    return "contested";
+  }
+  const currentTokens = tokenize(current.text);
+  const incomingTokens = tokenize(incoming.text);
+  const shared = incomingTokens.filter((token) => currentTokens.includes(token));
+  if (
+    incomingTokens.length > currentTokens.length &&
+    shared.length >= Math.max(3, Math.floor(currentTokens.length * 0.6))
+  ) {
+    return "narrowed";
+  }
+  return "updated";
 }
 
 function buildMemorySemanticKey(params: {
@@ -478,6 +521,57 @@ function buildMemorySemanticKey(params: {
 
 function buildStableMemoryId(prefix: "ltm" | "pattern", semanticKey: string): string {
   return `${prefix}-${stableHash(semanticKey)}`;
+}
+
+function findConceptMatch(
+  entries: Iterable<LongTermMemoryEntry>,
+  incoming: LongTermMemoryEntry,
+): LongTermMemoryEntry | undefined {
+  if (
+    /\b(replaced|replace|no longer|obsolete|superseded)\b/i.test(incoming.text) ||
+    /\bfixed permanently\b/i.test(incoming.text) ||
+    /\binstead\s+of\b/i.test(incoming.text)
+  ) {
+    return undefined;
+  }
+  let best: LongTermMemoryEntry | undefined;
+  let bestScore = 0;
+  for (const candidate of entries) {
+    if (candidate.category !== incoming.category) {
+      continue;
+    }
+    if (candidate.ontologyKind !== incoming.ontologyKind) {
+      continue;
+    }
+    if (isContradictoryPair(candidate, incoming)) {
+      continue;
+    }
+    const overlap = computeOverlapScore(candidate.text, new Set(tokenize(incoming.text)));
+    const artifactOverlap = (candidate.artifactRefs ?? []).filter((ref) =>
+      (incoming.artifactRefs ?? []).includes(ref),
+    ).length;
+    const scopeOverlap =
+      Number(candidate.versionScope === incoming.versionScope && Boolean(candidate.versionScope)) +
+      Number(
+        candidate.installProfileScope === incoming.installProfileScope &&
+          Boolean(candidate.installProfileScope),
+      ) +
+      Number(
+        candidate.customerScope === incoming.customerScope && Boolean(candidate.customerScope),
+      );
+    const score = overlap + artifactOverlap * 3 + scopeOverlap * 2;
+    if (
+      score >= 6 &&
+      (score > bestScore ||
+        (score === bestScore &&
+          ((candidate.updatedAt ?? 0) > (best?.updatedAt ?? 0) ||
+            candidate.confidence > (best?.confidence ?? 0))))
+    ) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 function dedupeTexts(items: string[], limit = MAX_WORKING_ITEMS): string[] {
@@ -857,6 +951,8 @@ export function deriveLongTermMemoryCandidates(params: {
       compressionState: "active",
       activeStatus: "active",
       adjudicationStatus: "authoritative",
+      revisionCount: 0,
+      lastRevisionKind: "new",
       trend: "rising",
       accessCount: 0,
       createdAt: Date.now(),
@@ -913,6 +1009,8 @@ export function deriveLongTermMemoryCandidates(params: {
       compressionState: "compressed",
       activeStatus: "active",
       adjudicationStatus: "authoritative",
+      revisionCount: 0,
+      lastRevisionKind: "new",
       trend: "stable",
       accessCount: 0,
       createdAt: Date.now(),
@@ -930,7 +1028,7 @@ export function deriveLongTermMemoryCandidates(params: {
   }
 
   return {
-    durable: mergeLongTermMemory([], durable),
+    durable: dedupeLongTermCandidates(durable),
     pending: mergePendingSignificance([], pending),
   };
 }
@@ -945,7 +1043,7 @@ export function mergeLongTermMemory(
   }
   for (const item of incoming) {
     const key = item.semanticKey || normalizeComparable(item.text);
-    const current = byIdentity.get(key);
+    const current = byIdentity.get(key) ?? findConceptMatch(byIdentity.values(), item);
     if (!current) {
       byIdentity.set(key, {
         ...item,
@@ -954,10 +1052,13 @@ export function mergeLongTermMemory(
       continue;
     }
     current.updatedAt = Date.now();
+    const revisionKind = classifyRevisionKind(current, item);
     current.semanticKey = current.semanticKey || item.semanticKey || key;
     current.ontologyKind = item.ontologyKind ?? current.ontologyKind;
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.03);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
+    current.revisionCount = (current.revisionCount ?? 0) + 1;
+    current.lastRevisionKind = revisionKind;
     current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
@@ -975,6 +1076,19 @@ export function mergeLongTermMemory(
     ]);
     current.lastConfirmedAt = Date.now();
     current.trend = "rising";
+    if (revisionKind === "updated" || revisionKind === "narrowed") {
+      current.text = item.text;
+      current.evidence = dedupeTexts([item.text, ...current.evidence], MAX_WORKING_ITEMS);
+    }
+    if (revisionKind === "contested") {
+      current.activeStatus = "pending";
+      current.adjudicationStatus = "contested";
+      current.contradictionCount = Math.max(1, current.contradictionCount);
+      current.confidence = Math.max(0.35, current.confidence - 0.08);
+      current.provenance = mergeProvenance(current.provenance, [
+        createProvenanceRecord("derived", `contested revision: ${item.text}`, [item.id]),
+      ]);
+    }
     current.importanceClass =
       current.importanceClass === "critical" || item.importanceClass === "critical"
         ? "critical"
@@ -989,6 +1103,12 @@ export function mergeLongTermMemory(
         : current.activeStatus;
     if (baseStrengthForCategory(item.category) > baseStrengthForCategory(current.category)) {
       current.category = item.category;
+    }
+    if (revisionKind !== "contested") {
+      current.adjudicationStatus = inferAdjudicationStatus({
+        activeStatus: current.activeStatus,
+        contradictionCount: current.contradictionCount,
+      });
     }
   }
   return [...byIdentity.values()]
@@ -1058,7 +1178,7 @@ function isContradictoryPair(a: LongTermMemoryEntry, b: LongTermMemoryEntry): bo
 function annotateContradictions(entries: LongTermMemoryEntry[]): LongTermMemoryEntry[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
-    counts.set(entry.id, 0);
+    counts.set(entry.id, entry.contradictionCount ?? 0);
   }
   for (let i = 0; i < entries.length; i += 1) {
     for (let j = i + 1; j < entries.length; j += 1) {
@@ -1122,6 +1242,8 @@ function promotePendingMemories(params: {
         activeStatus: "active",
         contradictionCount: item.contradictionCount,
       }),
+      revisionCount: item.revisionCount,
+      lastRevisionKind: item.lastRevisionKind,
       importanceClass: item.importanceClass === "temporary" ? "useful" : item.importanceClass,
       strength: Math.min(1, item.strength + 0.08),
       confidence: Math.min(1, item.confidence + 0.06),
@@ -1464,6 +1586,8 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       compressionState: "stable",
       activeStatus: "active",
       adjudicationStatus: "authoritative",
+      revisionCount: 0,
+      lastRevisionKind: "new",
       trend: "rising",
       accessCount: 0,
       createdAt: Date.now(),
@@ -1523,8 +1647,10 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
   for (let i = 0; i < next.length; i += 1) {
     const newer = next[i];
     if (
-      !/\b(replaced|replace|no longer|obsolete|superseded|fixed permanently|instead of)\b/i.test(
-        newer.text,
+      !(
+        /\b(replaced|replace|no longer|obsolete|superseded)\b/i.test(newer.text) ||
+        /\bfixed permanently\b/i.test(newer.text) ||
+        /\binstead\s+of\b/i.test(newer.text)
       )
     ) {
       continue;
@@ -2085,6 +2211,9 @@ function detectContradictions(entries: LongTermMemoryEntry[]): MemoryRetrievalIt
 
 function describeMemoryStateDowngrade(entry: LongTermMemoryEntry): string[] {
   const notes: string[] = [];
+  if ((entry.revisionCount ?? 0) > 0 && entry.lastRevisionKind !== "new") {
+    notes.push(`revision ${entry.lastRevisionKind}`);
+  }
   if (entry.activeStatus === "superseded") {
     notes.push("superseded");
   } else if (entry.activeStatus === "stale") {
@@ -2970,6 +3099,8 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
         activeStatus: entry.activeStatus ?? "active",
         contradictionCount: entry.contradictionCount ?? 0,
       }),
+    revisionCount: entry.revisionCount ?? 0,
+    lastRevisionKind: entry.lastRevisionKind ?? "new",
     trend: entry.trend ?? "stable",
     accessCount: entry.accessCount ?? 0,
     createdAt: entry.createdAt ?? entry.updatedAt ?? Date.now(),

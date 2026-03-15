@@ -1807,4 +1807,56 @@ describe("MemorySystemContextEngine", () => {
       db.close();
     }
   });
+
+  it("persists scoped alternative adjudications in sqlite-graph", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-scoped-alt-"));
+    const sessionId = "agent:sqlite-scoped-alternatives";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-b.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      const scopedAltCount = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_adjudications WHERE session_id = ? AND resolution_kind = 'scoped_alternative'",
+        )
+        .get(sessionId) as { count: number };
+      const adjudicationJson = db
+        .prepare(
+          "SELECT json FROM memory_adjudications WHERE session_id = ? AND resolution_kind = 'scoped_alternative' LIMIT 1",
+        )
+        .get(sessionId) as { json: string } | undefined;
+
+      expect(scopedAltCount.count).toBeGreaterThan(0);
+      expect(
+        (JSON.parse(adjudicationJson?.json ?? "{}") as { alternativeConceptIds?: string[] })
+          .alternativeConceptIds?.length ?? 0,
+      ).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
 });

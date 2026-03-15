@@ -50,6 +50,7 @@ export type ReviewResult = {
   staleMemoryIds?: string[];
   contradictoryMemoryIds?: string[];
   contradictoryConceptIds?: string[];
+  scopedAlternativeConceptIds?: string[];
   supersededMemoryIds?: string[];
   supersededConceptIds?: string[];
   contestedRevisionConceptIds?: string[];

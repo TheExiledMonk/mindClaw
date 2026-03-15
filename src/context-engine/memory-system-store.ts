@@ -220,6 +220,7 @@ export type MemoryReviewResult = {
   reviewedPendingIds: string[];
   contradictoryMemoryIds: string[];
   contradictoryConceptIds: string[];
+  scopedAlternativeConceptIds: string[];
   supersededMemoryIds: string[];
   supersededConceptIds: string[];
   contestedRevisionConceptIds: string[];
@@ -663,6 +664,10 @@ function classifyRevisionKind(
   return "updated";
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildMemorySemanticKey(params: {
   category: MemoryCategory;
   text: string;
@@ -704,6 +709,116 @@ function buildMemoryConceptKey(params: {
       .map((item) => normalizeComparable(item))
       .join("|"),
   ].join("::");
+}
+
+function buildMemoryConceptFamilyKey(params: {
+  category: MemoryCategory;
+  ontologyKind?: MemoryOntologyKind;
+  text: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  artifactRefs?: string[];
+}): string {
+  let familyText = params.text
+    .replace(/\bv\d+(?:\.\d+)+(?:-\d+)?\b/gi, " ")
+    .replace(/\binstall profile\s+[a-z0-9._-]+\b/gi, " ")
+    .replace(/\bprofile\s+[a-z0-9._-]+\b/gi, " ")
+    .replace(/\bcustomer\s+[a-z0-9._-]+\b/gi, " ")
+    .replace(/\buser\s+[a-z0-9._-]+\b/gi, " ");
+  if (params.versionScope) {
+    familyText = familyText.replace(
+      new RegExp(`\\b${escapeRegExp(params.versionScope)}\\b`, "gi"),
+      " ",
+    );
+    for (const token of tokenize(params.versionScope)) {
+      familyText = familyText.replace(new RegExp(`\\b${escapeRegExp(token)}\\b`, "gi"), " ");
+    }
+  }
+  if (params.installProfileScope) {
+    familyText = familyText.replace(
+      new RegExp(`\\b${escapeRegExp(params.installProfileScope)}\\b`, "gi"),
+      " ",
+    );
+    for (const token of tokenize(params.installProfileScope)) {
+      familyText = familyText.replace(new RegExp(`\\b${escapeRegExp(token)}\\b`, "gi"), " ");
+    }
+  }
+  if (params.customerScope) {
+    familyText = familyText.replace(
+      new RegExp(`\\b${escapeRegExp(params.customerScope)}\\b`, "gi"),
+      " ",
+    );
+    for (const token of tokenize(params.customerScope)) {
+      familyText = familyText.replace(new RegExp(`\\b${escapeRegExp(token)}\\b`, "gi"), " ");
+    }
+  }
+  const normalizedFamilyText = canonicalizeComparable(familyText);
+  return [
+    params.ontologyKind ?? inferOntologyKind(params.category, params.text),
+    params.category,
+    normalizedFamilyText,
+    uniqueStrings(params.artifactRefs ?? [])
+      .map((item) => normalizeComparable(item))
+      .join("|"),
+  ].join("::");
+}
+
+function getEntryConceptFamilyKey(
+  entry: Pick<
+    LongTermMemoryEntry,
+    | "category"
+    | "ontologyKind"
+    | "canonicalText"
+    | "text"
+    | "artifactRefs"
+    | "versionScope"
+    | "installProfileScope"
+    | "customerScope"
+  >,
+): string {
+  return buildMemoryConceptFamilyKey({
+    category: entry.category,
+    ontologyKind: entry.ontologyKind,
+    text: entry.text,
+    versionScope: entry.versionScope,
+    installProfileScope: entry.installProfileScope,
+    customerScope: entry.customerScope,
+    artifactRefs: entry.artifactRefs,
+  });
+}
+
+function buildScopeSignature(
+  entry: Pick<LongTermMemoryEntry, "versionScope" | "installProfileScope" | "customerScope">,
+): string {
+  return [
+    normalizeComparable(entry.versionScope ?? ""),
+    normalizeComparable(entry.installProfileScope ?? ""),
+    normalizeComparable(entry.customerScope ?? ""),
+  ].join("::");
+}
+
+function countExplicitScopeMatches(
+  entry: Pick<LongTermMemoryEntry, "versionScope" | "installProfileScope" | "customerScope">,
+  scopeContext?: MemoryScopeContext,
+): number {
+  if (!scopeContext) {
+    return 0;
+  }
+  let matches = 0;
+  if (scopeContext.versionScope && entry.versionScope === scopeContext.versionScope) {
+    matches += 1;
+  }
+  if (
+    scopeContext.installProfileScope &&
+    entry.installProfileScope === scopeContext.installProfileScope
+  ) {
+    matches += 1;
+  }
+  if (scopeContext.customerScope && entry.customerScope === scopeContext.customerScope) {
+    matches += 1;
+  }
+  return matches;
 }
 
 function evaluatePermanenceStatus(
@@ -803,6 +918,27 @@ function findConceptMatch(
       continue;
     }
     if (candidate.ontologyKind !== incoming.ontologyKind) {
+      continue;
+    }
+    if (
+      candidate.versionScope &&
+      incoming.versionScope &&
+      candidate.versionScope !== incoming.versionScope
+    ) {
+      continue;
+    }
+    if (
+      candidate.installProfileScope &&
+      incoming.installProfileScope &&
+      candidate.installProfileScope !== incoming.installProfileScope
+    ) {
+      continue;
+    }
+    if (
+      candidate.customerScope &&
+      incoming.customerScope &&
+      candidate.customerScope !== incoming.customerScope
+    ) {
       continue;
     }
     if (isContradictoryPair(candidate, incoming)) {
@@ -1074,13 +1210,13 @@ function extractVersionScope(text: string): string | undefined {
 function extractInstallProfileScope(text: string): string | undefined {
   const match =
     text.match(/\binstall profile\s+([a-z0-9._-]+)/i) ?? text.match(/\bprofile\s+([a-z0-9._-]+)/i);
-  return match?.[1]?.trim();
+  return match?.[1]?.trim().replace(/[.,;:!?]+$/, "");
 }
 
 function extractCustomerScope(text: string): string | undefined {
   const match =
     text.match(/\bcustomer\s+([a-z0-9._-]+)/i) ?? text.match(/\buser\s+([a-z0-9._-]+)/i);
-  return match?.[1]?.trim();
+  return match?.[1]?.trim().replace(/[.,;:!?]+$/, "");
 }
 
 function extractEnvironmentTags(text: string): string[] {
@@ -2100,6 +2236,11 @@ function reviewMemoryState(params: {
   const contradictoryConceptIds = conceptIdsFor(
     longTermMemory.filter((entry) => entry.contradictionCount > 0),
   );
+  const scopedAlternativeConceptIds = uniqueIds(
+    (params.adjudications ?? [])
+      .filter((adjudication) => adjudication.resolutionKind === "scoped_alternative")
+      .map((adjudication) => adjudication.conceptId),
+  ).slice(0, MAX_WORKING_ITEMS);
   const supersededMemoryIds = longTermMemory
     .filter((entry) => entry.activeStatus === "superseded")
     .map((entry) => entry.id)
@@ -2159,6 +2300,9 @@ function reviewMemoryState(params: {
         : contestedAdjudicationConceptIds[0]
           ? `Concepts with contested adjudication: ${contestedAdjudicationConceptIds.length}`
           : "",
+      scopedAlternativeConceptIds[0]
+        ? `Scope-specific concept variants available: ${scopedAlternativeConceptIds.length}`
+        : "",
       supersededMemoryIds[0] ? `Superseded memories to retire: ${supersededMemoryIds.length}` : "",
       permanentDeferredIds[0]
         ? `Durable memories waiting for permanence: ${permanentDeferredIds.length}`
@@ -2179,6 +2323,7 @@ function reviewMemoryState(params: {
     reviewedPendingIds,
     contradictoryMemoryIds,
     contradictoryConceptIds,
+    scopedAlternativeConceptIds,
     supersededMemoryIds,
     supersededConceptIds,
     contestedRevisionConceptIds,
@@ -2765,33 +2910,54 @@ function rankLongTermEntries(
     }
     return 0;
   };
+  const scopeBonus = (entry: LongTermMemoryEntry): number => {
+    let bonus = 0;
+    if (scopeContext?.versionScope && entry.versionScope === scopeContext.versionScope) {
+      bonus += 3;
+    }
+    if (
+      scopeContext?.installProfileScope &&
+      entry.installProfileScope === scopeContext.installProfileScope
+    ) {
+      bonus += 2.5;
+    }
+    if (scopeContext?.customerScope && entry.customerScope === scopeContext.customerScope) {
+      bonus += 2;
+    }
+    if ((entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))) {
+      bonus += 1.5;
+    }
+    if ((entry.artifactRefs ?? []).some((ref) => scopeContext?.artifactRefs.includes(ref))) {
+      bonus += 2;
+    }
+    return bonus;
+  };
   const ranked = [...entries]
-    .filter((entry) => includeMemoryForContext(entry, taskMode))
+    .filter((entry) => {
+      if (!includeMemoryForContext(entry, taskMode)) {
+        return false;
+      }
+      const adjudication = adjudications?.find(
+        (item) => item.conceptId === getEntryConceptId(entry),
+      );
+      const hasExplicitScope = Boolean(
+        scopeContext?.versionScope ||
+        scopeContext?.installProfileScope ||
+        scopeContext?.customerScope ||
+        scopeContext?.environmentTags.length ||
+        scopeContext?.artifactRefs.length,
+      );
+      if (
+        adjudication?.resolutionKind === "scoped_alternative" &&
+        hasExplicitScope &&
+        countExplicitScopeMatches(entry, scopeContext) === 0 &&
+        taskMode !== "debugging"
+      ) {
+        return false;
+      }
+      return true;
+    })
     .toSorted((a, b) => {
-      const scopeBonus = (entry: LongTermMemoryEntry): number => {
-        let bonus = 0;
-        if (scopeContext?.versionScope && entry.versionScope === scopeContext.versionScope) {
-          bonus += 3;
-        }
-        if (
-          scopeContext?.installProfileScope &&
-          entry.installProfileScope === scopeContext.installProfileScope
-        ) {
-          bonus += 2.5;
-        }
-        if (scopeContext?.customerScope && entry.customerScope === scopeContext.customerScope) {
-          bonus += 2;
-        }
-        if (
-          (entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))
-        ) {
-          bonus += 1.5;
-        }
-        if ((entry.artifactRefs ?? []).some((ref) => scopeContext?.artifactRefs.includes(ref))) {
-          bonus += 2;
-        }
-        return bonus;
-      };
       const statePenalty = (entry: LongTermMemoryEntry): number => {
         if (entry.activeStatus === "superseded") {
           return 6;
@@ -2815,6 +2981,9 @@ function rankLongTermEntries(
         }
         if (adjudication.winningMemoryId === entry.id && adjudication.status === "authoritative") {
           return 2.5;
+        }
+        if (adjudication.resolutionKind === "scoped_alternative") {
+          return countExplicitScopeMatches(entry, scopeContext) > 0 ? 1.75 : -0.75;
         }
         if (adjudication.status === "contested") {
           return -1.5;
@@ -3263,6 +3432,13 @@ function expandRelatedMemories(
         ) {
           continue;
         }
+        if (
+          adjudication?.resolutionKind === "scoped_alternative" &&
+          countExplicitScopeMatches(artifactRelated, scopeContext) === 0 &&
+          taskMode !== "debugging"
+        ) {
+          continue;
+        }
         seen.add(artifactRelated.id);
         expanded.push(artifactRelated);
         if (expanded.length >= MAX_PACKET_ITEMS) {
@@ -3282,6 +3458,13 @@ function expandRelatedMemories(
       adjudication?.status === "contested" &&
       taskMode !== "debugging" &&
       taskMode !== "support"
+    ) {
+      continue;
+    }
+    if (
+      adjudication?.resolutionKind === "scoped_alternative" &&
+      countExplicitScopeMatches(related, scopeContext) === 0 &&
+      taskMode !== "debugging"
     ) {
       continue;
     }
@@ -3833,6 +4016,7 @@ function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): v
       session_id TEXT NOT NULL,
       concept_id TEXT NOT NULL,
       status TEXT NOT NULL,
+      resolution_kind TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       json TEXT NOT NULL
     );
@@ -3867,6 +4051,14 @@ function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): v
       PRIMARY KEY (session_id, from_id, to_id, type)
     );
   `);
+  const adjudicationColumns = db.prepare("PRAGMA table_info(memory_adjudications)").all() as Array<{
+    name: string;
+  }>;
+  if (!adjudicationColumns.some((column) => column.name === "resolution_kind")) {
+    db.exec(
+      "ALTER TABLE memory_adjudications ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT 'winner'",
+    );
+  }
 }
 
 type PersistedMemoryConcept = {
@@ -3901,13 +4093,24 @@ type PersistedMemoryAdjudication = {
   sessionId: string;
   conceptId: string;
   status: MemoryAdjudicationStatus;
-  resolutionKind: "winner" | "contested" | "retired";
+  resolutionKind: "winner" | "contested" | "retired" | "scoped_alternative";
   rationale: string;
   winningMemoryId?: string;
   losingMemoryIds: string[];
+  alternativeConceptIds: string[];
   scopeSummary?: string;
   updatedAt: number;
 };
+
+function sanitizePersistedMemoryAdjudication(
+  adjudication: PersistedMemoryAdjudication,
+): PersistedMemoryAdjudication {
+  return {
+    ...adjudication,
+    resolutionKind: adjudication.resolutionKind ?? "winner",
+    alternativeConceptIds: uniqueIds(adjudication.alternativeConceptIds ?? []),
+  };
+}
 
 function reviseReviewInputsFromHistory(params: {
   entries: LongTermMemoryEntry[];
@@ -4041,11 +4244,16 @@ function buildPersistedMemoryAdjudications(params: {
   revisions: PersistedMemoryRevision[];
 }): PersistedMemoryAdjudication[] {
   const entriesByConcept = new Map<string, LongTermMemoryEntry[]>();
+  const entriesByConceptFamily = new Map<string, LongTermMemoryEntry[]>();
   for (const entry of params.entries) {
     const conceptId = getEntryConceptId(entry);
     const bucket = entriesByConcept.get(conceptId) ?? [];
     bucket.push(entry);
     entriesByConcept.set(conceptId, bucket);
+    const familyKey = getEntryConceptFamilyKey(entry);
+    const familyBucket = entriesByConceptFamily.get(familyKey) ?? [];
+    familyBucket.push(entry);
+    entriesByConceptFamily.set(familyKey, familyBucket);
   }
   const revisionsByConcept = new Map<string, PersistedMemoryRevision[]>();
   for (const revision of params.revisions) {
@@ -4060,9 +4268,17 @@ function buildPersistedMemoryAdjudications(params: {
     const winner = conceptEntries.toSorted(
       (a, b) => b.confidence - a.confidence || b.updatedAt - a.updatedAt,
     )[0];
+    const conceptFamilyKey = getEntryConceptFamilyKey(winner ?? conceptEntries[0]);
     const losingMemoryIds = conceptEntries
       .filter((entry) => entry.id !== winner?.id)
       .map((entry) => entry.id);
+    const winnerScopeSignature = buildScopeSignature(winner ?? conceptEntries[0]);
+    const alternativeConceptIds = uniqueIds(
+      (entriesByConceptFamily.get(conceptFamilyKey) ?? [])
+        .filter((entry) => getEntryConceptId(entry) !== conceptId)
+        .filter((entry) => buildScopeSignature(entry) !== winnerScopeSignature)
+        .map((entry) => getEntryConceptId(entry)),
+    );
     let status: MemoryAdjudicationStatus = winner?.adjudicationStatus ?? "authoritative";
     let resolutionKind: PersistedMemoryAdjudication["resolutionKind"] = "winner";
     let rationale = "single authoritative concept state";
@@ -4070,6 +4286,10 @@ function buildPersistedMemoryAdjudications(params: {
       status = "contested";
       resolutionKind = "contested";
       rationale = "concept revision history contains contested evidence";
+    } else if (alternativeConceptIds.length > 0) {
+      status = winner?.activeStatus === "superseded" ? "superseded" : "authoritative";
+      resolutionKind = "scoped_alternative";
+      rationale = "concept family includes scope-specific alternatives";
     } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
       status = winner?.activeStatus === "superseded" ? "superseded" : status;
       resolutionKind = winner?.activeStatus === "superseded" ? "retired" : "winner";
@@ -4088,6 +4308,7 @@ function buildPersistedMemoryAdjudications(params: {
       rationale,
       winningMemoryId: winner?.id,
       losingMemoryIds,
+      alternativeConceptIds,
       scopeSummary: [
         winner?.versionScope ? `version=${winner.versionScope}` : "",
         winner?.installProfileScope ? `profile=${winner.installProfileScope}` : "",
@@ -4158,8 +4379,8 @@ export async function loadMemoryStoreSnapshot(params: {
           "SELECT json FROM memory_adjudications WHERE session_id = ? ORDER BY updated_at DESC",
         )
         .all(params.sessionId) as Array<{ json: string }>;
-      const adjudications = adjudicationRows.map(
-        (row) => JSON.parse(row.json) as PersistedMemoryAdjudication,
+      const adjudications = adjudicationRows.map((row) =>
+        sanitizePersistedMemoryAdjudication(JSON.parse(row.json) as PersistedMemoryAdjudication),
       );
       const pendingRows = db
         .prepare("SELECT json FROM pending_memory WHERE session_id = ? ORDER BY updated_at DESC")
@@ -4419,10 +4640,11 @@ export async function persistMemoryStoreSnapshot(params: {
       }
       const insertAdjudication = db.prepare(
         `INSERT INTO memory_adjudications (
-          id, session_id, concept_id, status, updated_at, json
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          id, session_id, concept_id, status, resolution_kind, updated_at, json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
+          resolution_kind = excluded.resolution_kind,
           updated_at = excluded.updated_at,
           json = excluded.json`,
       );
@@ -4432,6 +4654,7 @@ export async function persistMemoryStoreSnapshot(params: {
           adjudication.sessionId,
           adjudication.conceptId,
           adjudication.status,
+          adjudication.resolutionKind,
           adjudication.updatedAt,
           JSON.stringify(adjudication),
         );

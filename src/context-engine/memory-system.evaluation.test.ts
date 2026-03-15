@@ -244,4 +244,49 @@ describe("memory system evaluation scenarios", () => {
       packet.retrievalItems.some((item) => item.reason.includes("downgraded=superseded")),
     ).toBe(true);
   });
+
+  it("treats same concept family variants as scoped alternatives instead of contested contradictions", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-scoped-alternatives",
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+      ],
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-scoped-alternatives",
+      previous: first,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-b.",
+        ),
+      ],
+    });
+
+    const packet = retrieveMemoryContextPacket(second, {
+      messages: [
+        userMessage(
+          "For install profile profile-b, use the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+
+    expect(second.review.scopedAlternativeConceptIds.length).toBeGreaterThan(0);
+    expect(second.review.contestedRevisionConceptIds).toEqual([]);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.includes("adjudication=authoritative:scoped_alternative") &&
+          item.text.includes("profile-b"),
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.includes("adjudication=authoritative:scoped_alternative") &&
+          item.text.includes("profile-a"),
+      ),
+    ).toBe(false);
+  });
 });

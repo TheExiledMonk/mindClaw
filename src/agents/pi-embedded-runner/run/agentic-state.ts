@@ -255,6 +255,13 @@ export type AgenticExecutionObservabilityReport = {
   planSteps: AgenticPlanStep[];
   goalSatisfaction: AgenticGoalSatisfaction;
   unresolvedCriteria: string[];
+  workspaceKind: AgenticEnvironmentState["workspaceKind"];
+  repoFingerprint?: string;
+  capabilitySignals: string[];
+  preferredValidationTools: string[];
+  validationCommands: string[];
+  permissionSignals: string[];
+  branchConventions: string[];
   assumptions: string[];
   recommendations: string[];
 };
@@ -3403,6 +3410,13 @@ export function inspectAgenticExecutionObservability(
     planSteps: state.taskState.planSteps,
     goalSatisfaction: state.verificationState.goalSatisfaction,
     unresolvedCriteria: state.verificationState.unresolvedCriteria,
+    workspaceKind: state.environmentState.workspaceKind,
+    repoFingerprint: state.environmentState.repoFingerprint,
+    capabilitySignals: state.environmentState.capabilitySignals,
+    preferredValidationTools: state.environmentState.preferredValidationTools,
+    validationCommands: state.environmentState.validationCommands ?? [],
+    permissionSignals: state.environmentState.permissionSignals ?? [],
+    branchConventions: state.environmentState.branchConventions ?? [],
     assumptions: state.taskState.assumptions,
     recommendations,
   };
@@ -3445,6 +3459,19 @@ export function formatAgenticExecutionObservabilityReport(
         ? `merge_skills=${report.mergeSkills.length > 0 ? report.mergeSkills.join(">") : "candidate"}`
         : "merge_skills=none",
       `goal=${report.goalSatisfaction}`,
+      `workspace_kind=${report.workspaceKind}`,
+      report.repoFingerprint
+        ? `repo_fingerprint=${report.repoFingerprint}`
+        : "repo_fingerprint=none",
+      report.validationCommands.length > 0
+        ? `validation_commands=${report.validationCommands.join(">")}`
+        : "validation_commands=none",
+      report.branchConventions.length > 0
+        ? `branch_conventions=${report.branchConventions.join(">")}`
+        : "branch_conventions=none",
+      report.permissionSignals.length > 0
+        ? `permission_signals=${report.permissionSignals.join(">")}`
+        : "permission_signals=none",
       report.assumptions.length > 0
         ? `assumptions=${report.assumptions.join(" | ")}`
         : "assumptions=none",
@@ -3480,6 +3507,13 @@ export function formatAgenticExecutionObservabilityReport(
     `- Merge candidate: ${report.mergeCandidate ? "yes" : "no"}`,
     `- Merge skills: ${report.mergeSkills.length > 0 ? report.mergeSkills.join(", ") : "none"}`,
     `- Goal satisfaction: ${report.goalSatisfaction}`,
+    `- Workspace kind: ${report.workspaceKind}`,
+    `- Repo fingerprint: ${report.repoFingerprint ?? "none"}`,
+    `- Capability signals: ${report.capabilitySignals.length > 0 ? report.capabilitySignals.join(", ") : "none"}`,
+    `- Preferred validation tools: ${report.preferredValidationTools.length > 0 ? report.preferredValidationTools.join(", ") : "none"}`,
+    `- Validation commands: ${report.validationCommands.length > 0 ? report.validationCommands.join(" | ") : "none"}`,
+    `- Permission signals: ${report.permissionSignals.length > 0 ? report.permissionSignals.join(", ") : "none"}`,
+    `- Branch conventions: ${report.branchConventions.length > 0 ? report.branchConventions.join(", ") : "none"}`,
     `- Unresolved criteria: ${report.unresolvedCriteria.length > 0 ? report.unresolvedCriteria.join(" | ") : "none"}`,
     `- Assumptions: ${report.assumptions.length > 0 ? report.assumptions.join(" | ") : "none"}`,
     `- Failure pattern: ${report.failurePattern}`,
@@ -7823,6 +7857,11 @@ export function formatAgenticQualityGateReport(
       `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus}`,
       `cross_layer_trend_policy_status=${report.crossLayerTrendPolicyStatus}`,
       `diagnostics=${report.diagnostics.summary}`,
+      `workspace_kind=${report.diagnostics.workspaceKind}`,
+      `repo_fingerprint=${report.diagnostics.repoFingerprint ?? "none"}`,
+      `validation_commands=${report.diagnostics.validationCommands.length > 0 ? report.diagnostics.validationCommands.join(",") : "none"}`,
+      `branch_conventions=${report.diagnostics.branchConventions.length > 0 ? report.diagnostics.branchConventions.join(",") : "none"}`,
+      `permission_signals=${report.diagnostics.permissionSignals.length > 0 ? report.diagnostics.permissionSignals.join(",") : "none"}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
       `clarification_profile=${report.clarificationProfile}`,
@@ -7865,6 +7904,11 @@ export function formatAgenticQualityGateReport(
     "## Diagnostics",
     `- Summary: ${report.diagnostics.summary}`,
     `- Passed: ${report.diagnosticsPassed ? "yes" : "no"}`,
+    `- Workspace kind: ${report.diagnostics.workspaceKind}`,
+    `- Repo fingerprint: ${report.diagnostics.repoFingerprint ?? "none"}`,
+    `- Validation commands: ${report.diagnostics.validationCommands.length > 0 ? report.diagnostics.validationCommands.join(" | ") : "none"}`,
+    `- Branch conventions: ${report.diagnostics.branchConventions.length > 0 ? report.diagnostics.branchConventions.join(", ") : "none"}`,
+    `- Permission signals: ${report.diagnostics.permissionSignals.length > 0 ? report.diagnostics.permissionSignals.join(", ") : "none"}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
     `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,

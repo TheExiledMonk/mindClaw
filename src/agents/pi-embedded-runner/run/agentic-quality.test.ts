@@ -209,6 +209,27 @@ describe("agentic quality gate", () => {
     expect(protectedReport.recommendations).toContain(
       "Protected-branch or high-risk mutation work requires approval before continuing.",
     );
+    expect(protectedReport.diagnostics.workspaceKind).toBe("project");
+    expect(protectedReport.diagnostics.branchConventions.length).toBeGreaterThan(0);
+    expect(protectedReport.diagnostics.permissionSignals.length).toBeGreaterThan(0);
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "workspace_kind=project",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      `branch_conventions=${protectedReport.diagnostics.branchConventions.join(",")}`,
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      `permission_signals=${protectedReport.diagnostics.permissionSignals.join(",")}`,
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Workspace kind: project",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      `Branch conventions: ${protectedReport.diagnostics.branchConventions.join(", ")}`,
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      `Permission signals: ${protectedReport.diagnostics.permissionSignals.join(", ")}`,
+    );
 
     const validationThinState = buildAgenticExecutionState({
       messages: [
@@ -254,6 +275,13 @@ describe("agentic quality gate", () => {
     });
     expect(validationThinReport.recommendations).toContain(
       "Capture an observed validation command before allowing another retry on project work.",
+    );
+    expect(validationThinReport.diagnostics.validationCommands.length).toBeGreaterThan(0);
+    expect(formatAgenticQualityGateReport(validationThinReport, "summary")).toContain(
+      `validation_commands=${validationThinReport.diagnostics.validationCommands.join(",")}`,
+    );
+    expect(formatAgenticQualityGateReport(validationThinReport, "markdown")).toContain(
+      `Validation commands: ${validationThinReport.diagnostics.validationCommands.join(" | ")}`,
     );
   });
 

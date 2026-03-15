@@ -1286,7 +1286,54 @@ export function buildAfterTurnRuntimeContext(params: {
   workspaceDir: string;
   agentDir: string;
   sessionFile: string;
+  messages?: AgentMessage[];
+  promptError?: unknown;
 }): Partial<CompactEmbeddedPiSessionParams> {
+  const extractToolSignalSummary = (message: AgentMessage): string | undefined => {
+    const content = (message as { content?: unknown }).content;
+    if (typeof content === "string") {
+      return content.trim() || undefined;
+    }
+    if (!Array.isArray(content)) {
+      return undefined;
+    }
+    const parts = content
+      .flatMap((block) => {
+        if (!block || typeof block !== "object") {
+          return [];
+        }
+        const text = (block as { text?: unknown }).text;
+        return typeof text === "string" && text.trim() ? [text.trim()] : [];
+      })
+      .filter(Boolean);
+    return parts.join("\n").trim() || undefined;
+  };
+  const toolSignals = (params.messages ?? [])
+    .filter(
+      (
+        message,
+      ): message is AgentMessage & {
+        role: "toolResult";
+        toolName?: string;
+        isError?: boolean;
+      } => message.role === "toolResult",
+    )
+    .map((message) => {
+      const summary = extractToolSignalSummary(message);
+      if (!summary || typeof message.toolName !== "string" || !message.toolName.trim()) {
+        return undefined;
+      }
+      const artifactRefs =
+        summary.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
+      return {
+        toolName: message.toolName.trim(),
+        status: message.isError ? ("error" as const) : ("success" as const),
+        summary,
+        artifactRefs,
+      };
+    })
+    .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal))
+    .slice(-6);
   const resolveGitBranch = (workspaceDir: string): string | undefined => {
     try {
       const headPath = resolveGitHeadPath(workspaceDir);
@@ -1348,6 +1395,8 @@ export function buildAfterTurnRuntimeContext(params: {
     activeArtifacts,
     workspaceTags,
     workspaceState,
+    toolSignals,
+    promptErrorSummary: params.promptError ? describeUnknownError(params.promptError) : undefined,
   };
 }
 
@@ -2705,6 +2754,8 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             agentDir,
             sessionFile: params.sessionFile,
+            messages: messagesSnapshot.slice(prePromptMessageCount),
+            promptError,
           });
 
           if (typeof params.contextEngine.afterTurn === "function") {

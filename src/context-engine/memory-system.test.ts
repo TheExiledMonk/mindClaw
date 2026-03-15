@@ -244,6 +244,53 @@ describe("memory system store", () => {
     expect(compiled.review.carryForwardSummary).toBeTruthy();
   });
 
+  it("captures runtime tool signals as durable memory candidates", () => {
+    const compiled = compileMemoryState({
+      sessionId: "session-runtime-signals",
+      messages: [userMessage("Continue the memory runtime integration work.")],
+      runtimeContext: {
+        toolSignals: [
+          {
+            toolName: "write",
+            status: "success",
+            summary: "Updated src/context-engine/memory-system.ts to persist runtime state.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    });
+
+    const runtimeEntry = compiled.longTermMemory.find((entry) =>
+      entry.text.includes("Tool write observed during runtime"),
+    );
+
+    expect(runtimeEntry?.sourceType).toBe("direct_observation");
+    expect(runtimeEntry?.artifactRefs).toContain("src/context-engine/memory-system.ts");
+    expect(runtimeEntry?.environmentTags).toContain("tool:write");
+    expect(runtimeEntry?.environmentTags).toContain("tool-status:success");
+    expect(compiled.compilerNotes).toContain("captured 1 runtime signal memories");
+  });
+
+  it("captures prompt construction failures as critical runtime memories", () => {
+    const compiled = compileMemoryState({
+      sessionId: "session-runtime-prompt-error",
+      messages: [userMessage("Continue the memory runtime integration work.")],
+      runtimeContext: {
+        promptErrorSummary: "token budget exceeded while building the runtime prompt",
+      },
+    });
+
+    const promptErrorEntry = compiled.longTermMemory.find((entry) =>
+      entry.text.includes("Prompt construction failed during runtime"),
+    );
+
+    expect(promptErrorEntry?.category).toBe("episode");
+    expect(promptErrorEntry?.sourceType).toBe("direct_observation");
+    expect(promptErrorEntry?.importanceClass).toBe("critical");
+    expect(promptErrorEntry?.environmentTags).toContain("runtime:prompt-error");
+    expect(compiled.compilerNotes).toContain("captured 1 runtime signal memories");
+  });
+
   it("gates permanent-memory promotion through explicit permanence policy", () => {
     const compiled = compileMemoryState({
       sessionId: "permanence-policy-a",

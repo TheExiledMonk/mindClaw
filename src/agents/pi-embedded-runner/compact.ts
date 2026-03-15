@@ -152,6 +152,13 @@ export type CompactEmbeddedPiSessionParams = {
     gitCommit?: string;
     transcriptExists?: boolean;
   };
+  toolSignals?: Array<{
+    toolName: string;
+    status: "success" | "error";
+    summary: string;
+    artifactRefs?: string[];
+  }>;
+  promptErrorSummary?: string;
 };
 
 type CompactionMessageMetrics = {

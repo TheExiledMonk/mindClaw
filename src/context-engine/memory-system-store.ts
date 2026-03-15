@@ -1546,6 +1546,194 @@ export function deriveLongTermMemoryCandidates(params: {
   };
 }
 
+function deriveRuntimeSignalCandidates(params: {
+  runtimeContext?: ContextEngineRuntimeContext;
+  scopeContext?: Partial<MemoryScopeContext>;
+}): LongTermMemoryEntry[] {
+  const runtime = params.runtimeContext;
+  if (!runtime || typeof runtime !== "object") {
+    return [];
+  }
+
+  const toolSignals = Array.isArray(runtime.toolSignals) ? runtime.toolSignals : [];
+  const candidates: LongTermMemoryEntry[] = [];
+
+  for (const signal of toolSignals) {
+    if (!signal || typeof signal !== "object") {
+      continue;
+    }
+    const toolName =
+      typeof signal.toolName === "string" && signal.toolName.trim().length > 0
+        ? signal.toolName.trim()
+        : undefined;
+    const status =
+      signal.status === "success" || signal.status === "error" ? signal.status : undefined;
+    const summary =
+      typeof signal.summary === "string" && signal.summary.trim().length > 0
+        ? signal.summary.trim()
+        : undefined;
+    if (!toolName || !status || !summary) {
+      continue;
+    }
+
+    const artifactRefs = uniqueStrings(
+      Array.isArray(signal.artifactRefs)
+        ? signal.artifactRefs.filter(
+            (ref: unknown): ref is string => typeof ref === "string" && ref.trim().length > 0,
+          )
+        : [],
+    );
+    if (status === "success" && artifactRefs.length === 0 && tokenize(summary).length < 5) {
+      continue;
+    }
+
+    const category: MemoryCategory =
+      status === "error" || toolName === "write" || toolName === "exec" ? "episode" : "fact";
+    const text =
+      status === "error"
+        ? `Tool ${toolName} failed during runtime: ${summary}`
+        : `Tool ${toolName} observed during runtime: ${summary}`;
+    const scope = mergeScopeContexts(buildMemoryScopeContext(text), {
+      ...params.scopeContext,
+      artifactRefs: uniqueStrings([...(params.scopeContext?.artifactRefs ?? []), ...artifactRefs]),
+      environmentTags: uniqueStrings([
+        ...(params.scopeContext?.environmentTags ?? []),
+        `tool:${toolName}`,
+        `tool-status:${status}`,
+      ]),
+    });
+    const ontologyKind = inferOntologyKind(category, text);
+    const semanticKey = buildMemorySemanticKey({
+      category,
+      text,
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      artifactRefs: scope.artifactRefs,
+    });
+    const now = Date.now();
+
+    candidates.push({
+      id: buildStableMemoryId("ltm", semanticKey),
+      semanticKey,
+      conceptKey: buildMemoryConceptKey({
+        category,
+        ontologyKind,
+        text,
+        versionScope: scope.versionScope,
+        installProfileScope: scope.installProfileScope,
+        customerScope: scope.customerScope,
+        artifactRefs: scope.artifactRefs,
+      }),
+      canonicalText: canonicalizeComparable(text),
+      conceptAliases: [text, summary, toolName],
+      ontologyKind,
+      category,
+      text,
+      strength: status === "error" ? 0.92 : 0.76,
+      evidence: [summary],
+      provenance: [createProvenanceRecord("derived", `runtime ${status}: ${summary}`)],
+      sourceType: "direct_observation",
+      confidence: status === "error" ? 0.9 : 0.72,
+      importanceClass: status === "error" ? "critical" : "useful",
+      compressionState: "stable",
+      activeStatus: "active",
+      adjudicationStatus: "authoritative",
+      revisionCount: 0,
+      lastRevisionKind: "new",
+      permanenceStatus: "deferred",
+      permanenceReasons: [],
+      trend: status === "error" ? "rising" : "stable",
+      accessCount: 0,
+      createdAt: now,
+      lastConfirmedAt: now,
+      contradictionCount: 0,
+      relatedMemoryIds: [],
+      relations: [],
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      environmentTags: scope.environmentTags,
+      artifactRefs: scope.artifactRefs,
+      updatedAt: now,
+    });
+  }
+
+  const promptErrorSummary =
+    typeof runtime.promptErrorSummary === "string" && runtime.promptErrorSummary.trim().length > 0
+      ? runtime.promptErrorSummary.trim()
+      : undefined;
+  if (promptErrorSummary) {
+    const text = `Prompt construction failed during runtime: ${promptErrorSummary}`;
+    const scope = mergeScopeContexts(buildMemoryScopeContext(text), {
+      ...params.scopeContext,
+      environmentTags: uniqueStrings([
+        ...(params.scopeContext?.environmentTags ?? []),
+        "runtime:prompt-error",
+      ]),
+    });
+    const ontologyKind = inferOntologyKind("episode", text);
+    const semanticKey = buildMemorySemanticKey({
+      category: "episode",
+      text,
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      artifactRefs: scope.artifactRefs,
+    });
+    const now = Date.now();
+
+    candidates.push({
+      id: buildStableMemoryId("ltm", semanticKey),
+      semanticKey,
+      conceptKey: buildMemoryConceptKey({
+        category: "episode",
+        ontologyKind,
+        text,
+        versionScope: scope.versionScope,
+        installProfileScope: scope.installProfileScope,
+        customerScope: scope.customerScope,
+        artifactRefs: scope.artifactRefs,
+      }),
+      canonicalText: canonicalizeComparable(text),
+      conceptAliases: [text, promptErrorSummary],
+      ontologyKind,
+      category: "episode",
+      text,
+      strength: 0.96,
+      evidence: [promptErrorSummary],
+      provenance: [
+        createProvenanceRecord("derived", `runtime prompt error: ${promptErrorSummary}`),
+      ],
+      sourceType: "direct_observation",
+      confidence: 0.95,
+      importanceClass: "critical",
+      compressionState: "stable",
+      activeStatus: "active",
+      adjudicationStatus: "authoritative",
+      revisionCount: 0,
+      lastRevisionKind: "new",
+      permanenceStatus: "deferred",
+      permanenceReasons: [],
+      trend: "rising",
+      accessCount: 0,
+      createdAt: now,
+      lastConfirmedAt: now,
+      contradictionCount: 0,
+      relatedMemoryIds: [],
+      relations: [],
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      environmentTags: scope.environmentTags,
+      artifactRefs: scope.artifactRefs,
+      updatedAt: now,
+    });
+  }
+
+  return candidates;
+}
+
 export function mergeLongTermMemory(
   existing: LongTermMemoryEntry[],
   incoming: LongTermMemoryEntry[],
@@ -2950,6 +3138,10 @@ export function compileMemoryState(params: {
     compactionSummary: params.compactionSummary,
     scopeContext: runtimeScope,
   });
+  const runtimeSignalCandidates = deriveRuntimeSignalCandidates({
+    runtimeContext: params.runtimeContext,
+    scopeContext: runtimeScope,
+  });
   const mergedPending = mergePendingSignificance(
     previous?.pendingSignificance ?? [],
     candidates.pending,
@@ -2961,11 +3153,13 @@ export function compileMemoryState(params: {
   const patternCandidates = buildPatternMemoryEntries([
     ...(previous?.longTermMemory ?? []),
     ...candidates.durable,
+    ...runtimeSignalCandidates,
     ...promotedPending.durable,
   ]);
   const lifecycle = refreshLongTermLifecycle(
     mergeLongTermMemory(previous?.longTermMemory ?? [], [
       ...candidates.durable,
+      ...runtimeSignalCandidates,
       ...promotedPending.durable,
       ...patternCandidates,
     ]),
@@ -3026,6 +3220,9 @@ export function compileMemoryState(params: {
   }
   if (candidates.pending.length > 0) {
     compilerNotes.push(`held ${candidates.pending.length} memories pending significance`);
+  }
+  if (runtimeSignalCandidates.length > 0) {
+    compilerNotes.push(`captured ${runtimeSignalCandidates.length} runtime signal memories`);
   }
   if (promotedPending.durable.length > 0) {
     compilerNotes.push(

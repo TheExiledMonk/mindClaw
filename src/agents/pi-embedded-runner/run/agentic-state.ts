@@ -312,10 +312,14 @@ export type AgenticQualityGateReport = {
   acceptancePassed: boolean;
   soakPassed: boolean;
   diagnosticsPassed: boolean;
+  effectivenessPassed: boolean;
   failReasons: string[];
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
+  weakeningSkills: string[];
+  effectiveSkills: string[];
+  effectivenessTrend?: "stable" | "watch" | "regressing";
   summary: string;
 };
 
@@ -3479,6 +3483,12 @@ export function runAgenticQualityGate(params?: {
   messages?: AgentMessage[];
   failOnEscalation?: boolean;
   failOnMissingFallback?: boolean;
+  failOnWeakeningSkills?: boolean;
+  memoryTrend?: {
+    weakeningSkills?: string[];
+    effectiveSkills?: string[];
+    trend?: "stable" | "watch" | "regressing";
+  };
 }): AgenticQualityGateReport {
   const acceptance = runAgenticAcceptanceSuite();
   const soak = runAgenticSoakSuite();
@@ -3486,6 +3496,9 @@ export function runAgenticQualityGate(params?: {
     messages: params?.messages ?? [],
   });
   const diagnostics = inspectAgenticExecutionObservability(diagnosticsState);
+  const weakeningSkills = uniqueCompact(params?.memoryTrend?.weakeningSkills ?? [], 6);
+  const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
+  const effectivenessTrend = params?.memoryTrend?.trend;
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -3495,21 +3508,29 @@ export function runAgenticQualityGate(params?: {
     params?.failOnMissingFallback && !diagnostics.hasViableFallback
       ? "diagnostics_missing_fallback"
       : undefined,
+    params?.failOnWeakeningSkills && weakeningSkills.length > 0
+      ? "weakening_scoped_skills"
+      : undefined,
   ].filter((reason): reason is string => Boolean(reason));
   const diagnosticsPassed =
     (!params?.failOnEscalation || !diagnostics.escalationRequired) &&
     (!params?.failOnMissingFallback || diagnostics.hasViableFallback);
-  const passed = acceptance.passed && soak.passed && diagnosticsPassed;
+  const effectivenessPassed = !params?.failOnWeakeningSkills || weakeningSkills.length === 0;
+  const passed = acceptance.passed && soak.passed && diagnosticsPassed && effectivenessPassed;
   return {
     passed,
     acceptancePassed: acceptance.passed,
     soakPassed: soak.passed,
     diagnosticsPassed,
+    effectivenessPassed,
     failReasons,
     acceptance,
     soak,
     diagnostics,
-    summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"}`,
+    weakeningSkills,
+    effectiveSkills,
+    effectivenessTrend,
+    summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"} effectiveness=${effectivenessPassed ? "pass" : "fail"}`,
   };
 }
 
@@ -3526,6 +3547,8 @@ export function formatAgenticQualityGateReport(
       `acceptance=${report.acceptance.summary}`,
       `soak=${report.soak.summary}`,
       `diagnostics=${report.diagnostics.summary}`,
+      `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
+      `weakening_skills=${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(",") : "none"}`,
       `fail_reasons=${report.failReasons.length > 0 ? report.failReasons.join(",") : "none"}`,
     ];
     return `${lines.join("\n")}\n`;
@@ -3550,6 +3573,12 @@ export function formatAgenticQualityGateReport(
     `- Passed: ${report.diagnosticsPassed ? "yes" : "no"}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
+    "",
+    "## Effectiveness",
+    `- Passed: ${report.effectivenessPassed ? "yes" : "no"}`,
+    `- Trend: ${report.effectivenessTrend ?? "unknown"}`,
+    `- Effective skills: ${report.effectiveSkills.length > 0 ? report.effectiveSkills.join(", ") : "none"}`,
+    `- Weakening skills: ${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(", ") : "none"}`,
   ];
   return `${lines.join("\n")}\n`;
 }

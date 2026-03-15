@@ -41,12 +41,36 @@ describe("agentic quality gate", () => {
     expect(report.failReasons).toContain("diagnostics_missing_fallback");
   });
 
+  it("can fail the effectiveness portion when weakening scoped skills are disallowed", () => {
+    const report = runAgenticQualityGate({
+      failOnWeakeningSkills: true,
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        weakeningSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.effectivenessPassed).toBe(false);
+    expect(report.failReasons).toContain("weakening_scoped_skills");
+    expect(report.weakeningSkills).toContain("diagnostics-repair@debugging/node");
+  });
+
   it("formats the quality gate report in summary and markdown forms", () => {
-    const report = runAgenticQualityGate();
+    const report = runAgenticQualityGate({
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        weakeningSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("agentic quality gate");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "# Agentic Quality Gate Report",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Diagnostics");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Effectiveness");
   });
 });

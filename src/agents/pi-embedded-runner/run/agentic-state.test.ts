@@ -1164,6 +1164,33 @@ describe("agentic-state", () => {
     );
   });
 
+  it("prefers fallback over clarification for non-blocking missing-information failures", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Repair the release notes generation flow and keep moving.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pnpm exec vitest --run release-notes validation.",
+        },
+        {
+          toolName: "template-generator",
+          status: "error",
+          summary: "Missing required template variable: releaseNotesTitle",
+        },
+      ],
+      availableSkills: ["release-notes-generator", "release-notes-template-fallback"],
+      likelySkills: ["release-notes-generator"],
+    });
+
+    expect(state.verificationState.outcome).toBe("failed");
+    expect(state.verificationState.failureClasses).toContain("missing_information");
+    expect(state.plannerState.retryClass).toBe("skill_fallback");
+    expect(state.plannerState.suggestedSkill).toBe("release-notes-template-fallback");
+    const observability = inspectAgenticExecutionObservability(state);
+    expect(observability.clarificationSummary).toBeUndefined();
+  });
+
   it("escalates environment mismatches instead of recommending normal retries", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],

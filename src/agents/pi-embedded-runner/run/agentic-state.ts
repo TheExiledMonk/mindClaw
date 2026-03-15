@@ -312,7 +312,8 @@ export type AgenticAcceptanceScenarioId =
   | "environment_guard_retry_alignment"
   | "guarded_handoff_alignment"
   | "concise_progress_alignment"
-  | "clarification_alignment";
+  | "clarification_alignment"
+  | "nonblocking_missing_information_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -1292,6 +1293,9 @@ function buildPlannerState(params: {
       : undefined;
 
   const dominantFailureClass = params.verificationState.failureClasses[0];
+  const blockingMissingInformation =
+    dominantFailureClass === "missing_information" &&
+    params.verificationState.outcome === "blocked";
   const templateFamilyActive =
     Boolean(likelyPrimaryFamily) &&
     memoryRegressionSignals.templatePreferredFamilies.includes(likelyPrimaryFamily ?? "");
@@ -1309,7 +1313,7 @@ function buildPlannerState(params: {
           : undefined;
   const retryClass: AgenticRetryClass = shouldEscalate
     ? "escalate"
-    : dominantFailureClass === "missing_information"
+    : blockingMissingInformation
       ? "clarify"
       : suggestedSkill
         ? "skill_fallback"
@@ -1349,7 +1353,7 @@ function buildPlannerState(params: {
       status: retryFailures.length > 0 ? "blocked" : "needs_replan",
       nextAction: shouldEscalate
         ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
-        : dominantFailureClass === "missing_information"
+        : blockingMissingInformation
           ? "Clarify the missing input or fetch the missing prerequisite before retrying."
           : mergeFamilyFallbackSkills.length > 0
             ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${mergeFallbackHint}${fallbackHint}`.trim()
@@ -5000,6 +5004,47 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Missing-information retries now surface a concrete clarification payload for operators."
         : "Clarification payloads did not stay concrete for missing-information retries.",
       details: `clarification=${observability.clarificationSummary ?? "none"} handoff=${handoff.clarificationSummary ?? "none"}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Repair the release notes generation flow and keep moving.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pnpm exec vitest --run release-notes validation.",
+        },
+        {
+          toolName: "template-generator",
+          status: "error",
+          summary: "Missing required template variable: releaseNotesTitle",
+        },
+      ],
+      availableSkills: ["release-notes-generator", "release-notes-template-fallback"],
+      likelySkills: ["release-notes-generator"],
+    });
+    const observability = inspectAgenticExecutionObservability(state);
+    const passed =
+      state.verificationState.outcome === "failed" &&
+      state.verificationState.failureClasses.includes("missing_information") &&
+      state.plannerState.retryClass === "skill_fallback" &&
+      state.plannerState.suggestedSkill === "release-notes-template-fallback" &&
+      observability.clarificationSummary === undefined;
+    scenarios.push({
+      id: "nonblocking_missing_information_alignment",
+      passed,
+      summary: passed
+        ? "Non-blocking missing-information failures now prefer fallback or replanning over premature clarification."
+        : "Non-blocking missing-information failures still over-trigger clarification.",
+      details: `outcome=${state.verificationState.outcome} retry=${state.plannerState.retryClass} suggested=${state.plannerState.suggestedSkill ?? "none"} clarification=${observability.clarificationSummary ?? "none"}`,
     });
   }
 

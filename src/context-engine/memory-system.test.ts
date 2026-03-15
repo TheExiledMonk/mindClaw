@@ -36,10 +36,25 @@ function userMessage(content: string): AgentMessage {
 
 function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMemoryEntry {
   const now = Date.now();
+  const category = overrides.category ?? "strategy";
+  const text = overrides.text ?? "Default durable memory.";
   return {
     id: "ltm-default",
-    category: "strategy",
-    text: "Default durable memory.",
+    semanticKey: `test::${category}::${text.toLowerCase()}`,
+    ontologyKind:
+      category === "decision"
+        ? "constraint"
+        : category === "pattern" || category === "strategy"
+          ? "pattern"
+          : category === "episode"
+            ? "outcome"
+            : category === "entity"
+              ? "entity"
+              : category === "preference"
+                ? "preference"
+                : "fact",
+    category,
+    text,
     strength: 0.8,
     evidence: ["default evidence"],
     provenance: [
@@ -119,6 +134,8 @@ describe("memory system store", () => {
     expect(candidates.durable.some((candidate) => candidate.text.includes("v2026.3.13-1"))).toBe(
       true,
     );
+    expect(candidates.durable[0]?.semanticKey).toBeTruthy();
+    expect(candidates.durable[0]?.ontologyKind).toBeTruthy();
   });
 
   it("builds a compact outward-facing memory packet", () => {
@@ -1390,6 +1407,7 @@ describe("MemorySystemContextEngine", () => {
 
     const memoryRoot = path.join(tempDir, MEMORY_SYSTEM_DIRNAME);
     await expect(fs.stat(memoryRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(memoryRoot, "store-metadata.json"))).resolves.toBeTruthy();
   });
 
   it("runs explicit review and persists the reviewed state", async () => {
@@ -1422,5 +1440,7 @@ describe("MemorySystemContextEngine", () => {
     });
     expect(reviewed?.reviewed).toBe(true);
     expect(snapshot.workingMemory.carryForwardSummary).toBeTruthy();
+    expect(reviewed?.contradictoryMemoryIds).toEqual(expect.any(Array));
+    expect(reviewed?.supersededMemoryIds).toEqual(expect.any(Array));
   });
 });

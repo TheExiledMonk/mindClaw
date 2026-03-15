@@ -9,6 +9,7 @@ const LONG_TERM_FILENAME = "long-term.json";
 const PENDING_FILENAME = "pending-significance.json";
 const PERMANENT_TREE_FILENAME = "permanent-tree.json";
 const GRAPH_FILENAME = "memory-graph.json";
+const STORE_METADATA_FILENAME = "store-metadata.json";
 const MAX_WORKING_ITEMS = 6;
 const MAX_LONG_TERM_ITEMS = 48;
 const MAX_PENDING_ITEMS = 64;
@@ -25,6 +26,14 @@ export type MemoryCategory =
   | "entity"
   | "episode"
   | "pattern";
+
+export type MemoryOntologyKind =
+  | "constraint"
+  | "pattern"
+  | "outcome"
+  | "entity"
+  | "preference"
+  | "fact";
 
 export type MemoryTaskMode =
   | "coding"
@@ -123,6 +132,8 @@ export type WorkingMemorySnapshot = {
 
 export type LongTermMemoryEntry = {
   id: string;
+  semanticKey: string;
+  ontologyKind: MemoryOntologyKind;
   category: MemoryCategory;
   text: string;
   strength: number;
@@ -176,6 +187,14 @@ export type MemoryStoreSnapshot = {
   graph: MemoryGraphSnapshot;
 };
 
+export type MemoryStoreBackendKind = "fs-json";
+
+export type MemoryStoreMetadata = {
+  backend: MemoryStoreBackendKind;
+  version: 1;
+  updatedAt: number;
+};
+
 export type MemoryCompileResult = MemoryStoreSnapshot & {
   compilerNotes: string[];
   review: MemoryReviewResult;
@@ -208,6 +227,7 @@ export type MemoryContextPacket = {
 type MemoryStorePaths = {
   rootDir: string;
   sessionsDir: string;
+  metadataFile: string;
   workingFile: string;
   longTermFile: string;
   pendingFile: string;
@@ -222,6 +242,7 @@ function resolveStorePaths(workspaceDir: string, sessionId: string): MemoryStore
   return {
     rootDir,
     sessionsDir,
+    metadataFile: path.join(rootDir, STORE_METADATA_FILENAME),
     workingFile: path.join(sessionsDir, `${safeSessionId}.json`),
     longTermFile: path.join(rootDir, LONG_TERM_FILENAME),
     pendingFile: path.join(rootDir, PENDING_FILENAME),
@@ -247,6 +268,34 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+type MemoryStoreBackend = {
+  kind: MemoryStoreBackendKind;
+  readJson: <T>(filePath: string, fallback: T) => Promise<T>;
+  writeJson: (filePath: string, value: unknown) => Promise<void>;
+};
+
+const fsJsonMemoryStoreBackend: MemoryStoreBackend = {
+  kind: "fs-json",
+  readJson: readJsonFile,
+  writeJson: writeJsonFile,
+};
+
+function resolveMemoryStoreBackend(kind?: MemoryStoreBackendKind): MemoryStoreBackend {
+  switch (kind ?? "fs-json") {
+    case "fs-json":
+    default:
+      return fsJsonMemoryStoreBackend;
+  }
+}
+
+function defaultMemoryStoreMetadata(kind: MemoryStoreBackendKind = "fs-json"): MemoryStoreMetadata {
+  return {
+    backend: kind,
+    version: 1,
+    updatedAt: Date.now(),
+  };
+}
+
 function clipText(text: string, max = 220): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= max) {
@@ -260,6 +309,15 @@ function normalizeComparable(text: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function stableHash(text: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function tokenize(text: string): string[] {
@@ -355,6 +413,56 @@ function createProvenanceRecord(
     recordedAt: Date.now(),
     derivedFromMemoryIds: uniqueIds(derivedFromMemoryIds ?? []),
   };
+}
+
+function inferOntologyKind(category: MemoryCategory, text: string): MemoryOntologyKind {
+  if (
+    category === "decision" ||
+    /\b(must|required|always|never|constraint|preserve|keep|use)\b/i.test(text)
+  ) {
+    return "constraint";
+  }
+  if (category === "pattern" || category === "strategy") {
+    return "pattern";
+  }
+  if (
+    category === "episode" ||
+    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(text)
+  ) {
+    return "outcome";
+  }
+  if (category === "entity") {
+    return "entity";
+  }
+  if (category === "preference") {
+    return "preference";
+  }
+  return "fact";
+}
+
+function buildMemorySemanticKey(params: {
+  category: MemoryCategory;
+  text: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  artifactRefs?: string[];
+}): string {
+  return [
+    inferOntologyKind(params.category, params.text),
+    params.category,
+    normalizeComparable(params.text),
+    normalizeComparable(params.versionScope ?? ""),
+    normalizeComparable(params.installProfileScope ?? ""),
+    normalizeComparable(params.customerScope ?? ""),
+    uniqueStrings(params.artifactRefs ?? [])
+      .map((item) => normalizeComparable(item))
+      .join("|"),
+  ].join("::");
+}
+
+function buildStableMemoryId(prefix: "ltm" | "pattern", semanticKey: string): string {
+  return `${prefix}-${stableHash(semanticKey)}`;
 }
 
 function dedupeTexts(items: string[], limit = MAX_WORKING_ITEMS): string[] {
@@ -710,9 +818,19 @@ export function deriveLongTermMemoryCandidates(params: {
       continue;
     }
     const scope = mergeScopeContexts(buildMemoryScopeContext(normalized), params.scopeContext);
+    const semanticKey = buildMemorySemanticKey({
+      category,
+      text: normalized,
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      artifactRefs: scope.artifactRefs,
+    });
 
     const entryBase: LongTermMemoryEntry = {
-      id: `ltm-${Date.now().toString(36)}-${(durable.length + pending.length).toString(36)}`,
+      id: buildStableMemoryId("ltm", semanticKey),
+      semanticKey,
+      ontologyKind: inferOntologyKind(category, normalized),
       category,
       text: normalized,
       strength: baseStrengthForCategory(category),
@@ -755,10 +873,21 @@ export function deriveLongTermMemoryCandidates(params: {
       buildMemoryScopeContext(compactionSummary),
       params.scopeContext,
     );
-    durable.push({
-      id: `ltm-${Date.now().toString(36)}-compaction`,
+    const normalizedSummary = clipText(compactionSummary, 260);
+    const semanticKey = buildMemorySemanticKey({
       category: "episode",
-      text: clipText(compactionSummary, 260),
+      text: normalizedSummary,
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      artifactRefs: scope.artifactRefs,
+    });
+    durable.push({
+      id: buildStableMemoryId("ltm", semanticKey),
+      semanticKey,
+      ontologyKind: inferOntologyKind("episode", normalizedSummary),
+      category: "episode",
+      text: normalizedSummary,
       strength: 0.88,
       evidence: [clipText(compactionSummary, 180)],
       provenance: [createProvenanceRecord("compaction", compactionSummary)],
@@ -793,21 +922,23 @@ export function mergeLongTermMemory(
   existing: LongTermMemoryEntry[],
   incoming: LongTermMemoryEntry[],
 ): LongTermMemoryEntry[] {
-  const byText = new Map<string, LongTermMemoryEntry>();
+  const byIdentity = new Map<string, LongTermMemoryEntry>();
   for (const item of existing) {
-    byText.set(normalizeComparable(item.text), cloneLongTermEntry(item));
+    byIdentity.set(item.semanticKey || normalizeComparable(item.text), cloneLongTermEntry(item));
   }
   for (const item of incoming) {
-    const key = normalizeComparable(item.text);
-    const current = byText.get(key);
+    const key = item.semanticKey || normalizeComparable(item.text);
+    const current = byIdentity.get(key);
     if (!current) {
-      byText.set(key, {
+      byIdentity.set(key, {
         ...item,
         evidence: dedupeTexts(item.evidence, MAX_WORKING_ITEMS),
       });
       continue;
     }
     current.updatedAt = Date.now();
+    current.semanticKey = current.semanticKey || item.semanticKey || key;
+    current.ontologyKind = item.ontologyKind ?? current.ontologyKind;
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.03);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
     current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
@@ -843,7 +974,7 @@ export function mergeLongTermMemory(
       current.category = item.category;
     }
   }
-  return [...byText.values()]
+  return [...byIdentity.values()]
     .toSorted((a, b) => b.strength - a.strength || b.updatedAt - a.updatedAt)
     .slice(0, MAX_LONG_TERM_ITEMS);
 }
@@ -1226,9 +1357,19 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       `Pattern memory: repeated ${sharedTokens.join(" ")} signals across ${deduped.length} related memories.`,
       220,
     );
-    const patternId = `pattern-${Date.now().toString(36)}-${patterns.length.toString(36)}`;
+    const semanticKey = buildMemorySemanticKey({
+      category: "pattern",
+      text: summary,
+      versionScope: deduped.find((entry) => entry.versionScope)?.versionScope,
+      installProfileScope: deduped.find((entry) => entry.installProfileScope)?.installProfileScope,
+      customerScope: deduped.find((entry) => entry.customerScope)?.customerScope,
+      artifactRefs: uniqueStrings(deduped.flatMap((entry) => entry.artifactRefs ?? [])),
+    });
+    const patternId = buildStableMemoryId("pattern", semanticKey);
     patterns.push({
       id: patternId,
+      semanticKey,
+      ontologyKind: "pattern",
       category: "pattern",
       text: summary,
       strength: Math.min(
@@ -2723,8 +2864,23 @@ export function touchRetrievedMemories(
 }
 
 function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
+  const semanticKey =
+    entry.semanticKey ||
+    buildMemorySemanticKey({
+      category: entry.category,
+      text: entry.text,
+      versionScope: entry.versionScope,
+      installProfileScope: entry.installProfileScope,
+      customerScope: entry.customerScope,
+      artifactRefs: entry.artifactRefs,
+    });
   return {
     ...entry,
+    id:
+      entry.id ||
+      buildStableMemoryId(entry.category === "pattern" ? "pattern" : "ltm", semanticKey),
+    semanticKey,
+    ontologyKind: entry.ontologyKind ?? inferOntologyKind(entry.category, entry.text),
     evidence: [...(entry.evidence ?? [])],
     provenance: (entry.provenance ?? []).map((item) => ({
       ...item,
@@ -2792,10 +2948,19 @@ function sanitizePermanentNode(node: PermanentMemoryNode): PermanentMemoryNode {
 export async function loadMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
 }): Promise<MemoryStoreSnapshot> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  const backend = resolveMemoryStoreBackend(params.backendKind);
   await ensureStoreDirs(paths);
-  const workingMemory = await readJsonFile<WorkingMemorySnapshot>(paths.workingFile, {
+  await backend.writeJson(
+    paths.metadataFile,
+    await backend.readJson<MemoryStoreMetadata>(
+      paths.metadataFile,
+      defaultMemoryStoreMetadata(backend.kind),
+    ),
+  );
+  const workingMemory = await backend.readJson<WorkingMemorySnapshot>(paths.workingFile, {
     sessionId: params.sessionId,
     updatedAt: Date.now(),
     rollingSummary: "",
@@ -2806,15 +2971,15 @@ export async function loadMemoryStoreSnapshot(params: {
     recentEvents: [],
     recentDecisions: [],
   });
-  const longTermMemory = (await readJsonFile<LongTermMemoryEntry[]>(paths.longTermFile, [])).map(
-    (entry) => sanitizeLongTermEntry(entry),
-  );
-  const pendingSignificance = await readJsonFile<PendingMemoryEntry[]>(paths.pendingFile, []);
+  const longTermMemory = (
+    await backend.readJson<LongTermMemoryEntry[]>(paths.longTermFile, [])
+  ).map((entry) => sanitizeLongTermEntry(entry));
+  const pendingSignificance = await backend.readJson<PendingMemoryEntry[]>(paths.pendingFile, []);
   const permanentMemory = sanitizePermanentNode(
-    await readJsonFile<PermanentMemoryNode>(paths.permanentTreeFile, createPermanentRoot()),
+    await backend.readJson<PermanentMemoryNode>(paths.permanentTreeFile, createPermanentRoot()),
   );
   const graph = sanitizeGraphSnapshot(
-    await readJsonFile<MemoryGraphSnapshot>(paths.graphFile, createEmptyGraph()),
+    await backend.readJson<MemoryGraphSnapshot>(paths.graphFile, createEmptyGraph()),
   );
   return {
     workingMemory,
@@ -2833,14 +2998,17 @@ export async function persistMemoryStoreSnapshot(params: {
   pendingSignificance: PendingMemoryEntry[];
   permanentMemory: PermanentMemoryNode;
   graph: MemoryGraphSnapshot;
+  backendKind?: MemoryStoreBackendKind;
 }): Promise<void> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  const backend = resolveMemoryStoreBackend(params.backendKind);
   await ensureStoreDirs(paths);
   await Promise.all([
-    writeJsonFile(paths.workingFile, params.workingMemory),
-    writeJsonFile(paths.longTermFile, params.longTermMemory),
-    writeJsonFile(paths.pendingFile, params.pendingSignificance),
-    writeJsonFile(paths.permanentTreeFile, params.permanentMemory),
-    writeJsonFile(paths.graphFile, params.graph),
+    backend.writeJson(paths.metadataFile, defaultMemoryStoreMetadata(backend.kind)),
+    backend.writeJson(paths.workingFile, params.workingMemory),
+    backend.writeJson(paths.longTermFile, params.longTermMemory),
+    backend.writeJson(paths.pendingFile, params.pendingSignificance),
+    backend.writeJson(paths.permanentTreeFile, params.permanentMemory),
+    backend.writeJson(paths.graphFile, params.graph),
   ]);
 }

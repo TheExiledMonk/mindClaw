@@ -11,6 +11,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
+  shouldRunContextEngineCheckpointReview,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -1194,5 +1195,53 @@ describe("buildAfterTurnRuntimeContext", () => {
       workspaceTags: expect.arrayContaining(["workspace", "tmp-workspace"]),
       activeArtifacts: expect.arrayContaining(["session.jsonl"]),
     });
+  });
+});
+
+describe("shouldRunContextEngineCheckpointReview", () => {
+  it("returns true for completion-style milestones", () => {
+    expect(
+      shouldRunContextEngineCheckpointReview({
+        newMessages: [
+          {
+            role: "assistant",
+            content: "The migration is completed and the old workaround is now obsolete.",
+            timestamp: Date.now(),
+          } as never,
+        ],
+        compactionOccurred: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when compaction or prompt errors occurred", () => {
+    expect(
+      shouldRunContextEngineCheckpointReview({
+        newMessages: [],
+        compactionOccurred: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunContextEngineCheckpointReview({
+        newMessages: [],
+        compactionOccurred: false,
+        promptError: new Error("boom"),
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for ordinary short turns", () => {
+    expect(
+      shouldRunContextEngineCheckpointReview({
+        newMessages: [
+          {
+            role: "assistant",
+            content: "Continuing with the current implementation.",
+            timestamp: Date.now(),
+          } as never,
+        ],
+        compactionOccurred: false,
+      }),
+    ).toBe(false);
   });
 });

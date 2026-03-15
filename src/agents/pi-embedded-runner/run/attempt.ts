@@ -1321,6 +1321,49 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
+export function shouldRunContextEngineCheckpointReview(params: {
+  newMessages: AgentMessage[];
+  compactionOccurred: boolean;
+  promptError?: unknown;
+}): boolean {
+  if (params.promptError) {
+    return true;
+  }
+  if (params.compactionOccurred) {
+    return true;
+  }
+  const recentText = params.newMessages
+    .map((message) => {
+      const content = (message as { content?: unknown }).content;
+      if (typeof content === "string") {
+        return content;
+      }
+      if (!Array.isArray(content)) {
+        return "";
+      }
+      return content
+        .map((item: unknown) =>
+          item && typeof item === "object" && "text" in item && typeof item.text === "string"
+            ? item.text
+            : "",
+        )
+        .join(" ");
+    })
+    .join(" ")
+    .toLowerCase();
+  if (params.newMessages.length >= 6) {
+    return true;
+  }
+  if (
+    /\b(done|completed|fixed|resolved|finished|obsolete|superseded|replaced|handoff|checkpoint)\b/.test(
+      recentText,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -2645,6 +2688,25 @@ export async function runEmbeddedAttempt(
                 tokenBudget: params.contextTokenBudget,
                 runtimeContext: afterTurnRuntimeContext,
               });
+              if (
+                typeof params.contextEngine.review === "function" &&
+                shouldRunContextEngineCheckpointReview({
+                  newMessages: messagesSnapshot.slice(prePromptMessageCount),
+                  compactionOccurred: compactionOccurredThisAttempt,
+                  promptError,
+                })
+              ) {
+                await params.contextEngine.review({
+                  sessionId: sessionIdUsed,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.sessionFile,
+                  runtimeContext: {
+                    ...afterTurnRuntimeContext,
+                    checkpointReviewCandidate: true,
+                  },
+                  reason: "checkpoint",
+                });
+              }
             } catch (afterTurnErr) {
               log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
             }

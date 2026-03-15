@@ -1,4 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { LegacyContextEngine } from "./legacy.js";
+import {
+  compileMemoryState,
+  loadMemoryStoreSnapshot,
+  type MemoryStoreBackendKind,
+  persistMemoryStoreSnapshot,
+  retrieveMemoryContextPacket,
+  runMemorySleepReview,
+  touchRetrievedMemories,
+} from "./memory-system-store.js";
+import { registerContextEngine } from "./registry.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -10,16 +21,6 @@ import type {
   IngestResult,
   ReviewResult,
 } from "./types.js";
-import { registerContextEngine } from "./registry.js";
-import { LegacyContextEngine } from "./legacy.js";
-import {
-  compileMemoryState,
-  loadMemoryStoreSnapshot,
-  persistMemoryStoreSnapshot,
-  retrieveMemoryContextPacket,
-  runMemorySleepReview,
-  touchRetrievedMemories,
-} from "./memory-system-store.js";
 
 function resolveWorkspaceDir(runtimeContext?: ContextEngineRuntimeContext): string {
   const workspaceDir = runtimeContext?.workspaceDir;
@@ -29,7 +30,21 @@ function resolveWorkspaceDir(runtimeContext?: ContextEngineRuntimeContext): stri
   return process.cwd();
 }
 
-function selectNewMessages(messages: AgentMessage[], prePromptMessageCount?: number): AgentMessage[] {
+function resolveMemoryStoreBackendKind(
+  runtimeContext?: ContextEngineRuntimeContext,
+): MemoryStoreBackendKind | undefined {
+  const runtimeValue = runtimeContext?.memoryStoreBackend;
+  if (runtimeValue === "fs-json") {
+    return runtimeValue;
+  }
+  const envValue = process.env.OPENCLAW_MEMORY_STORE_BACKEND;
+  return envValue === "fs-json" ? envValue : undefined;
+}
+
+function selectNewMessages(
+  messages: AgentMessage[],
+  prePromptMessageCount?: number,
+): AgentMessage[] {
   if (
     typeof prePromptMessageCount === "number" &&
     Number.isFinite(prePromptMessageCount) &&
@@ -58,6 +73,7 @@ export class MemorySystemContextEngine implements ContextEngine {
     await loadMemoryStoreSnapshot({
       workspaceDir: process.cwd(),
       sessionId: params.sessionKey ?? params.sessionId,
+      backendKind: resolveMemoryStoreBackendKind(),
     });
     return { bootstrapped: true, importedMessages: 0 };
   }
@@ -89,12 +105,14 @@ export class MemorySystemContextEngine implements ContextEngine {
     const snapshot = await loadMemoryStoreSnapshot({
       workspaceDir: process.cwd(),
       sessionId: params.sessionKey ?? params.sessionId,
+      backendKind: resolveMemoryStoreBackendKind(),
     });
     const packet = retrieveMemoryContextPacket(snapshot, { messages: params.messages });
     if (packet.accessedLongTermIds.length > 0) {
       await persistMemoryStoreSnapshot({
         workspaceDir: process.cwd(),
         sessionId: params.sessionKey ?? params.sessionId,
+        backendKind: resolveMemoryStoreBackendKind(),
         workingMemory: snapshot.workingMemory,
         longTermMemory: touchRetrievedMemories(snapshot.longTermMemory, packet.accessedLongTermIds),
         pendingSignificance: snapshot.pendingSignificance,
@@ -125,9 +143,11 @@ export class MemorySystemContextEngine implements ContextEngine {
     }
     const sessionId = params.sessionKey ?? params.sessionId;
     const workspaceDir = resolveWorkspaceDir(params.runtimeContext);
+    const backendKind = resolveMemoryStoreBackendKind(params.runtimeContext);
     const snapshot = await loadMemoryStoreSnapshot({
       workspaceDir,
       sessionId,
+      backendKind,
     });
     const compiled = compileMemoryState({
       sessionId,
@@ -148,6 +168,7 @@ export class MemorySystemContextEngine implements ContextEngine {
     await persistMemoryStoreSnapshot({
       workspaceDir,
       sessionId,
+      backendKind,
       workingMemory: incremental.workingMemory,
       longTermMemory: incremental.longTermMemory,
       pendingSignificance: incremental.pendingSignificance,
@@ -169,7 +190,8 @@ export class MemorySystemContextEngine implements ContextEngine {
   }): Promise<CompactResult> {
     const sessionId = params.sessionKey ?? params.sessionId;
     const workspaceDir = resolveWorkspaceDir(params.runtimeContext);
-    const snapshot = await loadMemoryStoreSnapshot({ workspaceDir, sessionId });
+    const backendKind = resolveMemoryStoreBackendKind(params.runtimeContext);
+    const snapshot = await loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind });
     const memoryAwareInstructions = [
       "Memory-system compaction rules:",
       "Preserve current goals, constraints, decisions, and unresolved loops explicitly.",
@@ -196,6 +218,7 @@ export class MemorySystemContextEngine implements ContextEngine {
       await persistMemoryStoreSnapshot({
         workspaceDir,
         sessionId,
+        backendKind,
         workingMemory: compiled.workingMemory,
         longTermMemory: compiled.longTermMemory,
         pendingSignificance: compiled.pendingSignificance,
@@ -222,13 +245,15 @@ export class MemorySystemContextEngine implements ContextEngine {
   }): Promise<ReviewResult> {
     const sessionId = params.sessionKey ?? params.sessionId;
     const workspaceDir = resolveWorkspaceDir(params.runtimeContext);
+    const backendKind = resolveMemoryStoreBackendKind(params.runtimeContext);
     const reviewed = runMemorySleepReview({
       sessionId,
-      snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId }),
+      snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
     });
     await persistMemoryStoreSnapshot({
       workspaceDir,
       sessionId,
+      backendKind,
       workingMemory: reviewed.workingMemory,
       longTermMemory: reviewed.longTermMemory,
       pendingSignificance: reviewed.pendingSignificance,
@@ -242,6 +267,8 @@ export class MemorySystemContextEngine implements ContextEngine {
         `memory review complete (${params.reason ?? "manual"})`,
       archivedMemoryIds: reviewed.review.archivedMemoryIds,
       staleMemoryIds: reviewed.review.staleMemoryIds,
+      contradictoryMemoryIds: reviewed.review.contradictoryMemoryIds,
+      supersededMemoryIds: reviewed.review.supersededMemoryIds,
     };
   }
 

@@ -48,6 +48,8 @@ export type ReviewResult = {
   summary?: string;
   archivedMemoryIds?: string[];
   staleMemoryIds?: string[];
+  contradictoryMemoryIds?: string[];
+  supersededMemoryIds?: string[];
 };
 
 export type ContextEngineInfo = {

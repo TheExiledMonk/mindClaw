@@ -2100,6 +2100,8 @@ describe("MemorySystemContextEngine", () => {
         | undefined;
       const metadata = JSON.parse(row?.value ?? "{}") as {
         backend?: string;
+        schemaVersion?: number;
+        lastAppliedMigration?: string;
         lastIntegrityCheckResult?: string;
         lastIntegrityCheckAt?: number;
         longTermCount?: number;
@@ -2108,12 +2110,24 @@ describe("MemorySystemContextEngine", () => {
         graphEdgeCount?: number;
       };
       expect(metadata.backend).toBe("sqlite-graph");
+      expect(metadata.schemaVersion).toBe(3);
+      expect(metadata.lastAppliedMigration).toBe("003_sqlite_graph_indexes");
       expect(metadata.lastIntegrityCheckResult).toBe("ok");
       expect(typeof metadata.lastIntegrityCheckAt).toBe("number");
       expect(typeof metadata.longTermCount).toBe("number");
       expect(typeof metadata.conceptCount).toBe("number");
       expect(typeof metadata.graphNodeCount).toBe("number");
       expect(typeof metadata.graphEdgeCount).toBe("number");
+      const migrations = db
+        .prepare(
+          "SELECT id, schema_version FROM memory_store_migrations ORDER BY schema_version ASC",
+        )
+        .all() as Array<{ id: string; schema_version: number }>;
+      expect(migrations.map((row) => row.id)).toEqual([
+        "001_sqlite_graph_init",
+        "002_adjudication_resolution_kind",
+        "003_sqlite_graph_indexes",
+      ]);
     } finally {
       db.close();
     }

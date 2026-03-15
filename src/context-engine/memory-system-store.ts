@@ -207,6 +207,8 @@ export type MemoryStoreMetadata = {
   backend: MemoryStoreBackendKind;
   version: 1;
   updatedAt: number;
+  schemaVersion?: number;
+  lastAppliedMigration?: string;
   lastIntegrityCheckAt?: number;
   lastIntegrityCheckResult?: "ok";
   longTermCount?: number;
@@ -388,6 +390,8 @@ const sqliteGraphMemoryStoreBackend: MemoryStoreBackend = {
   writeJson: writeSqliteJsonFile,
 };
 
+const SQLITE_GRAPH_SCHEMA_VERSION = 3;
+
 function resolveMemoryStoreBackend(kind?: MemoryStoreBackendKind): MemoryStoreBackend {
   switch (kind ?? "fs-json") {
     case "sqlite-graph":
@@ -405,6 +409,7 @@ function defaultMemoryStoreMetadata(kind: MemoryStoreBackendKind = "fs-json"): M
     backend: kind,
     version: 1,
     updatedAt: Date.now(),
+    schemaVersion: kind === "sqlite-graph" ? SQLITE_GRAPH_SCHEMA_VERSION : 1,
   };
 }
 
@@ -425,6 +430,17 @@ function sanitizeMemoryStoreMetadata(
       typeof candidate?.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
         ? candidate.updatedAt
         : Date.now(),
+    schemaVersion:
+      typeof candidate?.schemaVersion === "number" && Number.isFinite(candidate.schemaVersion)
+        ? candidate.schemaVersion
+        : expectedBackend === "sqlite-graph"
+          ? SQLITE_GRAPH_SCHEMA_VERSION
+          : 1,
+    lastAppliedMigration:
+      typeof candidate?.lastAppliedMigration === "string" &&
+      candidate.lastAppliedMigration.trim().length > 0
+        ? candidate.lastAppliedMigration
+        : undefined,
     lastIntegrityCheckAt:
       typeof candidate?.lastIntegrityCheckAt === "number" &&
       Number.isFinite(candidate.lastIntegrityCheckAt)
@@ -483,6 +499,14 @@ function buildSnapshotStoreMetadata(params: {
     backend: params.backend,
     version: 1,
     updatedAt: Date.now(),
+    schemaVersion:
+      params.backend === "sqlite-graph"
+        ? SQLITE_GRAPH_SCHEMA_VERSION
+        : (params.previous?.schemaVersion ?? 1),
+    lastAppliedMigration:
+      params.backend === "sqlite-graph"
+        ? (params.previous?.lastAppliedMigration ?? `003_sqlite_graph_indexes`)
+        : params.previous?.lastAppliedMigration,
     longTermCount: params.snapshot.longTermMemory.length,
     conceptCount: conceptIds.size,
     contestedConceptCount: contestedConceptIds.size,
@@ -4668,107 +4692,194 @@ function collectSqliteGraphRoot(
   return root ?? createPermanentRoot();
 }
 
-function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): void {
+type SqliteGraphMigration = {
+  id: string;
+  version: number;
+  apply: (db: import("node:sqlite").DatabaseSync) => void;
+};
+
+const SQLITE_GRAPH_MIGRATIONS: SqliteGraphMigration[] = [
+  {
+    id: "001_sqlite_graph_init",
+    version: 1,
+    apply: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_store_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_store_migrations (
+          id TEXT PRIMARY KEY,
+          schema_version INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS working_memory (
+          session_id TEXT PRIMARY KEY,
+          json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS long_term_memory (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          concept_id TEXT NOT NULL,
+          concept_key TEXT NOT NULL,
+          ontology_kind TEXT NOT NULL,
+          active_status TEXT NOT NULL,
+          permanence_status TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_concepts (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          concept_key TEXT NOT NULL,
+          canonical_text TEXT NOT NULL,
+          category TEXT NOT NULL,
+          ontology_kind TEXT NOT NULL,
+          permanence_status TEXT NOT NULL,
+          adjudication_status TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_concept_aliases (
+          session_id TEXT NOT NULL,
+          concept_id TEXT NOT NULL,
+          alias TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (session_id, concept_id, alias)
+        );
+        CREATE TABLE IF NOT EXISTS memory_revisions (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          concept_id TEXT NOT NULL,
+          memory_id TEXT NOT NULL,
+          revision_kind TEXT NOT NULL,
+          adjudication_status TEXT NOT NULL,
+          active_status TEXT NOT NULL,
+          permanence_status TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_adjudications (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          concept_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          resolution_kind TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS pending_memory (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS permanent_nodes (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          parent_id TEXT,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_graph_nodes (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          active_status TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_graph_edges (
+          session_id TEXT NOT NULL,
+          from_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          json TEXT NOT NULL,
+          PRIMARY KEY (session_id, from_id, to_id, type)
+        );
+      `);
+    },
+  },
+  {
+    id: "002_adjudication_resolution_kind",
+    version: 2,
+    apply: (db) => {
+      const adjudicationColumns = db
+        .prepare("PRAGMA table_info(memory_adjudications)")
+        .all() as Array<{
+        name: string;
+      }>;
+      if (!adjudicationColumns.some((column) => column.name === "resolution_kind")) {
+        db.exec(
+          "ALTER TABLE memory_adjudications ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT 'winner'",
+        );
+      }
+    },
+  },
+  {
+    id: "003_sqlite_graph_indexes",
+    version: 3,
+    apply: (db) => {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_long_term_memory_session_updated
+          ON long_term_memory (session_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_concepts_session_updated
+          ON memory_concepts (session_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_revisions_session_concept
+          ON memory_revisions (session_id, concept_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_adjudications_session_concept
+          ON memory_adjudications (session_id, concept_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_pending_memory_session_updated
+          ON pending_memory (session_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_permanent_nodes_session_parent
+          ON permanent_nodes (session_id, parent_id, updated_at ASC);
+        CREATE INDEX IF NOT EXISTS idx_memory_graph_nodes_session_updated
+          ON memory_graph_nodes (session_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_graph_edges_session_from
+          ON memory_graph_edges (session_id, from_id, updated_at DESC);
+      `);
+    },
+  },
+];
+
+function applySqliteGraphMigrations(db: import("node:sqlite").DatabaseSync): {
+  schemaVersion: number;
+  lastAppliedMigration: string;
+} {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS memory_store_metadata (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS working_memory (
-      session_id TEXT PRIMARY KEY,
-      json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS long_term_memory (
+    CREATE TABLE IF NOT EXISTS memory_store_migrations (
       id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      concept_id TEXT NOT NULL,
-      concept_key TEXT NOT NULL,
-      ontology_kind TEXT NOT NULL,
-      active_status TEXT NOT NULL,
-      permanence_status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_concepts (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      concept_key TEXT NOT NULL,
-      canonical_text TEXT NOT NULL,
-      category TEXT NOT NULL,
-      ontology_kind TEXT NOT NULL,
-      permanence_status TEXT NOT NULL,
-      adjudication_status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_concept_aliases (
-      session_id TEXT NOT NULL,
-      concept_id TEXT NOT NULL,
-      alias TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, concept_id, alias)
-    );
-    CREATE TABLE IF NOT EXISTS memory_revisions (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      concept_id TEXT NOT NULL,
-      memory_id TEXT NOT NULL,
-      revision_kind TEXT NOT NULL,
-      adjudication_status TEXT NOT NULL,
-      active_status TEXT NOT NULL,
-      permanence_status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_adjudications (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      concept_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      resolution_kind TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS pending_memory (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS permanent_nodes (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      parent_id TEXT,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_graph_nodes (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      active_status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_graph_edges (
-      session_id TEXT NOT NULL,
-      from_id TEXT NOT NULL,
-      to_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      json TEXT NOT NULL,
-      PRIMARY KEY (session_id, from_id, to_id, type)
+      schema_version INTEGER NOT NULL,
+      applied_at INTEGER NOT NULL
     );
   `);
-  const adjudicationColumns = db.prepare("PRAGMA table_info(memory_adjudications)").all() as Array<{
-    name: string;
-  }>;
-  if (!adjudicationColumns.some((column) => column.name === "resolution_kind")) {
-    db.exec(
-      "ALTER TABLE memory_adjudications ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT 'winner'",
-    );
+  const applied = new Set(
+    (
+      db.prepare("SELECT id FROM memory_store_migrations ORDER BY applied_at ASC").all() as Array<{
+        id: string;
+      }>
+    ).map((row) => row.id),
+  );
+  const insertMigration = db.prepare(
+    "INSERT OR IGNORE INTO memory_store_migrations (id, schema_version, applied_at) VALUES (?, ?, ?)",
+  );
+  let lastAppliedMigration = "";
+  let schemaVersion = 0;
+  for (const migration of SQLITE_GRAPH_MIGRATIONS) {
+    if (!applied.has(migration.id)) {
+      migration.apply(db);
+      insertMigration.run(migration.id, migration.version, Date.now());
+      applied.add(migration.id);
+    }
+    lastAppliedMigration = migration.id;
+    schemaVersion = migration.version;
   }
+  return {
+    schemaVersion,
+    lastAppliedMigration,
+  };
 }
 
 type PersistedMemoryConcept = {
@@ -5044,7 +5155,7 @@ export async function loadMemoryStoreSnapshot(params: {
     const dbPath = path.join(paths.rootDir, SQLITE_STORE_FILENAME);
     const db = new DatabaseSync(dbPath);
     try {
-      ensureSqliteGraphStoreSchema(db);
+      const migrationState = applySqliteGraphMigrations(db);
       const integrityRow = db.prepare("PRAGMA integrity_check(1)").get() as
         | { integrity_check?: string }
         | undefined;
@@ -5210,6 +5321,8 @@ export async function loadMemoryStoreSnapshot(params: {
             snapshot,
             previous: {
               ...metadata,
+              schemaVersion: migrationState.schemaVersion,
+              lastAppliedMigration: migrationState.lastAppliedMigration,
               lastIntegrityCheckAt: Date.now(),
               lastIntegrityCheckResult: "ok",
             },
@@ -5286,7 +5399,7 @@ export async function persistMemoryStoreSnapshot(params: {
     const dbPath = path.join(paths.rootDir, SQLITE_STORE_FILENAME);
     const db = new DatabaseSync(dbPath);
     try {
-      ensureSqliteGraphStoreSchema(db);
+      const migrationState = applySqliteGraphMigrations(db);
       const metadata = sanitizeMemoryStoreMetadata(
         (() => {
           const row = db
@@ -5320,7 +5433,11 @@ export async function persistMemoryStoreSnapshot(params: {
               permanentMemory: params.permanentMemory,
               graph: params.graph,
             },
-            previous: metadata,
+            previous: {
+              ...metadata,
+              schemaVersion: migrationState.schemaVersion,
+              lastAppliedMigration: migrationState.lastAppliedMigration,
+            },
           }) satisfies MemoryStoreMetadata,
         ),
       );

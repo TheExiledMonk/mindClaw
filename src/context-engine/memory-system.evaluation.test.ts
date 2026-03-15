@@ -170,7 +170,9 @@ describe("memory system evaluation scenarios", () => {
         (item) =>
           item.kind === "long-term" &&
           item.text.includes("permanent memory-system path") &&
-          item.reason.includes("adjudication=authoritative:winner"),
+          item.reason.includes("adjudication=authoritative:winner") &&
+          item.reason.includes("source=direct_observation") &&
+          item.reason.includes("rationale="),
       ),
     ).toBe(true);
   });

@@ -2227,6 +2227,9 @@ describe("MemorySystemContextEngine", () => {
 
     expect(health.summary).toContain("backend=sqlite-graph");
     expect(health.contestedConceptCount).toBeGreaterThan(0);
+    expect(health.contestedEntityConflictCount).toBeGreaterThanOrEqual(0);
+    expect(health.sourceTypeCounts.user_stated).toBeGreaterThan(0);
+    expect(health.authoritativeSourceTypeCounts.user_stated).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(health.issues)).toBe(true);
     expect(Array.isArray(health.recommendations)).toBe(true);
     expect(health.backupAvailable).toBe(true);
@@ -2304,6 +2307,8 @@ describe("MemorySystemContextEngine", () => {
     expect(report.summary).toContain("task=");
     expect(report.accessedConceptCount).toBeGreaterThan(0);
     expect(report.longTermItemCount).toBeGreaterThan(0);
+    expect(report.entityMatchedItemCount).toBeGreaterThan(0);
+    expect(report.authoritativeWinnerItemCount).toBeGreaterThan(0);
   });
 
   it("generates a diagnostics report with health, retrieval, and acceptance summaries", async () => {
@@ -2347,6 +2352,7 @@ describe("MemorySystemContextEngine", () => {
 
     expect(report.summary).toContain("backend=sqlite-graph");
     expect(report.health.summary).toContain("backend=sqlite-graph");
+    expect(report.health.sourceTypeCounts.user_stated).toBeGreaterThanOrEqual(0);
     expect(report.retrieval?.summary).toContain("task=");
     expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(11);
     expect(report.failedAcceptanceScenarios).toEqual([]);

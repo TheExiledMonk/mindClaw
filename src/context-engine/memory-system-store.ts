@@ -238,8 +238,12 @@ export type MemoryStoreHealthReport = {
   recommendations: string[];
   summary: string;
   contestedConceptCount: number;
+  contestedEntityConflictCount: number;
   scopedAlternativeConceptCount: number;
   entityLinkedConceptCount: number;
+  weakEvidenceWinnerCount: number;
+  sourceTypeCounts: Record<MemorySourceType, number>;
+  authoritativeSourceTypeCounts: Record<MemorySourceType, number>;
   supersededMemoryCount: number;
   permanentEligibleCount: number;
   staleMemoryCount: number;
@@ -317,6 +321,9 @@ export type MemoryRetrievalObservabilityReport = {
   contestedItemCount: number;
   scopedAlternativeItemCount: number;
   artifactAnchoredItemCount: number;
+  entityMatchedItemCount: number;
+  authoritativeWinnerItemCount: number;
+  summaryDerivedItemCount: number;
   accessedConceptCount: number;
   topReasons: string[];
   summary: string;
@@ -1071,6 +1078,29 @@ function sourceTypeReliabilityScore(sourceType: MemorySourceType): number {
   }
 }
 
+function createSourceTypeCounts(): Record<MemorySourceType, number> {
+  return {
+    user_stated: 0,
+    direct_observation: 0,
+    summary_derived: 0,
+    system_inferred: 0,
+  };
+}
+
+function inferMessageSourceType(text: string): MemorySourceType {
+  if (
+    /\b(i|we)\s+(observed|verified|confirmed|saw|tested)\b/i.test(text) ||
+    /\bobserved directly\b/i.test(text) ||
+    /\bdirect observation\b/i.test(text)
+  ) {
+    return "direct_observation";
+  }
+  if (/\bsummary says\b/i.test(text) || /\bsummar(?:y|ized)\b/i.test(text)) {
+    return "summary_derived";
+  }
+  return "user_stated";
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1397,6 +1427,39 @@ function countSharedResolvedEntityAliases(
   return overlap;
 }
 
+function countCanonicalEntityKindOverlap(
+  a: Pick<
+    LongTermMemoryEntry,
+    | "text"
+    | "versionScope"
+    | "installProfileScope"
+    | "customerScope"
+    | "environmentTags"
+    | "artifactRefs"
+    | "entityAliases"
+  >,
+  b: Pick<
+    LongTermMemoryEntry,
+    | "text"
+    | "versionScope"
+    | "installProfileScope"
+    | "customerScope"
+    | "environmentTags"
+    | "artifactRefs"
+    | "entityAliases"
+  >,
+): number {
+  const left = new Set(buildCanonicalEntityKinds(a));
+  const right = new Set(buildCanonicalEntityKinds(b));
+  let overlap = 0;
+  for (const kind of left) {
+    if (right.has(kind)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
 function findConceptMatch(
   entries: Iterable<LongTermMemoryEntry>,
   incoming: LongTermMemoryEntry,
@@ -1416,6 +1479,7 @@ function findConceptMatch(
     buildResolvedEntityAliases(incoming).map((alias) => normalizeComparable(alias)),
   );
   const incomingCanonicalEntityKeys = new Set(buildCanonicalEntityKeys(incoming));
+  const incomingCanonicalEntityKinds = new Set(buildCanonicalEntityKinds(incoming));
   const incomingEntities = buildMemoryEntitySignature({
     text: incoming.text,
     versionScope: incoming.versionScope,
@@ -1496,6 +1560,11 @@ function findConceptMatch(
       incomingCanonicalEntityKeys.size > 0
         ? canonicalEntityOverlap / incomingCanonicalEntityKeys.size
         : 0;
+    const canonicalEntityKindOverlap = countCanonicalEntityKindOverlap(candidate, incoming);
+    const canonicalEntityKindCoverage =
+      incomingCanonicalEntityKinds.size > 0
+        ? canonicalEntityKindOverlap / incomingCanonicalEntityKinds.size
+        : 0;
     const aliasOverlap = Math.max(
       0,
       ...(candidate.conceptAliases ?? []).map((alias) =>
@@ -1544,13 +1613,17 @@ function findConceptMatch(
       aliasOverlap +
       entityAliasOverlap * 2 +
       canonicalEntityOverlap * 2.5 +
+      canonicalEntityKindOverlap * 1.25 +
       entityOverlap +
       artifactOverlap * 3 +
       scopeOverlap * 2 +
       runtimeTagOverlap * 2;
     if (
       score >= 6 &&
-      (signatureCoverage >= 0.45 || entityAliasCoverage >= 0.5 || canonicalEntityCoverage >= 0.5) &&
+      (signatureCoverage >= 0.45 ||
+        entityAliasCoverage >= 0.5 ||
+        canonicalEntityCoverage >= 0.5 ||
+        canonicalEntityKindCoverage >= 0.75) &&
       (score > bestScore ||
         (score === bestScore &&
           ((candidate.updatedAt ?? 0) > (best?.updatedAt ?? 0) ||
@@ -1926,6 +1999,22 @@ function buildCanonicalEntityKeys(params: {
   });
 }
 
+function buildCanonicalEntityKinds(params: {
+  text?: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  environmentTags?: string[];
+  artifactRefs?: string[];
+  entityAliases?: string[];
+}): string[] {
+  return uniqueStrings(
+    uniqueStrings([...(params.entityAliases ?? []), ...buildResolvedEntityAliases(params)]).map(
+      (alias) => classifyResolvedEntityAlias(alias).kind,
+    ),
+  );
+}
+
 type MemoryEntityKind =
   | "artifact"
   | "branch"
@@ -2149,6 +2238,7 @@ export function deriveLongTermMemoryCandidates(params: {
       customerScope: scope.customerScope,
       artifactRefs: scope.artifactRefs,
     });
+    const sourceType = inferMessageSourceType(normalized);
 
     const entryBase: LongTermMemoryEntry = {
       id: buildStableMemoryId("ltm", semanticKey),
@@ -2170,8 +2260,17 @@ export function deriveLongTermMemoryCandidates(params: {
       strength: baseStrengthForCategory(category),
       evidence: [normalized],
       provenance: [createProvenanceRecord("message", normalized)],
-      sourceType: "user_stated",
-      confidence: category === "decision" ? 0.95 : 0.78,
+      sourceType,
+      confidence:
+        sourceType === "direct_observation"
+          ? category === "decision"
+            ? 0.96
+            : 0.84
+          : category === "decision"
+            ? 0.95
+            : sourceType === "summary_derived"
+              ? 0.72
+              : 0.78,
       importanceClass: detectImportanceClass(category, normalized),
       compressionState: "active",
       activeStatus: "active",
@@ -2647,6 +2746,12 @@ export function mergeLongTermMemory(
     if (revisionKind === "updated" || revisionKind === "narrowed") {
       current.text = item.text;
       current.canonicalText = canonicalizeComparable(item.text);
+      if (
+        sourceTypeReliabilityScore(item.sourceType) >=
+        sourceTypeReliabilityScore(current.sourceType)
+      ) {
+        current.sourceType = item.sourceType;
+      }
       current.evidence = dedupeTexts([item.text, ...current.evidence], MAX_WORKING_ITEMS);
     }
     if (revisionKind === "contested") {
@@ -5019,7 +5124,7 @@ export function retrieveMemoryContextPacket(
         return {
           kind: "long-term" as const,
           text: formatMemoryWithState(item),
-          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${itemScopeSummary ? ` scope=${itemScopeSummary}` : ""}${entitySummary ? ` entities=${entitySummary}` : ""}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)} source=${item.sourceType}${itemScopeSummary ? ` scope=${itemScopeSummary}` : ""}${entitySummary ? ` entities=${entitySummary}` : ""}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}${adjudication.rationale ? ` rationale=${clipText(adjudication.rationale, 80)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
           memoryId: item.id,
           conceptId: getEntryConceptId(item),
         };
@@ -5237,6 +5342,7 @@ export function inspectMemoryRetrievalObservability(
   params?: { messages?: AgentMessage[] },
 ): MemoryRetrievalObservabilityReport {
   const packet = retrieveMemoryContextPacket(snapshot, params);
+  const entriesById = new Map(snapshot.longTermMemory.map((entry) => [entry.id, entry]));
   const downgradedItemCount = packet.retrievalItems.filter((item) =>
     item.reason.includes("downgraded="),
   ).length;
@@ -5248,6 +5354,15 @@ export function inspectMemoryRetrievalObservability(
   ).length;
   const artifactAnchoredItemCount = packet.retrievalItems.filter(
     (item) => item.reason.startsWith("artifact anchor") || item.reason.startsWith("artifact "),
+  ).length;
+  const entityMatchedItemCount = packet.retrievalItems.filter((item) =>
+    item.reason.includes("entities="),
+  ).length;
+  const authoritativeWinnerItemCount = packet.retrievalItems.filter((item) =>
+    item.reason.includes("adjudication=authoritative:winner"),
+  ).length;
+  const summaryDerivedItemCount = packet.retrievalItems.filter(
+    (item) => item.memoryId && entriesById.get(item.memoryId)?.sourceType === "summary_derived",
   ).length;
   const longTermItemCount = packet.retrievalItems.filter(
     (item) => item.kind === "long-term",
@@ -5270,6 +5385,9 @@ export function inspectMemoryRetrievalObservability(
       `contested=${contestedItemCount}`,
       `scoped-alternatives=${scopedAlternativeItemCount}`,
       `artifact-anchors=${artifactAnchoredItemCount}`,
+      `entity-matched=${entityMatchedItemCount}`,
+      `authoritative-winners=${authoritativeWinnerItemCount}`,
+      `summary-derived=${summaryDerivedItemCount}`,
       `concepts=${packet.accessedConceptIds.length}`,
     ].join(" | "),
     320,
@@ -5284,6 +5402,9 @@ export function inspectMemoryRetrievalObservability(
     contestedItemCount,
     scopedAlternativeItemCount,
     artifactAnchoredItemCount,
+    entityMatchedItemCount,
+    authoritativeWinnerItemCount,
+    summaryDerivedItemCount,
     accessedConceptCount: packet.accessedConceptIds.length,
     topReasons,
     summary,
@@ -6827,14 +6948,7 @@ function buildPersistedMemoryAdjudications(params: {
   const scoreEntry = (entry: LongTermMemoryEntry, history: PersistedMemoryRevision[]): number => {
     const recencyDays = Math.max(0, (Date.now() - entry.updatedAt) / (1000 * 60 * 60 * 24));
     const recencyScore = Math.max(0, 1 - recencyDays / 30);
-    const sourceScore =
-      entry.sourceType === "direct_observation"
-        ? 0.18
-        : entry.sourceType === "user_stated"
-          ? 0.14
-          : entry.sourceType === "summary_derived"
-            ? 0.08
-            : 0.1;
+    const sourceScore = sourceTypeReliabilityScore(entry.sourceType) * 0.045;
     const importanceScore =
       entry.importanceClass === "critical"
         ? 0.16
@@ -6860,13 +6974,23 @@ function buildPersistedMemoryAdjudications(params: {
           !isContradictoryPair(entry, neighbor),
       ).length * 0.05,
     );
+    const entityKindConsensusSupport = Math.min(
+      0.12,
+      entityNeighbors.filter(
+        (neighbor) =>
+          neighbor.id !== entry.id && countCanonicalEntityKindOverlap(entry, neighbor) > 0,
+      ).length * 0.03,
+    );
     const entityConflictPenalty = Math.min(
       0.24,
       entityNeighbors.filter(
         (neighbor) => neighbor.id !== entry.id && isContradictoryPair(entry, neighbor),
       ).length * 0.08,
     );
-    const provenanceSupport = Math.min(0.1, (entry.provenance?.length ?? 0) * 0.02);
+    const provenanceKinds = new Set((entry.provenance ?? []).map((item) => item.kind));
+    const provenanceSupport =
+      Math.min(0.06, (entry.provenance?.length ?? 0) * 0.015) +
+      Math.min(0.06, provenanceKinds.size * 0.025);
     const evidenceSupport = Math.min(0.08, (entry.evidence?.length ?? 0) * 0.015);
     return (
       entry.confidence * 0.34 +
@@ -6878,7 +7002,8 @@ function buildPersistedMemoryAdjudications(params: {
       artifactSupport +
       provenanceSupport +
       evidenceSupport +
-      entityConsensusSupport -
+      entityConsensusSupport +
+      entityKindConsensusSupport -
       entityConflictPenalty -
       contradictionPenalty -
       supersededPenalty
@@ -6975,8 +7100,25 @@ function buildPersistedMemoryAdjudications(params: {
         entityIds.length > 0
           ? "concept family includes scope-specific alternatives over shared canonical entities"
           : "concept family includes scope-specific alternatives with distinct scope signatures";
+    } else if (
+      winner &&
+      (winner.entityIds?.length ?? 0) > 0 &&
+      entityNeighborEntries.some(
+        (entry) =>
+          entry.id !== winner.id &&
+          !isContradictoryPair(entry, winner) &&
+          countCanonicalEntityKindOverlap(entry, winner) > 0,
+      )
+    ) {
+      rationale = "weighted winner is reinforced by shared canonical entity classes";
     } else if (winner && winnerSourceScore > strongestAlternativeSourceScore && scoreGap >= 0.1) {
       rationale = `weighted evidence favors the more reliable ${winner.sourceType} observation`;
+    } else if (
+      winner &&
+      new Set((winner.provenance ?? []).map((item) => item.kind)).size >= 2 &&
+      scoreGap >= 0.08
+    ) {
+      rationale = "weighted winner is reinforced by diverse provenance evidence";
     } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
       status = winner?.activeStatus === "superseded" ? "superseded" : status;
       resolutionKind = winner?.activeStatus === "superseded" ? "retired" : "winner";
@@ -7858,8 +8000,12 @@ export async function inspectMemoryStoreHealth(params: {
         320,
       ),
       contestedConceptCount: 0,
+      contestedEntityConflictCount: 0,
       scopedAlternativeConceptCount: 0,
       entityLinkedConceptCount: 0,
+      weakEvidenceWinnerCount: 0,
+      sourceTypeCounts: createSourceTypeCounts(),
+      authoritativeSourceTypeCounts: createSourceTypeCounts(),
       supersededMemoryCount: 0,
       permanentEligibleCount: 0,
       staleMemoryCount: 0,
@@ -7890,6 +8036,52 @@ export async function inspectMemoryStoreHealth(params: {
   const supersededMemoryCount = snapshot.longTermMemory.filter(
     (entry) => entry.activeStatus === "superseded",
   ).length;
+  const sourceTypeCounts = createSourceTypeCounts();
+  for (const entry of snapshot.longTermMemory) {
+    sourceTypeCounts[entry.sourceType] += 1;
+  }
+  const authoritativeSourceTypeCounts = createSourceTypeCounts();
+  const entriesById = new Map(snapshot.longTermMemory.map((entry) => [entry.id, entry]));
+  for (const adjudication of adjudications) {
+    if (adjudication.status !== "authoritative" || !adjudication.winningMemoryId) {
+      continue;
+    }
+    const winner = entriesById.get(adjudication.winningMemoryId);
+    if (!winner) {
+      continue;
+    }
+    authoritativeSourceTypeCounts[winner.sourceType] += 1;
+  }
+  const contestedEntityConflictCount = adjudications.filter(
+    (item) => item.status === "contested" && item.entityIds.length > 0,
+  ).length;
+  const weakEvidenceWinnerCount = adjudications.filter((item) => {
+    if (item.status !== "authoritative" || !item.winningMemoryId) {
+      return false;
+    }
+    const winner = entriesById.get(item.winningMemoryId);
+    if (!winner) {
+      return false;
+    }
+    if (winner.sourceType !== "summary_derived" && winner.sourceType !== "system_inferred") {
+      return false;
+    }
+    const strongerAlternatives = [
+      ...item.losingMemoryIds
+        .map((id) => entriesById.get(id))
+        .filter((entry): entry is LongTermMemoryEntry => Boolean(entry)),
+      ...item.alternativeConceptIds
+        .flatMap((conceptId) =>
+          snapshot.longTermMemory.filter((entry) => getEntryConceptId(entry) === conceptId),
+        )
+        .filter((entry) => entry.id !== winner.id),
+    ];
+    return strongerAlternatives.some(
+      (entry) =>
+        sourceTypeReliabilityScore(entry.sourceType) >
+        sourceTypeReliabilityScore(winner.sourceType),
+    );
+  }).length;
   const permanentEligibleCount = snapshot.longTermMemory.filter(
     (entry) => entry.permanenceStatus === "eligible",
   ).length;
@@ -7899,6 +8091,12 @@ export async function inspectMemoryStoreHealth(params: {
   const issues: string[] = [];
   if (contestedConceptCount > 0) {
     issues.push(`contested concepts: ${contestedConceptCount}`);
+  }
+  if (contestedEntityConflictCount > 0) {
+    issues.push(`entity-linked contested concepts: ${contestedEntityConflictCount}`);
+  }
+  if (weakEvidenceWinnerCount > 0) {
+    issues.push(`weak-evidence winners: ${weakEvidenceWinnerCount}`);
   }
   if (supersededMemoryCount > Math.max(5, Math.floor(snapshot.longTermMemory.length * 0.25))) {
     issues.push(`superseded memory backlog: ${supersededMemoryCount}`);
@@ -7919,6 +8117,16 @@ export async function inspectMemoryStoreHealth(params: {
   const recommendations: string[] = [];
   if (contestedConceptCount > 0) {
     recommendations.push("run diagnostics acceptance and inspect contested concept adjudications");
+  }
+  if (contestedEntityConflictCount > 0) {
+    recommendations.push(
+      "inspect contested concepts that share canonical entities before trusting current winners",
+    );
+  }
+  if (weakEvidenceWinnerCount > 0) {
+    recommendations.push(
+      "review authoritative winners backed only by inferred or summary-derived evidence",
+    );
   }
   if (scopedAlternativeConceptCount > 0) {
     recommendations.push(
@@ -7947,8 +8155,10 @@ export async function inspectMemoryStoreHealth(params: {
       `long-term=${snapshot.longTermMemory.length}`,
       `concepts=${metadata.conceptCount ?? 0}`,
       `contested=${contestedConceptCount}`,
+      `entity-contested=${contestedEntityConflictCount}`,
       `scoped-alternatives=${scopedAlternativeConceptCount}`,
       `entity-linked=${entityLinkedConceptCount}`,
+      `weak-winners=${weakEvidenceWinnerCount}`,
       `superseded=${supersededMemoryCount}`,
       `stale=${staleMemoryCount}`,
       `permanent-eligible=${permanentEligibleCount}`,
@@ -7965,8 +8175,12 @@ export async function inspectMemoryStoreHealth(params: {
     recommendations,
     summary,
     contestedConceptCount,
+    contestedEntityConflictCount,
     scopedAlternativeConceptCount,
     entityLinkedConceptCount,
+    weakEvidenceWinnerCount,
+    sourceTypeCounts,
+    authoritativeSourceTypeCounts,
     supersededMemoryCount,
     permanentEligibleCount,
     staleMemoryCount,

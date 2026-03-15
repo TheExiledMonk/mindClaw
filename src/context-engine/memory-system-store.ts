@@ -5219,14 +5219,16 @@ export async function loadMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
   backendKind?: MemoryStoreBackendKind;
+  allowBackupRecovery?: boolean;
 }): Promise<MemoryStoreSnapshot> {
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
   if (params.backendKind === "sqlite-graph") {
     const { DatabaseSync } = requireNodeSqlite();
     await ensureStoreDirs(paths);
     const dbPath = path.join(paths.rootDir, SQLITE_STORE_FILENAME);
-    const db = new DatabaseSync(dbPath);
+    let db: import("node:sqlite").DatabaseSync | undefined;
     try {
+      db = new DatabaseSync(dbPath);
       const migrationState = applySqliteGraphMigrations(db);
       const integrityRow = db.prepare("PRAGMA integrity_check(1)").get() as
         | { integrity_check?: string }
@@ -5402,8 +5404,20 @@ export async function loadMemoryStoreSnapshot(params: {
         ),
       );
       return snapshot;
+    } catch (error) {
+      if (params.allowBackupRecovery !== false) {
+        const backup = await readJsonFile<MemoryStoreExportBundle | null>(paths.backupFile, null);
+        if (backup) {
+          return recoverMemoryStoreFromBackup({
+            workspaceDir: params.workspaceDir,
+            sessionId: params.sessionId,
+            backendKind: "sqlite-graph",
+          });
+        }
+      }
+      throw error;
     } finally {
-      db.close();
+      db?.close();
     }
   }
   const backend = resolveMemoryStoreBackend(params.backendKind);
@@ -5817,6 +5831,7 @@ export async function repairMemoryStoreSnapshot(params: {
     workspaceDir: params.workspaceDir,
     sessionId: params.sessionId,
     backendKind,
+    allowBackupRecovery: false,
   });
 }
 
@@ -5831,15 +5846,20 @@ export async function recoverMemoryStoreFromBackup(params: {
   if (!bundle) {
     throw new Error(`memory store backup not found for session ${params.sessionId}`);
   }
+  const targetBackend = params.backendKind ?? bundle.backendKind;
+  if (targetBackend === "sqlite-graph") {
+    await fs.rm(path.join(paths.rootDir, SQLITE_STORE_FILENAME), { force: true });
+  }
   await importMemoryStoreBundle({
     workspaceDir: params.workspaceDir,
     bundle,
     targetSessionId: params.targetSessionId,
-    backendKind: params.backendKind,
+    backendKind: targetBackend,
   });
   return loadMemoryStoreSnapshot({
     workspaceDir: params.workspaceDir,
     sessionId: params.targetSessionId ?? params.sessionId,
-    backendKind: params.backendKind ?? bundle.backendKind,
+    backendKind: targetBackend,
+    allowBackupRecovery: false,
   });
 }

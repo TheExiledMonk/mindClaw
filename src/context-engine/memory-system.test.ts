@@ -1951,6 +1951,44 @@ describe("MemorySystemContextEngine", () => {
     expect(recovered.longTermMemory[0]?.text).toContain("permanent memory-system path");
   });
 
+  it("auto-recovers sqlite-graph loads from the session backup bundle", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-auto-recovery-"));
+    const sessionId = "agent:auto-recovery";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for all migrations.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    await fs.writeFile(
+      path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"),
+      "not-a-valid-sqlite-db",
+      "utf8",
+    );
+
+    const loaded = await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+
+    expect(loaded.longTermMemory[0]?.text).toContain("permanent memory-system path");
+  });
+
   it("uses the sqlite backend when requested through runtime context", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-engine-sqlite-"));
     process.chdir(tempDir);

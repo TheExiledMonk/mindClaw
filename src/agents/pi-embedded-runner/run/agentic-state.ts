@@ -318,7 +318,8 @@ export type AgenticAcceptanceScenarioId =
   | "clarification_payload_alignment"
   | "clarification_strategy_alignment"
   | "memory_backed_clarification_alignment"
-  | "clarification_policy_quality_alignment";
+  | "clarification_policy_quality_alignment"
+  | "clarification_trend_policy_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -5607,6 +5608,78 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Release-facing quality policy can distinguish approval, env-var, and external-input clarification blockers and expose their dominant profile."
         : "Clarification blocker classes did not stay distinct when promoted into quality policy.",
       details: `env=${envVarReport.failReasons.join("|")}:${envVarReport.clarificationProfile} approval=${approvalReport.failReasons.join("|")}:${approvalReport.clarificationProfile} external=${externalInputReport.failReasons.join("|")}:${externalInputReport.clarificationProfile}`,
+    });
+  }
+
+  {
+    const approvalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+    const risingTrendSoakOverride: AgenticSoakReport = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      clarificationProfileCounts: ["environment_variable:2", "approval:1"],
+      dominantClarificationProfile: "environment_variable",
+      clarificationTrendSignals: ["approval:rising(0->1)"],
+      summary: "agentic soak 0/0 passed",
+    };
+    const acceptanceOverride: AgenticAcceptanceReport = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      summary: "agentic acceptance 0/0 passed",
+    };
+    const warningReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(approvalState),
+      acceptanceOverride,
+      soakOverride: risingTrendSoakOverride,
+    });
+    const blockingReport = runAgenticQualityGate({
+      failOnClarificationTrend: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(approvalState),
+      acceptanceOverride,
+      soakOverride: risingTrendSoakOverride,
+    });
+    const passed =
+      warningReport.passed &&
+      warningReport.diagnosticsPassed &&
+      warningReport.recommendations.includes(
+        "Long-run clarification blocker trend is rising: approval:rising(0->1).",
+      ) &&
+      !warningReport.failReasons.includes("diagnostics_clarification_trend_approval") &&
+      !blockingReport.passed &&
+      !blockingReport.diagnosticsPassed &&
+      blockingReport.failReasons.includes("diagnostics_clarification_trend_approval");
+    scenarios.push({
+      id: "clarification_trend_policy_alignment",
+      passed,
+      summary: passed
+        ? "Release-facing quality policy can keep rising clarification trends warning-only by default and make them release-blocking when trend gating is enabled."
+        : "Rising clarification trend policy did not stay aligned between warning-only and release-blocking quality modes.",
+      details: `warning=${warningReport.failReasons.join("|") || "none"} blocking=${blockingReport.failReasons.join("|") || "none"} recommendations=${blockingReport.recommendations.join("|")}`,
     });
   }
 

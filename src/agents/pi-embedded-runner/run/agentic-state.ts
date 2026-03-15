@@ -661,21 +661,30 @@ function deriveAcceptanceTrendPolicyStatus(params: {
 }
 
 function deriveAcceptanceProtectedBranchGovernanceStatus(
-  passed?: boolean,
+  scenarios: AgenticAcceptanceScenarioResult[],
 ): NonNullable<AgenticAcceptanceReport["protectedBranchGovernanceStatus"]> {
-  return passed ? "guarded" : "unknown";
+  const protectedBranchGovernanceScenario = scenarios.find(
+    (scenario) => scenario.id === "protected_branch_governance_alignment",
+  );
+  return protectedBranchGovernanceScenario?.passed ? "guarded" : "unknown";
 }
 
 function deriveAcceptanceEnvironmentRetryStatus(
-  passed?: boolean,
+  scenarios: AgenticAcceptanceScenarioResult[],
 ): NonNullable<AgenticAcceptanceReport["environmentRetryStatus"]> {
-  return passed ? "bounded" : "unknown";
+  const environmentRetryScenario = scenarios.find(
+    (scenario) => scenario.id === "environment_guard_retry_alignment",
+  );
+  return environmentRetryScenario?.passed ? "bounded" : "unknown";
 }
 
 function deriveSoakEnvironmentBoundaryStatus(
-  passed?: boolean,
+  scenarios: AgenticSoakScenarioResult[],
 ): NonNullable<AgenticSoakReport["environmentBoundaryStatus"]> {
-  return passed ? "bounded_and_guarded" : "unknown";
+  const environmentGuardedRetryLifecycle = scenarios.find(
+    (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
+  );
+  return environmentGuardedRetryLifecycle?.passed ? "bounded_and_guarded" : "unknown";
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -5950,12 +5959,6 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   const clarificationTrendPolicyDriftGuardScenario = scenarios.find(
     (scenario) => scenario.id === "clarification_trend_policy_drift_guard",
   );
-  const protectedBranchGovernanceScenario = scenarios.find(
-    (scenario) => scenario.id === "protected_branch_governance_alignment",
-  );
-  const environmentRetryScenario = scenarios.find(
-    (scenario) => scenario.id === "environment_guard_retry_alignment",
-  );
   const clarificationTrendPolicyStatus = deriveAcceptanceTrendPolicyStatus({
     alignmentPassed: clarificationTrendPolicyAlignmentScenario?.passed,
     driftGuardPassed: clarificationTrendPolicyDriftGuardScenario?.passed,
@@ -5967,12 +5970,8 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     failedScenarioIds,
     scenarios,
     clarificationTrendPolicyStatus,
-    protectedBranchGovernanceStatus: deriveAcceptanceProtectedBranchGovernanceStatus(
-      protectedBranchGovernanceScenario?.passed,
-    ),
-    environmentRetryStatus: deriveAcceptanceEnvironmentRetryStatus(
-      environmentRetryScenario?.passed,
-    ),
+    protectedBranchGovernanceStatus: deriveAcceptanceProtectedBranchGovernanceStatus(scenarios),
+    environmentRetryStatus: deriveAcceptanceEnvironmentRetryStatus(scenarios),
     summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7604,9 +7603,6 @@ export function runAgenticSoakSuite(params?: {
     hasRisingClarificationTrend,
     params?.failOnClarificationTrend,
   );
-  const environmentGuardedRetryLifecycle = scenarios.find(
-    (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
-  );
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7619,9 +7615,7 @@ export function runAgenticSoakSuite(params?: {
     clarificationTrendPolicy,
     clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
     trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
-    environmentBoundaryStatus: deriveSoakEnvironmentBoundaryStatus(
-      environmentGuardedRetryLifecycle?.passed,
-    ),
+    environmentBoundaryStatus: deriveSoakEnvironmentBoundaryStatus(scenarios),
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }

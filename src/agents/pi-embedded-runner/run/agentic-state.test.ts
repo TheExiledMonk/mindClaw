@@ -1049,6 +1049,80 @@ describe("agentic-state", () => {
     expect(formatAgenticHandoffReport(report, "markdown")).toContain("# Agentic Handoff Report");
   });
 
+  it("builds operator-aware guarded handoff reports for approval and validation pauses", () => {
+    const protectedBranchState = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the release-branch diagnostics regression in src/diagnostics/report.ts and hand off safely if approval is needed.",
+        ),
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics implementation and release checklist.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a guarded handoff for release-branch approval.",
+          artifactRefs: ["src/diagnostics/report.ts"],
+        },
+      ],
+    });
+    const protectedReport = buildAgenticHandoffReport(protectedBranchState);
+    expect(protectedReport.operatorMode).toBe("approval_required");
+    expect(protectedReport.resumeCondition).toContain("Wait for operator approval");
+    expect(protectedReport.resumePrompt).toContain("Resume after approval");
+    expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain(
+      "operator=approval_required",
+    );
+
+    const validationThinState = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Implement the diagnostics formatter changes and pause until the validation command is known.",
+        ),
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a guarded handoff while validation setup remains incomplete.",
+          artifactRefs: ["src/diagnostics/formatter.ts"],
+        },
+      ],
+    });
+    const validationReport = buildAgenticHandoffReport(validationThinState);
+    expect(validationReport.operatorMode).toBe("pause");
+    expect(validationReport.resumeCondition).toContain("Capture an observed validation command");
+    expect(validationReport.resumePrompt).toContain("Resume after prerequisites are restored");
+    expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Operator mode:");
+  });
+
   it("escalates environment mismatches instead of recommending normal retries", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],

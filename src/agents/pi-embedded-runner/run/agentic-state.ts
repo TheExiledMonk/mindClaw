@@ -263,9 +263,13 @@ export type AgenticHandoffReport = {
   blockedSteps: string[];
   activeArtifacts: string[];
   blockers: string[];
+  operatorMode: "continue" | "pause" | "approval_required" | "escalate";
+  operatorReason?: string;
   nextAction?: string;
   suggestedSkill?: string;
   resumePrompt?: string;
+  resumeCondition?: string;
+  assumptions: string[];
 };
 
 export type AgenticAcceptanceScenarioId =
@@ -300,7 +304,8 @@ export type AgenticAcceptanceScenarioId =
   | "failure_derived_template_family_alignment"
   | "failure_derived_quality_gate_alignment"
   | "protected_branch_governance_alignment"
-  | "environment_guard_retry_alignment";
+  | "environment_guard_retry_alignment"
+  | "guarded_handoff_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -326,7 +331,8 @@ export type AgenticSoakScenarioId =
   | "consolidation_mode_transition"
   | "failure_derived_consolidation_replan"
   | "failure_derived_recovery_transition"
-  | "environment_guarded_retry_lifecycle";
+  | "environment_guarded_retry_lifecycle"
+  | "guarded_handoff_boundary";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -3130,16 +3136,51 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
   const blockedSteps = state.taskState.planSteps
     .filter((step) => step.status === "blocked")
     .map((step) => step.title);
-  const resumePrompt = state.taskState.objective
-    ? `Resume by continuing: ${state.taskState.objective}`
-    : state.plannerState.nextAction
-      ? `Resume with next action: ${state.plannerState.nextAction}`
-      : undefined;
+  const operatorReason =
+    state.governanceState.reasons[0] ??
+    (state.plannerState.retryClass === "clarify" ? "await_validation_context" : undefined);
+  const operatorMode: AgenticHandoffReport["operatorMode"] =
+    state.governanceState.autonomyMode === "approval_required"
+      ? "approval_required"
+      : state.governanceState.autonomyMode === "escalate"
+        ? "escalate"
+        : state.plannerState.retryClass === "clarify"
+          ? "pause"
+          : "continue";
+  const resumeCondition =
+    operatorMode === "approval_required"
+      ? "Wait for operator approval before resuming protected or high-risk work."
+      : operatorMode === "escalate"
+        ? `Resolve escalation before resuming${state.plannerState.escalationReason ? ` (${state.plannerState.escalationReason})` : ""}.`
+        : state.plannerState.retryClass === "clarify"
+          ? "Capture an observed validation command or missing prerequisite before resuming."
+          : undefined;
+  const resumePrompt =
+    operatorMode === "approval_required"
+      ? state.taskState.objective
+        ? `Resume after approval: ${state.taskState.objective}`
+        : state.plannerState.nextAction
+          ? `Resume after approval with next action: ${state.plannerState.nextAction}`
+          : undefined
+      : operatorMode === "escalate"
+        ? state.plannerState.nextAction
+          ? `Resume after escalation is resolved: ${state.plannerState.nextAction}`
+          : undefined
+        : operatorMode === "pause"
+          ? state.plannerState.nextAction
+            ? `Resume after prerequisites are restored: ${state.plannerState.nextAction}`
+            : undefined
+          : state.taskState.objective
+            ? `Resume by continuing: ${state.taskState.objective}`
+            : state.plannerState.nextAction
+              ? `Resume with next action: ${state.plannerState.nextAction}`
+              : undefined;
   const summaryParts = uniqueCompact(
     [
       state.taskState.objective
         ? `objective=${truncate(state.taskState.objective, 80)}`
         : undefined,
+      `operator=${operatorMode}`,
       completedSteps.length > 0 ? `completed=${completedSteps.length}` : undefined,
       pendingSteps.length > 0 ? `pending=${pendingSteps.length}` : undefined,
       blockedSteps.length > 0 ? `blocked=${blockedSteps.length}` : undefined,
@@ -3157,9 +3198,13 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
     blockedSteps,
     activeArtifacts: state.taskState.activeArtifacts,
     blockers: state.taskState.blockers,
+    operatorMode,
+    operatorReason,
     nextAction: state.plannerState.nextAction,
     suggestedSkill: state.plannerState.suggestedSkill,
     resumePrompt,
+    resumeCondition,
+    assumptions: state.taskState.assumptions,
   };
 }
 
@@ -3173,6 +3218,7 @@ export function formatAgenticHandoffReport(
   if (format === "summary") {
     const lines = [
       report.summary || "handoff=empty",
+      `operator=${report.operatorMode}${report.operatorReason ? ` reason=${report.operatorReason}` : ""}`,
       report.nextAction ? `next=${report.nextAction}` : "next=none",
       report.pendingSteps.length > 0
         ? `pending=${report.pendingSteps.join(" | ")}`
@@ -3180,6 +3226,9 @@ export function formatAgenticHandoffReport(
       report.blockedSteps.length > 0
         ? `blocked=${report.blockedSteps.join(" | ")}`
         : "blocked=none",
+      report.resumeCondition
+        ? `resume_condition=${report.resumeCondition}`
+        : "resume_condition=none",
       report.resumePrompt ? `resume=${report.resumePrompt}` : "resume=none",
     ];
     return `${lines.join("\n")}\n`;
@@ -3189,11 +3238,15 @@ export function formatAgenticHandoffReport(
     "",
     `- Summary: ${report.summary || "none"}`,
     `- Objective: ${report.objective ?? "none"}`,
+    `- Operator mode: ${report.operatorMode}`,
+    `- Operator reason: ${report.operatorReason ?? "none"}`,
     `- Next action: ${report.nextAction ?? "none"}`,
     `- Suggested skill: ${report.suggestedSkill ?? "none"}`,
+    `- Resume condition: ${report.resumeCondition ?? "none"}`,
     `- Resume prompt: ${report.resumePrompt ?? "none"}`,
     `- Active artifacts: ${report.activeArtifacts.length > 0 ? report.activeArtifacts.join(", ") : "none"}`,
     `- Blockers: ${report.blockers.length > 0 ? report.blockers.join(" | ") : "none"}`,
+    `- Assumptions: ${report.assumptions.length > 0 ? report.assumptions.join(" | ") : "none"}`,
     "",
     "## Completed Steps",
     ...(report.completedSteps.length > 0
@@ -4693,6 +4746,92 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   }
 
   {
+    const protectedBranchState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the release-branch diagnostics regression in src/diagnostics/report.ts and hand off safely if approval is needed.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics implementation and release checklist.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a guarded handoff for release-branch approval.",
+          artifactRefs: ["src/diagnostics/report.ts"],
+        },
+      ],
+    });
+    const protectedHandoff = buildAgenticHandoffReport(protectedBranchState);
+    const validationThinState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Implement the diagnostics formatter changes and pause until the validation command is known.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a guarded handoff while validation setup remains incomplete.",
+          artifactRefs: ["src/diagnostics/formatter.ts"],
+        },
+      ],
+    });
+    const validationThinHandoff = buildAgenticHandoffReport(validationThinState);
+    const passed =
+      protectedHandoff.operatorMode === "approval_required" &&
+      (protectedHandoff.resumeCondition ?? "").includes("Wait for operator approval") &&
+      (protectedHandoff.resumePrompt ?? "").includes("Resume after approval") &&
+      validationThinHandoff.operatorMode === "pause" &&
+      (validationThinHandoff.resumeCondition ?? "").includes(
+        "Capture an observed validation command",
+      ) &&
+      (validationThinHandoff.resumePrompt ?? "").includes(
+        "Resume after prerequisites are restored",
+      );
+    scenarios.push({
+      id: "guarded_handoff_alignment",
+      passed,
+      summary: passed
+        ? "Guarded work now produces operator-aware handoffs instead of generic resume prompts."
+        : "Guarded handoff output did not align with approval and validation pause boundaries.",
+      details: `protected=${protectedHandoff.operatorMode}/${protectedHandoff.resumeCondition ?? "none"} validation=${validationThinHandoff.operatorMode}/${validationThinHandoff.resumeCondition ?? "none"}`,
+    });
+  }
+
+  {
     const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
@@ -5843,6 +5982,103 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       summary: passed
         ? "Protected-branch and validation-thin environments keep retries bounded across the long-run gate."
         : "Environment retry guards did not stay bounded across soak and quality validation.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
+  {
+    const guardedApprovalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the release-branch diagnostics regression in src/diagnostics/report.ts and hand off safely if approval is needed.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics implementation and release checklist.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a guarded handoff for release-branch approval.",
+          artifactRefs: ["src/diagnostics/report.ts"],
+        },
+      ],
+    });
+    const guardedPauseState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Implement the diagnostics formatter changes and pause until the validation command is known.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a guarded handoff while validation setup remains incomplete.",
+          artifactRefs: ["src/diagnostics/formatter.ts"],
+        },
+      ],
+    });
+    const approvalHandoff = buildAgenticHandoffReport(guardedApprovalState);
+    const pauseHandoff = buildAgenticHandoffReport(guardedPauseState);
+    const phases = [
+      buildSoakPhaseResult({
+        label: "approval_guard_handoff",
+        state: guardedApprovalState,
+        passed:
+          approvalHandoff.operatorMode === "approval_required" &&
+          (approvalHandoff.resumePrompt ?? "").includes("Resume after approval") &&
+          (approvalHandoff.resumeCondition ?? "").includes("Wait for operator approval"),
+        details: `operator=${approvalHandoff.operatorMode} resume=${approvalHandoff.resumePrompt ?? "none"}`,
+      }),
+      buildSoakPhaseResult({
+        label: "validation_pause_handoff",
+        state: guardedPauseState,
+        passed:
+          pauseHandoff.operatorMode === "pause" &&
+          (pauseHandoff.resumePrompt ?? "").includes("Resume after prerequisites are restored") &&
+          (pauseHandoff.resumeCondition ?? "").includes("Capture an observed validation command"),
+        details: `operator=${pauseHandoff.operatorMode} resume=${pauseHandoff.resumePrompt ?? "none"}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "guarded_handoff_boundary",
+      passed,
+      summary: passed
+        ? "Guarded work stays resumable with approval-aware and validation-aware handoff boundaries."
+        : "Guarded handoff boundaries did not stay intact across the soak lifecycle.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });

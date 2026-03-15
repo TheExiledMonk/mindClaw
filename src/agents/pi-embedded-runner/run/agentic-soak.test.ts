@@ -5,7 +5,7 @@ describe("agentic soak suite", () => {
   it("passes the built-in soak scenarios", () => {
     const report = runAgenticSoakSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(6);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(7);
     expect(report.failedScenarioIds).toEqual([]);
 
     const retryLifecycle = report.scenarios.find(
@@ -72,6 +72,16 @@ describe("agentic soak suite", () => {
     );
     expect(environmentGuardLifecycle?.phases.at(-1)?.details).toContain(
       "Capture an observed validation command before allowing another retry on project work.",
+    );
+
+    const guardedHandoffLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "guarded_handoff_boundary",
+    );
+    expect(guardedHandoffLifecycle?.phases[0]?.passed).toBe(true);
+    expect(guardedHandoffLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(guardedHandoffLifecycle?.phases[0]?.details).toContain("Resume after approval");
+    expect(guardedHandoffLifecycle?.phases.at(-1)?.details).toContain(
+      "Resume after prerequisites are restored",
     );
   });
 

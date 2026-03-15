@@ -133,6 +133,7 @@ import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   buildAgenticExecutionState,
+  extractAgenticMemoryRecommendations,
   buildAgenticSystemPromptAddition,
   buildProceduralExecutionRecord,
 } from "./agentic-state.js";
@@ -2391,38 +2392,7 @@ export async function runEmbeddedAttempt(
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
-        const agenticPromptAddition = buildAgenticSystemPromptAddition(
-          (() => {
-            const availableSkills = uniqueStrings(
-              params.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
-            );
-            const promptCorpus = activeSession.messages
-              .map((message) => extractAgentMessageText(message))
-              .join(" ");
-            return buildAgenticExecutionState({
-              messages: activeSession.messages,
-              workspaceTags: [],
-              availableSkills,
-              availableSkillInfo:
-                params.skillsSnapshot?.skills.map((skill) => ({
-                  name: skill.name,
-                  primaryEnv: skill.primaryEnv,
-                  requiredEnv: skill.requiredEnv,
-                })) ?? [],
-              likelySkills: availableSkills.filter((skill) =>
-                matchesSkillAgainstText(skill, promptCorpus),
-              ),
-            });
-          })(),
-        );
-        if (agenticPromptAddition) {
-          systemPromptText = prependSystemPromptAddition({
-            systemPrompt: systemPromptText,
-            systemPromptAddition: agenticPromptAddition,
-          });
-          applySystemPromptOverrideToSession(activeSession, systemPromptText);
-        }
-
+        let memorySystemPromptAddition: string | undefined;
         if (params.contextEngine) {
           try {
             const assembled = await params.contextEngine.assemble({
@@ -2435,6 +2405,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.replaceMessages(assembled.messages);
             }
             if (assembled.systemPromptAddition) {
+              memorySystemPromptAddition = assembled.systemPromptAddition;
               systemPromptText = prependSystemPromptAddition({
                 systemPrompt: systemPromptText,
                 systemPromptAddition: assembled.systemPromptAddition,
@@ -2449,6 +2420,44 @@ export async function runEmbeddedAttempt(
               `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
             );
           }
+        }
+        const agenticPromptAddition = buildAgenticSystemPromptAddition(
+          (() => {
+            const availableSkills = uniqueStrings(
+              params.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
+            );
+            const promptCorpus = activeSession.messages
+              .map((message) => extractAgentMessageText(message))
+              .join(" ");
+            const memoryRecommendations = extractAgenticMemoryRecommendations(
+              memorySystemPromptAddition,
+            );
+            return buildAgenticExecutionState({
+              messages: activeSession.messages,
+              workspaceTags: [],
+              availableSkills,
+              availableSkillInfo:
+                params.skillsSnapshot?.skills.map((skill) => ({
+                  name: skill.name,
+                  primaryEnv: skill.primaryEnv,
+                  requiredEnv: skill.requiredEnv,
+                })) ?? [],
+              likelySkills: availableSkills.filter((skill) =>
+                matchesSkillAgainstText(skill, promptCorpus),
+              ),
+              memorySystemPromptAddition:
+                memoryRecommendations.recommendedSkills.length > 0
+                  ? memorySystemPromptAddition
+                  : undefined,
+            });
+          })(),
+        );
+        if (agenticPromptAddition) {
+          systemPromptText = prependSystemPromptAddition({
+            systemPrompt: systemPromptText,
+            systemPromptAddition: agenticPromptAddition,
+          });
+          applySystemPromptOverrideToSession(activeSession, systemPromptText);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({

@@ -190,6 +190,37 @@ describe("agentic-state", () => {
     );
   });
 
+  it("boosts memory-recommended procedural skills in orchestration ranking", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Keep the diagnostics workflow moving and generate the operator report for this session.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- acceptance-report",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.orchestrationState.rankedSkills).toEqual([
+      "acceptance-report",
+      "memory-diagnostics",
+    ]);
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Ranked skills: acceptance-report > memory-diagnostics",
+    );
+  });
+
   it("escalates environment mismatches instead of recommending normal retries", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],

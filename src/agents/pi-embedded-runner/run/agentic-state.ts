@@ -204,6 +204,23 @@ type WorkspaceState = {
   transcriptExists?: boolean;
 };
 
+function extractRecommendedProceduralSkills(memoryText?: string): string[] {
+  if (!memoryText) {
+    return [];
+  }
+  const match = memoryText.match(/Recommended procedural skills:\s*((?:\n-\s+[^\n]+)+)/i);
+  if (!match) {
+    return [];
+  }
+  return uniqueCompact(
+    match[1]
+      .split("\n")
+      .map((line) => line.replace(/^\s*-\s+/, "").trim())
+      .filter(Boolean),
+    6,
+  );
+}
+
 function extractMessageText(message: AgentMessage): string {
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -656,12 +673,14 @@ function buildOrchestrationState(params: {
   objectiveText?: string;
   availableSkills?: SkillInfo[];
   likelySkills?: string[];
+  memoryRecommendedSkills?: string[];
   alternativeSkills?: string[];
   toolSignals?: ToolSignal[];
   plannerState?: AgenticPlannerState;
 }): AgenticOrchestrationState {
   const availableSkills = params.availableSkills ?? [];
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
+  const memoryRecommendedSkills = uniqueCompact(params.memoryRecommendedSkills ?? [], 6);
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const toolNames = new Set((params.toolSignals ?? []).map((signal) => signal.toolName));
   const preferredEnv = inferPreferredSkillEnvironment(params.objectiveText ?? "", params.taskMode);
@@ -678,6 +697,10 @@ function buildOrchestrationState(params: {
       if (likelySkills.includes(skill.name)) {
         score += 4;
         reasons.push("objective-match");
+      }
+      if (memoryRecommendedSkills.includes(skill.name)) {
+        score += 3.5;
+        reasons.push("memory-recommended");
       }
       if (alternativeSkills.includes(skill.name)) {
         score += 1.5;
@@ -876,6 +899,7 @@ export function buildAgenticExecutionState(params: {
   availableSkills?: string[];
   likelySkills?: string[];
   availableSkillInfo?: SkillInfo[];
+  memorySystemPromptAddition?: string;
 }): AgenticExecutionState {
   const texts = params.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
@@ -966,6 +990,9 @@ export function buildAgenticExecutionState(params: {
     verificationState,
     plannerState,
   });
+  const memoryRecommendedSkills = extractRecommendedProceduralSkills(
+    params.memorySystemPromptAddition,
+  );
   const availableSkillInfo =
     params.availableSkillInfo && params.availableSkillInfo.length > 0
       ? params.availableSkillInfo
@@ -975,6 +1002,7 @@ export function buildAgenticExecutionState(params: {
     objectiveText: taskState.objective,
     availableSkills: availableSkillInfo,
     likelySkills: params.likelySkills,
+    memoryRecommendedSkills,
     alternativeSkills: plannerState.alternativeSkills,
     toolSignals: params.toolSignals,
     plannerState,
@@ -999,6 +1027,14 @@ export function buildAgenticExecutionState(params: {
     orchestrationState,
     environmentState,
     failureLearningState,
+  };
+}
+
+export function extractAgenticMemoryRecommendations(memoryText?: string): {
+  recommendedSkills: string[];
+} {
+  return {
+    recommendedSkills: extractRecommendedProceduralSkills(memoryText),
   };
 }
 

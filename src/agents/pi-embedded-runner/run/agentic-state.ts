@@ -877,6 +877,7 @@ function buildOrchestrationState(params: {
         ? "missing_operational_execution"
         : undefined,
       fallbackSkills.length === 0 && availableSkills.length > 1 ? "no_ranked_fallback" : undefined,
+      likelySkills.length > 0 &&
       (params.plannerState?.status === "needs_replan" ||
         params.plannerState?.status === "blocked" ||
         params.plannerState?.retryClass === "skill_fallback") &&
@@ -997,6 +998,25 @@ function reconcilePlannerStateWithOrchestration(params: {
   likelySkills?: string[];
 }): AgenticPlannerState {
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
+  if (
+    params.orchestrationState.capabilityGaps.includes("no_viable_fallback") &&
+    !params.orchestrationState.hasViableFallback &&
+    (params.plannerState.status === "needs_replan" || params.plannerState.status === "blocked")
+  ) {
+    return {
+      ...params.plannerState,
+      retryClass: "escalate",
+      suggestedSkill: undefined,
+      alternativeSkills: [],
+      shouldEscalate: true,
+      escalationReason: params.plannerState.escalationReason ?? "low_confidence",
+      nextAction:
+        "Escalate or add a new viable workflow before retrying; current options are too weak or missing.",
+      rationale: params.plannerState.rationale
+        ? `${params.plannerState.rationale}; no_viable_fallback`
+        : "no_viable_fallback",
+    };
+  }
   if (params.plannerState.retryClass !== "skill_fallback") {
     return params.plannerState;
   }
@@ -1117,11 +1137,6 @@ export function buildAgenticExecutionState(params: {
     availableSkills: params.availableSkills,
     likelySkills: params.likelySkills,
   });
-  const governanceState = buildGovernanceState({
-    messages: params.messages,
-    verificationState,
-    plannerState,
-  });
   const availableSkillInfo =
     params.availableSkillInfo && params.availableSkillInfo.length > 0
       ? params.availableSkillInfo
@@ -1156,6 +1171,11 @@ export function buildAgenticExecutionState(params: {
     plannerState,
     orchestrationState,
     likelySkills: params.likelySkills,
+  });
+  const governanceState = buildGovernanceState({
+    messages: params.messages,
+    verificationState,
+    plannerState: reconciledPlannerState,
   });
 
   return {

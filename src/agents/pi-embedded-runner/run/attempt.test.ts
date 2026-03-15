@@ -1414,6 +1414,64 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
 
+  it("escalates when no viable fallback exists for a failing workflow", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+        },
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow and find a viable fallback.",
+          timestamp: Date.now(),
+        } as never,
+        {
+          role: "toolResult",
+          toolName: "exec",
+          isError: true,
+          content: "Validation failed again for the diagnostics workflow.",
+          timestamp: Date.now(),
+        } as never,
+      ],
+    });
+
+    expect(runtimeContext.plannerState).toMatchObject({
+      status: "needs_replan",
+      retryClass: "escalate",
+      shouldEscalate: true,
+      escalationReason: "low_confidence",
+    });
+    expect(runtimeContext.governanceState).toMatchObject({
+      autonomyMode: "escalate",
+    });
+    expect(runtimeContext.orchestrationState).toMatchObject({
+      hasViableFallback: false,
+      capabilityGaps: expect.arrayContaining(["no_viable_fallback"]),
+    });
+    expect(runtimeContext.proceduralExecution).toMatchObject({
+      shouldEscalate: true,
+      escalationReason: "low_confidence",
+      hasViableFallback: false,
+    });
+  });
+
   it("emits checkpoint and diff signals for runtime memory ingestion", () => {
     const runtimeContext = buildAfterTurnRuntimeContext({
       attempt: {

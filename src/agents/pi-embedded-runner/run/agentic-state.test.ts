@@ -305,10 +305,14 @@ describe("agentic-state", () => {
       likelySkills: ["memory-diagnostics"],
     });
 
-    expect(state.plannerState.retryClass).toBe("same_path_retry");
+    expect(state.plannerState.retryClass).toBe("escalate");
+    expect(state.plannerState.shouldEscalate).toBe(true);
+    expect(state.plannerState.escalationReason).toBe("low_confidence");
+    expect(state.plannerState.nextAction).toContain("add a new viable workflow");
     expect(state.orchestrationState.hasViableFallback).toBe(false);
     expect(state.orchestrationState.capabilityGaps).toContain("no_viable_fallback");
     expect(state.failureLearningState.missingCapabilities).toContain("no_viable_fallback");
+    expect(state.governanceState.autonomyMode).toBe("escalate");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Capability gaps: no_viable_fallback",
     );

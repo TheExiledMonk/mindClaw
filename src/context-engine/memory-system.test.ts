@@ -58,6 +58,9 @@ function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMe
     contradictionCount: 0,
     relatedMemoryIds: [],
     relations: [],
+    customerScope: undefined,
+    environmentTags: [],
+    artifactRefs: [],
     updatedAt: now,
     ...overrides,
   };
@@ -130,6 +133,7 @@ describe("memory system store", () => {
           strength: 0.9,
           evidence: ["strategy"],
           confidence: 0.9,
+          artifactRefs: ["src/context-engine/memory-system.ts"],
         }),
       ],
       pendingSignificance: [],
@@ -167,6 +171,7 @@ describe("memory system store", () => {
     expect(packet).toContain("Integrated memory packet");
     expect(packet).toContain("Relevant long-term facts and patterns");
     expect(packet).toContain("Relevant entities, constraints, and structural memory");
+    expect(packet).toContain("Relevant files and artifacts");
   });
 
   it("compiler reconsolidates compaction summaries into long-term and permanent memory", () => {
@@ -404,6 +409,54 @@ describe("memory system store", () => {
       item.reason.includes("graph expansion"),
     );
     expect(expandedItems[0]?.text).toContain("Call transcript verified");
+  });
+
+  it("uses version/profile/artifact scope during retrieval ranking", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "scope-a",
+          messages: [
+            userMessage(
+              "For customer acme on install profile profile-a, fix v2026.3.13-1 in src/context-engine/memory-system.ts on linux.",
+            ),
+          ],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-scoped",
+            category: "fact",
+            text: "Customer acme uses install profile profile-a and the fix lives in src/context-engine/memory-system.ts for v2026.3.13-1 on linux.",
+            versionScope: "v2026.3.13-1",
+            installProfileScope: "profile-a",
+            customerScope: "acme",
+            environmentTags: ["linux"],
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.78,
+          }),
+          longTermEntry({
+            id: "ltm-unscoped",
+            category: "fact",
+            text: "Generic migration note with no scoped artifact.",
+            strength: 0.9,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      {
+        messages: [
+          userMessage(
+            "Customer acme on install profile profile-a needs the v2026.3.13-1 linux fix in src/context-engine/memory-system.ts.",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("Scope notes");
+    expect(packet.text).toContain("Relevant files and artifacts");
+    expect(packet.accessedLongTermIds[0]).toBe("ltm-scoped");
   });
 
   it("extracts generalized pattern memories and marks superseded memories", () => {

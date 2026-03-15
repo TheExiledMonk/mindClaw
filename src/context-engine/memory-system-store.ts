@@ -140,6 +140,9 @@ export type LongTermMemoryEntry = {
   supersededById?: string;
   versionScope?: string;
   installProfileScope?: string;
+  customerScope?: string;
+  environmentTags: string[];
+  artifactRefs: string[];
   updatedAt: number;
 };
 
@@ -258,6 +261,10 @@ function tokenize(text: string): string[] {
 
 function uniqueIds(ids: string[]): string[] {
   return [...new Set(ids.filter(Boolean))];
+}
+
+function uniqueStrings(items: string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 }
 
 function mergeProvenance(
@@ -549,6 +556,65 @@ function detectTaskMode(messages: AgentMessage[], workingMemory?: WorkingMemoryS
   return "research";
 }
 
+function extractVersionScope(text: string): string | undefined {
+  const match = text.match(/\bv\d+(?:\.\d+)+(?:-\d+)?\b/i) ?? text.match(/\bversion\s+([0-9]+(?:\.[0-9]+)+)\b/i);
+  return match?.[0]?.trim();
+}
+
+function extractInstallProfileScope(text: string): string | undefined {
+  const match = text.match(/\binstall profile\s+([a-z0-9._-]+)/i) ?? text.match(/\bprofile\s+([a-z0-9._-]+)/i);
+  return match?.[1]?.trim();
+}
+
+function extractCustomerScope(text: string): string | undefined {
+  const match =
+    text.match(/\bcustomer\s+([a-z0-9._-]+)/i) ??
+    text.match(/\buser\s+([a-z0-9._-]+)/i);
+  return match?.[1]?.trim();
+}
+
+function extractEnvironmentTags(text: string): string[] {
+  const tags = [
+    "linux",
+    "macos",
+    "windows",
+    "docker",
+    "pnpm",
+    "npm",
+    "node",
+    "typescript",
+    "slack",
+    "discord",
+    "telegram",
+  ];
+  const normalized = text.toLowerCase();
+  return tags.filter((tag) => normalized.includes(tag));
+}
+
+function extractArtifactRefs(text: string): string[] {
+  const matches = text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|md|yml|yaml|toml|lock)\b/g) ?? [];
+  const pathLike = text.match(/\b(?:src|docs|config|packages|apps)\/[\w./-]+\b/g) ?? [];
+  return uniqueStrings([...matches, ...pathLike]).slice(0, MAX_WORKING_ITEMS);
+}
+
+type MemoryScopeContext = {
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  environmentTags: string[];
+  artifactRefs: string[];
+};
+
+function buildMemoryScopeContext(text: string): MemoryScopeContext {
+  return {
+    versionScope: extractVersionScope(text),
+    installProfileScope: extractInstallProfileScope(text),
+    customerScope: extractCustomerScope(text),
+    environmentTags: extractEnvironmentTags(text),
+    artifactRefs: extractArtifactRefs(text),
+  };
+}
+
 export function deriveLongTermMemoryCandidates(params: {
   messages: AgentMessage[];
   compactionSummary?: string;
@@ -569,6 +635,7 @@ export function deriveLongTermMemoryCandidates(params: {
     if (!category) {
       continue;
     }
+    const scope = buildMemoryScopeContext(normalized);
 
     const entryBase: LongTermMemoryEntry = {
       id: `ltm-${Date.now().toString(36)}-${(durable.length + pending.length).toString(36)}`,
@@ -589,6 +656,11 @@ export function deriveLongTermMemoryCandidates(params: {
       contradictionCount: 0,
       relatedMemoryIds: [],
       relations: [],
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      environmentTags: scope.environmentTags,
+      artifactRefs: scope.artifactRefs,
       updatedAt: Date.now(),
     };
 
@@ -605,6 +677,7 @@ export function deriveLongTermMemoryCandidates(params: {
 
   const compactionSummary = params.compactionSummary?.trim();
   if (compactionSummary) {
+    const scope = buildMemoryScopeContext(compactionSummary);
     durable.push({
       id: `ltm-${Date.now().toString(36)}-compaction`,
       category: "episode",
@@ -624,6 +697,11 @@ export function deriveLongTermMemoryCandidates(params: {
       contradictionCount: 0,
       relatedMemoryIds: [],
       relations: [],
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      environmentTags: scope.environmentTags,
+      artifactRefs: scope.artifactRefs,
       updatedAt: Date.now(),
     });
   }
@@ -659,6 +737,14 @@ export function mergeLongTermMemory(
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
     current.relations = mergeRelations(current.relations, item.relations);
+    current.versionScope = current.versionScope ?? item.versionScope;
+    current.installProfileScope = current.installProfileScope ?? item.installProfileScope;
+    current.customerScope = current.customerScope ?? item.customerScope;
+    current.environmentTags = uniqueStrings([
+      ...(current.environmentTags ?? []),
+      ...(item.environmentTags ?? []),
+    ]);
+    current.artifactRefs = uniqueStrings([...(current.artifactRefs ?? []), ...(item.artifactRefs ?? [])]);
     current.lastConfirmedAt = Date.now();
     current.trend = "rising";
     current.importanceClass =
@@ -707,6 +793,14 @@ export function mergePendingSignificance(
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
     current.relations = mergeRelations(current.relations, item.relations);
+    current.versionScope = current.versionScope ?? item.versionScope;
+    current.installProfileScope = current.installProfileScope ?? item.installProfileScope;
+    current.customerScope = current.customerScope ?? item.customerScope;
+    current.environmentTags = uniqueStrings([
+      ...(current.environmentTags ?? []),
+      ...(item.environmentTags ?? []),
+    ]);
+    current.artifactRefs = uniqueStrings([...(current.artifactRefs ?? []), ...(item.artifactRefs ?? [])]);
     current.lastConfirmedAt = Date.now();
   }
   return [...byText.values()]
@@ -1081,6 +1175,11 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
         targetMemoryId: entry.id,
         weight: 0.88,
       })),
+      versionScope: deduped.find((entry) => entry.versionScope)?.versionScope,
+      installProfileScope: deduped.find((entry) => entry.installProfileScope)?.installProfileScope,
+      customerScope: deduped.find((entry) => entry.customerScope)?.customerScope,
+      environmentTags: uniqueStrings(deduped.flatMap((entry) => entry.environmentTags ?? [])),
+      artifactRefs: uniqueStrings(deduped.flatMap((entry) => entry.artifactRefs ?? [])),
       updatedAt: Date.now(),
     });
   }
@@ -1420,6 +1519,7 @@ function rankLongTermEntries(
   entries: LongTermMemoryEntry[],
   queryTokens: Set<string>,
   taskMode: MemoryTaskMode,
+  scopeContext?: MemoryScopeContext,
 ): LongTermMemoryEntry[] {
   const taskBonus = (entry: LongTermMemoryEntry): number => {
     if (taskMode === "coding" && (entry.category === "strategy" || entry.category === "decision")) {
@@ -1434,6 +1534,28 @@ function rankLongTermEntries(
     return 0;
   };
   return [...entries].sort((a, b) => {
+    const scopeBonus = (entry: LongTermMemoryEntry): number => {
+      let bonus = 0;
+      if (scopeContext?.versionScope && entry.versionScope === scopeContext.versionScope) {
+        bonus += 3;
+      }
+      if (
+        scopeContext?.installProfileScope &&
+        entry.installProfileScope === scopeContext.installProfileScope
+      ) {
+        bonus += 2.5;
+      }
+      if (scopeContext?.customerScope && entry.customerScope === scopeContext.customerScope) {
+        bonus += 2;
+      }
+      if ((entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))) {
+        bonus += 1.5;
+      }
+      if ((entry.artifactRefs ?? []).some((ref) => scopeContext?.artifactRefs.includes(ref))) {
+        bonus += 2;
+      }
+      return bonus;
+    };
     const statePenalty = (entry: LongTermMemoryEntry): number => {
       if (entry.activeStatus === "superseded") {
         return 6;
@@ -1453,14 +1575,16 @@ function rankLongTermEntries(
       a.confidence * 4 +
       taskBonus(a) -
       statePenalty(a) -
-      contradictionPenalty(a);
+      contradictionPenalty(a) +
+      scopeBonus(a);
     const bScore =
       computeOverlapScore(b.text, queryTokens) +
       b.strength * 10 +
       b.confidence * 4 +
       taskBonus(b) -
       statePenalty(b) -
-      contradictionPenalty(b);
+      contradictionPenalty(b) +
+      scopeBonus(b);
     return bScore - aScore;
   });
 }
@@ -1578,6 +1702,7 @@ export function retrieveMemoryContextPacket(
   ].join(" ");
   const queryTokens = new Set(tokenize(currentText));
   const taskMode = detectTaskMode(params?.messages ?? [], snapshot.workingMemory);
+  const scopeContext = buildMemoryScopeContext(currentText);
   const retrievalItems: MemoryRetrievalItem[] = [];
   const sections: string[] = [];
   const accessedLongTermIds: string[] = [];
@@ -1590,7 +1715,7 @@ export function retrieveMemoryContextPacket(
     );
   }
 
-  const longTerm = rankLongTermEntries(snapshot.longTermMemory, queryTokens, taskMode).slice(
+  const longTerm = rankLongTermEntries(snapshot.longTermMemory, queryTokens, taskMode, scopeContext).slice(
     0,
     MAX_PACKET_ITEMS,
   );
@@ -1607,6 +1732,14 @@ export function retrieveMemoryContextPacket(
     sections.push(
       `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
     );
+  }
+
+  const artifactEntries = longTerm
+    .filter((item) => (item.artifactRefs ?? []).length > 0)
+    .flatMap((item) => item.artifactRefs.map((ref) => `${ref} (${item.id.slice(0, 8)})`))
+    .slice(0, MAX_PACKET_ITEMS);
+  if (artifactEntries.length > 0) {
+    sections.push(`Relevant files and artifacts:\n- ${artifactEntries.join("\n- ")}`);
   }
   const relatedExpansion = expandRelatedMemories(
     longTerm,
@@ -1683,6 +1816,15 @@ export function retrieveMemoryContextPacket(
     sections.push(
       `Session continuity output:\n- ${clipText(snapshot.workingMemory.carryForwardSummary, 220)}`,
     );
+  }
+  const scopeNotes = [
+    scopeContext.versionScope ? `version=${scopeContext.versionScope}` : "",
+    scopeContext.installProfileScope ? `install-profile=${scopeContext.installProfileScope}` : "",
+    scopeContext.customerScope ? `customer=${scopeContext.customerScope}` : "",
+    scopeContext.environmentTags.length > 0 ? `env=${scopeContext.environmentTags.join(",")}` : "",
+  ].filter(Boolean);
+  if (scopeNotes.length > 0) {
+    sections.push(`Scope notes:\n- ${scopeNotes.join("\n- ")}`);
   }
 
   const confidenceNotes = longTerm
@@ -1806,6 +1948,9 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
     contradictionCount: entry.contradictionCount ?? 0,
     relatedMemoryIds: [...(entry.relatedMemoryIds ?? [])],
     relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
+    customerScope: entry.customerScope,
+    environmentTags: [...(entry.environmentTags ?? [])],
+    artifactRefs: [...(entry.artifactRefs ?? [])],
     updatedAt: entry.updatedAt ?? Date.now(),
   };
 }

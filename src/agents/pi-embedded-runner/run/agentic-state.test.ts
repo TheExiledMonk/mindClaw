@@ -1203,6 +1203,42 @@ describe("agentic-state", () => {
     expect(buildAgenticHandoffReport(approvalState).clarificationSummary).toBe(
       "Need clarification on: operator approval for production deployment",
     );
+    expect(envVarState.plannerState.nextAction).toContain(
+      "Configure the missing environment variable before retrying.",
+    );
+    expect(buildAgenticHandoffReport(envVarState).resumeCondition).toContain(
+      "Configure the missing environment variable before resuming.",
+    );
+    expect(approvalState.plannerState.nextAction).toContain(
+      "Obtain the required approval before retrying.",
+    );
+    expect(buildAgenticHandoffReport(approvalState).resumeCondition).toContain(
+      "Obtain the required approval before resuming.",
+    );
+  });
+
+  it("uses external-input-specific clarification guidance when input is missing", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Continue the import after the customer input is provided.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Awaiting external input: customer CSV export",
+        },
+      ],
+    });
+
+    expect(state.plannerState.retryClass).toBe("clarify");
+    expect(state.plannerState.nextAction).toContain(
+      "Request the missing external input before retrying.",
+    );
+    expect(buildAgenticHandoffReport(state).resumeCondition).toContain(
+      "Provide the missing external input before resuming.",
+    );
+    expect(inspectAgenticExecutionObservability(state).clarificationSummary).toBe(
+      "Need clarification on: external input customer CSV export",
+    );
   });
 
   it("preserves clarification blocker subtypes in failure learning and procedural records", () => {

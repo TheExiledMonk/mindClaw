@@ -314,7 +314,8 @@ export type AgenticAcceptanceScenarioId =
   | "concise_progress_alignment"
   | "clarification_alignment"
   | "nonblocking_missing_information_alignment"
-  | "clarification_payload_alignment";
+  | "clarification_payload_alignment"
+  | "clarification_strategy_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -1138,7 +1139,9 @@ function classifyFailureSignals(params: {
       classes.add("verification_failure");
     } else if (/\b(permission|forbidden|denied|sandbox|workspace only|not allowed)\b/.test(text)) {
       classes.add("environment_mismatch");
-    } else if (/\bmissing|not found|unknown file|no such file|required|needs\b/.test(text)) {
+    } else if (
+      /\bmissing|not found|unknown file|no such file|required|needs|awaiting\b/.test(text)
+    ) {
       classes.add("missing_information");
     } else {
       classes.add("tool_failure");
@@ -1298,6 +1301,7 @@ function buildPlannerState(params: {
   const blockingMissingInformation =
     dominantFailureClass === "missing_information" &&
     params.verificationState.outcome === "blocked";
+  const clarificationReason = getPrimaryClarificationReason(params.blockers);
   const templateFamilyActive =
     Boolean(likelyPrimaryFamily) &&
     memoryRegressionSignals.templatePreferredFamilies.includes(likelyPrimaryFamily ?? "");
@@ -1356,7 +1360,13 @@ function buildPlannerState(params: {
       nextAction: shouldEscalate
         ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
         : blockingMissingInformation
-          ? "Clarify the missing input or fetch the missing prerequisite before retrying."
+          ? clarificationReason === "missing_information:environment_variable"
+            ? "Configure the missing environment variable before retrying."
+            : clarificationReason === "missing_information:approval"
+              ? "Obtain the required approval before retrying."
+              : clarificationReason === "missing_information:external_input"
+                ? "Request the missing external input before retrying."
+                : "Clarify the missing input or fetch the missing prerequisite before retrying."
           : mergeFamilyFallbackSkills.length > 0
             ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${mergeFallbackHint}${fallbackHint}`.trim()
             : templateFamilyActive
@@ -2298,6 +2308,10 @@ function extractClarificationFailureReasons(blockers: string[]): string[] {
     }
   }
   return uniqueCompact(reasons, 4);
+}
+
+function getPrimaryClarificationReason(blockers: string[]): string | undefined {
+  return extractClarificationFailureReasons(blockers)[0];
 }
 
 function extractClarificationSummary(state: AgenticExecutionState): string | undefined {
@@ -3286,6 +3300,7 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
     4,
   ).join(" ");
   const clarificationSummary = extractClarificationSummary(state);
+  const clarificationReason = getPrimaryClarificationReason(state.taskState.blockers);
   const operatorReason =
     state.governanceState.reasons[0] ??
     (state.plannerState.retryClass === "clarify" ? "await_validation_context" : undefined);
@@ -3303,7 +3318,13 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
       : operatorMode === "escalate"
         ? `Resolve escalation before resuming${state.plannerState.escalationReason ? ` (${state.plannerState.escalationReason})` : ""}.`
         : state.plannerState.retryClass === "clarify"
-          ? "Capture an observed validation command or missing prerequisite before resuming."
+          ? clarificationReason === "missing_information:environment_variable"
+            ? "Configure the missing environment variable before resuming."
+            : clarificationReason === "missing_information:approval"
+              ? "Obtain the required approval before resuming."
+              : clarificationReason === "missing_information:external_input"
+                ? "Provide the missing external input before resuming."
+                : "Capture an observed validation command or missing prerequisite before resuming."
           : undefined;
   const resumePrompt =
     operatorMode === "approval_required"
@@ -5166,6 +5187,88 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Clarification payloads stay concrete for environment variables and approval-gated work."
         : "Clarification payloads drifted for environment variables or approval-gated work.",
       details: `env=${envVarObservability.clarificationSummary ?? "none"} approval=${approvalObservability.clarificationSummary ?? "none"}`,
+    });
+  }
+
+  {
+    const envVarState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Run the deployment smoke test after the required environment variable is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+    });
+    const approvalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Deploy the production hotfix once the release approval is granted.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Approval required: production deployment",
+        },
+      ],
+    });
+    const externalInputState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Continue the import after the customer input is provided.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Awaiting external input: customer CSV export",
+        },
+      ],
+    });
+    const envVarHandoff = buildAgenticHandoffReport(envVarState);
+    const approvalHandoff = buildAgenticHandoffReport(approvalState);
+    const externalInputHandoff = buildAgenticHandoffReport(externalInputState);
+    const passed =
+      (envVarState.plannerState.nextAction ?? "").includes(
+        "Configure the missing environment variable before retrying.",
+      ) &&
+      (envVarHandoff.resumeCondition ?? "").includes(
+        "Configure the missing environment variable before resuming.",
+      ) &&
+      (approvalState.plannerState.nextAction ?? "").includes(
+        "Obtain the required approval before retrying.",
+      ) &&
+      (approvalHandoff.resumeCondition ?? "").includes(
+        "Obtain the required approval before resuming.",
+      ) &&
+      (externalInputState.plannerState.nextAction ?? "").includes(
+        "Request the missing external input before retrying.",
+      ) &&
+      (externalInputHandoff.resumeCondition ?? "").includes(
+        "Provide the missing external input before resuming.",
+      );
+    scenarios.push({
+      id: "clarification_strategy_alignment",
+      passed,
+      summary: passed
+        ? "Clarification blocker subtypes now drive subtype-specific retry and resume guidance."
+        : "Clarification retry and resume guidance stayed too generic for blocker subtypes.",
+      details: `env=${envVarState.plannerState.nextAction ?? "none"} approval=${approvalState.plannerState.nextAction ?? "none"} external=${externalInputState.plannerState.nextAction ?? "none"}`,
     });
   }
 

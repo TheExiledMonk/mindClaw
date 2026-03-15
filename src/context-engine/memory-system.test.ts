@@ -254,7 +254,55 @@ describe("memory system store", () => {
           }),
         ],
         pendingSignificance: [],
-        graph: emptyGraph(),
+        graph: {
+          nodes: [
+            {
+              id: "ltm-artifact-base",
+              kind: "memory",
+              category: "strategy",
+              summary: "The main memory integration work lives in src/context-engine/memory-system.ts.",
+              confidence: 0.8,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-artifact-related",
+              kind: "memory",
+              category: "episode",
+              summary: "Previous fix in src/context-engine/memory-system.ts preserved carry-forward behavior.",
+              confidence: 0.8,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "artifact:src/context-engine/memory-system.ts",
+              kind: "artifact",
+              category: "entity",
+              summary: "src/context-engine/memory-system.ts",
+              artifactRef: "src/context-engine/memory-system.ts",
+              confidence: 0.8,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+          ],
+          edges: [
+            {
+              from: "ltm-artifact-base",
+              to: "artifact:src/context-engine/memory-system.ts",
+              type: "linked_to",
+              weight: 0.82,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-artifact-related",
+              type: "linked_to",
+              weight: 0.82,
+              updatedAt: Date.now(),
+            },
+          ],
+          updatedAt: Date.now(),
+        },
         permanentMemory: permanentRoot(),
       },
       messages: [
@@ -457,6 +505,51 @@ describe("memory system store", () => {
     expect(packet.text).toContain("Scope notes");
     expect(packet.text).toContain("Relevant files and artifacts");
     expect(packet.accessedLongTermIds[0]).toBe("ltm-scoped");
+  });
+
+  it("captures structured runtime scope during compilation", () => {
+    const compiled = compileMemoryState({
+      sessionId: "runtime-a",
+      messages: [userMessage("The memory system must preserve the current migration constraint.")],
+      runtimeContext: {
+        provider: "openai",
+        model: "gpt-5",
+        messageProvider: "slack",
+        authProfileId: "profile-runtime",
+        extraSystemPrompt:
+          "Use src/context-engine/memory-system.ts as the authoritative artifact for v2026.3.13-1.",
+      },
+      sessionFile: "/tmp/session.jsonl",
+    });
+
+    const durable = compiled.longTermMemory.find((entry) =>
+      entry.text.includes("preserve the current migration constraint"),
+    );
+    expect(durable?.installProfileScope).toBe("profile-runtime");
+    expect(durable?.environmentTags).toContain("provider:openai");
+    expect(durable?.artifactRefs).toContain("src/context-engine/memory-system.ts");
+    expect(durable?.artifactRefs).toContain("session.jsonl");
+  });
+
+  it("builds first-class artifact nodes in the memory graph", () => {
+    const compiled = compileMemoryState({
+      sessionId: "artifact-a",
+      messages: [
+        userMessage(
+          "The main memory integration work lives in src/context-engine/memory-system.ts and previous fixes preserved carry-forward behavior there.",
+        ),
+      ],
+    });
+
+    expect(compiled.graph.nodes.some((node) => node.kind === "artifact")).toBe(true);
+    expect(
+      compiled.graph.nodes.some((node) => node.artifactRef === "src/context-engine/memory-system.ts"),
+    ).toBe(true);
+    expect(
+      compiled.graph.edges.some(
+        (edge) => edge.from.startsWith("artifact:") || edge.to.startsWith("artifact:"),
+      ),
+    ).toBe(true);
   });
 
   it("extracts generalized pattern memories and marks superseded memories", () => {

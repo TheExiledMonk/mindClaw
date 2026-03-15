@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ContextEngineRuntimeContext } from "./types.js";
 
 export const MEMORY_SYSTEM_DIRNAME = ".openclaw-memory";
 const SESSIONS_DIRNAME = "sessions";
@@ -83,10 +84,12 @@ export type MemoryRelation = {
 
 export type MemoryGraphNode = {
   id: string;
+  kind: "memory" | "artifact";
   category: MemoryCategory;
   summary: string;
   confidence: number;
   activeStatus: MemoryActiveStatus;
+  artifactRef?: string;
   updatedAt: number;
 };
 
@@ -615,9 +618,55 @@ function buildMemoryScopeContext(text: string): MemoryScopeContext {
   };
 }
 
+function mergeScopeContexts(primary: MemoryScopeContext, secondary?: Partial<MemoryScopeContext>): MemoryScopeContext {
+  return {
+    versionScope: primary.versionScope ?? secondary?.versionScope,
+    installProfileScope: primary.installProfileScope ?? secondary?.installProfileScope,
+    customerScope: primary.customerScope ?? secondary?.customerScope,
+    environmentTags: uniqueStrings([
+      ...primary.environmentTags,
+      ...(secondary?.environmentTags ?? []),
+    ]),
+    artifactRefs: uniqueStrings([
+      ...primary.artifactRefs,
+      ...(secondary?.artifactRefs ?? []),
+    ]),
+  };
+}
+
+function buildRuntimeScopeContext(params?: {
+  runtimeContext?: ContextEngineRuntimeContext;
+  sessionFile?: string;
+}): MemoryScopeContext {
+  const runtime = params?.runtimeContext;
+  const stringValue = (key: string): string | undefined => {
+    const value = runtime?.[key];
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  };
+  const extraPrompt = stringValue("extraSystemPrompt") ?? "";
+  return {
+    versionScope: extractVersionScope(extraPrompt),
+    installProfileScope: stringValue("authProfileId"),
+    customerScope: undefined,
+    environmentTags: uniqueStrings(
+      [
+        stringValue("provider") ? `provider:${stringValue("provider")}` : "",
+        stringValue("model") ? `model:${stringValue("model")}` : "",
+        stringValue("messageProvider") ? `channel:${stringValue("messageProvider")}` : "",
+        runtime?.bashElevated === true ? "bash-elevated" : "",
+      ].filter(Boolean),
+    ),
+    artifactRefs: uniqueStrings([
+      ...extractArtifactRefs(extraPrompt),
+      params?.sessionFile ? path.basename(params.sessionFile) : "",
+    ]),
+  };
+}
+
 export function deriveLongTermMemoryCandidates(params: {
   messages: AgentMessage[];
   compactionSummary?: string;
+  scopeContext?: Partial<MemoryScopeContext>;
 }): { durable: LongTermMemoryEntry[]; pending: PendingMemoryEntry[] } {
   const durable: LongTermMemoryEntry[] = [];
   const pending: PendingMemoryEntry[] = [];
@@ -635,7 +684,7 @@ export function deriveLongTermMemoryCandidates(params: {
     if (!category) {
       continue;
     }
-    const scope = buildMemoryScopeContext(normalized);
+    const scope = mergeScopeContexts(buildMemoryScopeContext(normalized), params.scopeContext);
 
     const entryBase: LongTermMemoryEntry = {
       id: `ltm-${Date.now().toString(36)}-${(durable.length + pending.length).toString(36)}`,
@@ -677,7 +726,7 @@ export function deriveLongTermMemoryCandidates(params: {
 
   const compactionSummary = params.compactionSummary?.trim();
   if (compactionSummary) {
-    const scope = buildMemoryScopeContext(compactionSummary);
+    const scope = mergeScopeContexts(buildMemoryScopeContext(compactionSummary), params.scopeContext);
     durable.push({
       id: `ltm-${Date.now().toString(36)}-compaction`,
       category: "episode",
@@ -1296,21 +1345,55 @@ function reviewMemoryState(params: {
 function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSnapshot {
   const nodes: MemoryGraphNode[] = entries.map((entry) => ({
     id: entry.id,
+    kind: "memory",
     category: entry.category,
     summary: clipText(entry.text, 180),
     confidence: entry.confidence,
     activeStatus: entry.activeStatus,
     updatedAt: entry.updatedAt,
   }));
-  const edges = entries.flatMap((entry) =>
-    entry.relations.map((relation) => ({
+  const artifactNodes = new Map<string, MemoryGraphNode>();
+  const edges = entries.flatMap((entry) => {
+    const relationEdges = entry.relations.map((relation) => ({
       from: relation.sourceMemoryId ?? entry.id,
       to: relation.targetMemoryId,
       type: relation.type,
       weight: relation.weight,
       updatedAt: entry.updatedAt,
-    })),
-  );
+    }));
+    const artifactEdges = (entry.artifactRefs ?? []).flatMap((ref) => {
+      const artifactId = `artifact:${ref}`;
+      if (!artifactNodes.has(artifactId)) {
+        artifactNodes.set(artifactId, {
+          id: artifactId,
+          kind: "artifact",
+          category: "entity",
+          summary: ref,
+          artifactRef: ref,
+          confidence: entry.confidence,
+          activeStatus: "active",
+          updatedAt: entry.updatedAt,
+        });
+      }
+      return [
+        {
+          from: entry.id,
+          to: artifactId,
+          type: "linked_to" as const,
+          weight: 0.82,
+          updatedAt: entry.updatedAt,
+        },
+        {
+          from: artifactId,
+          to: entry.id,
+          type: "linked_to" as const,
+          weight: 0.82,
+          updatedAt: entry.updatedAt,
+        },
+      ];
+    });
+    return [...relationEdges, ...artifactEdges];
+  });
   const uniqueEdges = new Map<string, MemoryGraphEdge>();
   for (const edge of edges) {
     const key = `${edge.from}:${edge.type}:${edge.to}`;
@@ -1320,7 +1403,7 @@ function buildMemoryGraphSnapshot(entries: LongTermMemoryEntry[]): MemoryGraphSn
     }
   }
   return {
-    nodes,
+    nodes: [...nodes, ...artifactNodes.values()],
     edges: [...uniqueEdges.values()].sort((a, b) => b.weight - a.weight),
     updatedAt: Date.now(),
   };
@@ -1382,8 +1465,14 @@ export function compileMemoryState(params: {
   previous?: MemoryStoreSnapshot;
   messages: AgentMessage[];
   compactionSummary?: string;
+  runtimeContext?: ContextEngineRuntimeContext;
+  sessionFile?: string;
 }): MemoryCompileResult {
   const previous = params.previous;
+  const runtimeScope = buildRuntimeScopeContext({
+    runtimeContext: params.runtimeContext,
+    sessionFile: params.sessionFile,
+  });
   const nextWorkingMemory = buildWorkingMemorySnapshot({
     sessionId: params.sessionId,
     messages: params.messages,
@@ -1393,6 +1482,7 @@ export function compileMemoryState(params: {
   const candidates = deriveLongTermMemoryCandidates({
     messages: params.messages,
     compactionSummary: params.compactionSummary,
+    scopeContext: runtimeScope,
   });
   const mergedPending = mergePendingSignificance(
     previous?.pendingSignificance ?? [],
@@ -1593,22 +1683,24 @@ function expandRelatedMemories(
   selected: LongTermMemoryEntry[],
   allEntries: LongTermMemoryEntry[],
   taskMode: MemoryTaskMode,
+  scopeContext?: MemoryScopeContext,
   graph?: MemoryGraphSnapshot,
 ): LongTermMemoryEntry[] {
   const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
+  const graphNodeById = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
   const expanded: LongTermMemoryEntry[] = [];
   const seen = new Set<string>(selected.map((entry) => entry.id));
   const selectedIds = new Set(selected.map((entry) => entry.id));
   const allowedRelationTypes = (() => {
     switch (taskMode) {
       case "coding":
-        return new Set<MemoryRelationType>(["derived_from", "relevant_to", "confirmed_by"]);
+        return new Set<MemoryRelationType>(["derived_from", "relevant_to", "confirmed_by", "linked_to"]);
       case "support":
-        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "relevant_to"]);
+        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "relevant_to", "linked_to"]);
       case "planning":
-        return new Set<MemoryRelationType>(["relevant_to", "superseded_by", "derived_from"]);
+        return new Set<MemoryRelationType>(["relevant_to", "superseded_by", "derived_from", "linked_to"]);
       case "debugging":
-        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "derived_from"]);
+        return new Set<MemoryRelationType>(["contradicts", "confirmed_by", "derived_from", "linked_to"]);
       default:
         return new Set<MemoryRelationType>([
           "derived_from",
@@ -1652,10 +1744,10 @@ function expandRelatedMemories(
     if (relation.weight < 0.5 || seen.has(relation.targetMemoryId)) {
       continue;
     }
-    const related = byId.get(relation.targetMemoryId);
-    if (!related || related.activeStatus === "superseded") {
-      continue;
-    }
+      const related = byId.get(relation.targetMemoryId);
+      if (!related || related.activeStatus === "superseded") {
+        continue;
+      }
     seen.add(related.id);
     expanded.push(related);
     if (expanded.length >= MAX_PACKET_ITEMS) {
@@ -1674,6 +1766,27 @@ function expandRelatedMemories(
       edge.weight < 0.5 ||
       !allowedRelationTypes.has(edge.type)
     ) {
+      continue;
+    }
+    const artifactNode = graphNodeById.get(edge.to);
+    if (artifactNode?.kind === "artifact" && artifactNode.artifactRef) {
+      if (!scopeContext?.artifactRefs.includes(artifactNode.artifactRef)) {
+        continue;
+      }
+      for (const artifactEdge of graph?.edges ?? []) {
+        if (artifactEdge.from !== artifactNode.id || seen.has(artifactEdge.to)) {
+          continue;
+        }
+        const artifactRelated = byId.get(artifactEdge.to);
+        if (!artifactRelated || artifactRelated.activeStatus === "superseded") {
+          continue;
+        }
+        seen.add(artifactRelated.id);
+        expanded.push(artifactRelated);
+        if (expanded.length >= MAX_PACKET_ITEMS) {
+          return expanded;
+        }
+      }
       continue;
     }
     const related = byId.get(edge.to);
@@ -1745,6 +1858,7 @@ export function retrieveMemoryContextPacket(
     longTerm,
     snapshot.longTermMemory,
     taskMode,
+    scopeContext,
     snapshot.graph,
   );
   if (relatedExpansion.length > 0) {
@@ -1959,6 +2073,7 @@ function sanitizeGraphSnapshot(graph: MemoryGraphSnapshot | undefined): MemoryGr
   return {
     nodes: (graph?.nodes ?? []).map((node) => ({
       ...node,
+      kind: node.kind ?? "memory",
       confidence: node.confidence ?? 0.7,
       activeStatus: node.activeStatus ?? "active",
       updatedAt: node.updatedAt ?? Date.now(),

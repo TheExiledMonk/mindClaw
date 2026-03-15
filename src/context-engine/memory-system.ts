@@ -134,12 +134,16 @@ export class MemorySystemContextEngine implements ContextEngine {
       previous: snapshot,
       messages: params.messages,
       compactionSummary: params.autoCompactionSummary,
+      runtimeContext: params.runtimeContext,
+      sessionFile: params.sessionFile,
     });
     const newMessages = selectNewMessages(params.messages, params.prePromptMessageCount);
     const incremental = compileMemoryState({
       sessionId,
       previous: compiled,
       messages: newMessages,
+      runtimeContext: params.runtimeContext,
+      sessionFile: params.sessionFile,
     });
     await persistMemoryStoreSnapshot({
       workspaceDir,
@@ -186,6 +190,8 @@ export class MemorySystemContextEngine implements ContextEngine {
         previous: snapshot,
         messages: [],
         compactionSummary: result.result.summary,
+        runtimeContext: params.runtimeContext,
+        sessionFile: params.sessionFile,
       });
       await persistMemoryStoreSnapshot({
         workspaceDir,

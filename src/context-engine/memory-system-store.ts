@@ -3158,9 +3158,11 @@ function deriveRuntimeSignalCandidates(params: {
       typeof agenticQualityGate.summary === "string" && agenticQualityGate.summary.trim().length > 0
         ? agenticQualityGate.summary.trim()
         : `agentic quality gate ${passed ? "passed" : "failed"}`;
+    const summaryWithReasons =
+      failReasons.length > 0 ? `${summary} (reasons=${failReasons.join(",")})` : summary;
     pushRuntimeCandidate({
       category: "decision",
-      text: `Agentic quality gate: ${summary}`,
+      text: `Agentic quality gate: ${summaryWithReasons}`,
       evidence: uniqueStrings([
         `acceptance=${acceptancePassed ? "pass" : "fail"}`,
         `soak=${soakPassed ? "pass" : "fail"}`,
@@ -6152,6 +6154,35 @@ export function retrieveMemoryContextPacket(
     }
     sections.push(
       `Procedural guidance:\n- ${proceduralGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
+    );
+  }
+
+  const agenticRegressionGuidance = rankLongTermEntries(
+    snapshot.longTermMemory.filter((entry) =>
+      (entry.environmentTags ?? []).some(
+        (tag) => tag === "runtime:agentic-observability" || tag === "runtime:agentic-quality-gate",
+      ),
+    ),
+    queryTokens,
+    taskMode,
+    scopeContext,
+    queryEntityAliases,
+    adjudications,
+  ).slice(0, 3);
+  if (agenticRegressionGuidance.length > 0) {
+    retrievalItems.push(
+      ...agenticRegressionGuidance.map((item) => ({
+        kind: "long-term" as const,
+        text: formatMemoryWithState(item),
+        reason: `agentic regression guidance source=${item.sourceType}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+        memoryId: item.id,
+        conceptId: getEntryConceptId(item),
+      })),
+    );
+    accessedLongTermIds.push(...agenticRegressionGuidance.map((item) => item.id));
+    accessedConceptIds.push(...agenticRegressionGuidance.map((item) => getEntryConceptId(item)));
+    sections.push(
+      `Agentic regression guidance:\n- ${agenticRegressionGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );
   }
 

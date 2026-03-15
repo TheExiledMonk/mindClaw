@@ -259,6 +259,37 @@ describe("agentic-state", () => {
     ]);
   });
 
+  it("uses agentic regression guidance from memory to break out of same-path retries", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Fix the diagnostics workflow and stop repeating the failing validation path."),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- [decision] Agentic quality gate: agentic quality gate acceptance=pass soak=fail diagnostics=fail (reasons=diagnostics_missing_fallback)",
+      ].join("\n"),
+    });
+
+    expect(state.plannerState.retryClass).toBe("skill_fallback");
+    expect(state.plannerState.suggestedSkill).toBe("acceptance-report");
+    expect(state.plannerState.rationale).toContain("memory-regression:no_viable_fallback");
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+  });
+
   it("uses memory-weighted orchestration to choose the fallback skill", () => {
     const state = buildAgenticExecutionState({
       messages: [

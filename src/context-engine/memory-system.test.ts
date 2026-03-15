@@ -2770,6 +2770,96 @@ describe("MemorySystemContextEngine", () => {
     expect(markdown).toContain("## Agentic Trends");
   });
 
+  it("injects agentic regression guidance into retrieved memory packets", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:agentic-regression-packet",
+      messages: [
+        userMessage(
+          "Track the failing diagnostics workflow and keep missing fallback regressions visible.",
+        ),
+      ],
+      runtimeContext: {
+        agenticObservability: {
+          version: 1,
+          summary:
+            "retry=escalate autonomy=escalate risk=high failure=blocked_path fallback=missing",
+          retryClass: "escalate",
+          autonomyMode: "escalate",
+          riskLevel: "high",
+          failurePattern: "blocked_path",
+          suggestedSkill: undefined,
+          rankedSkills: ["memory-diagnostics"],
+          capabilityGaps: ["no_viable_fallback"],
+          overlappingSkills: [],
+          skillFamilies: [],
+          consolidationAction: "none",
+          workflowSteps: [],
+          hasViableFallback: false,
+          escalationRequired: true,
+          planSteps: [],
+          goalSatisfaction: "uncertain",
+          unresolvedCriteria: ["find a viable fallback"],
+          recommendations: ["Add or learn a viable fallback workflow before retrying."],
+        },
+        agenticQualityGate: {
+          passed: false,
+          acceptancePassed: true,
+          soakPassed: false,
+          diagnosticsPassed: false,
+          failReasons: ["diagnostics_missing_fallback"],
+          acceptance: {
+            passed: true,
+            totalScenarios: 16,
+            passedScenarios: 16,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic acceptance 16/16 passed",
+          },
+          soak: {
+            passed: false,
+            totalScenarios: 2,
+            passedScenarios: 1,
+            failedScenarioIds: ["retry_replan_recover_complete"],
+            scenarios: [],
+            summary: "agentic soak 1/2 passed",
+          },
+          diagnostics: {
+            summary:
+              "retry=escalate autonomy=escalate risk=high failure=blocked_path fallback=missing",
+            retryClass: "escalate",
+            autonomyMode: "escalate",
+            riskLevel: "high",
+            failurePattern: "blocked_path",
+            suggestedSkill: undefined,
+            rankedSkills: ["memory-diagnostics"],
+            capabilityGaps: ["no_viable_fallback"],
+            overlappingSkills: [],
+            skillFamilies: [],
+            consolidationAction: "none",
+            workflowSteps: [],
+            hasViableFallback: false,
+            escalationRequired: true,
+            planSteps: [],
+            goalSatisfaction: "uncertain",
+            unresolvedCriteria: ["find a viable fallback"],
+            recommendations: ["Add or learn a viable fallback workflow before retrying."],
+          },
+          summary: "agentic quality gate acceptance=pass soak=fail diagnostics=fail",
+        },
+      } as never,
+    });
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [userMessage("Fix the diagnostics workflow and stop repeating the failing path.")],
+    });
+
+    expect(packet.text).toContain("Agentic regression guidance:");
+    expect(packet.text).toContain("diagnostics_missing_fallback");
+    expect(
+      packet.retrievalItems.some((item) => item.reason.includes("agentic regression guidance")),
+    ).toBe(true);
+  });
+
   it("includes maintenance details when diagnostics runs repair", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-repair-"));
     const sessionId = "agent:diagnostics-repair";

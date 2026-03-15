@@ -361,6 +361,12 @@ type ProceduralMemorySkillSignal = {
   multiSkillHint: boolean;
 };
 
+type AgenticRegressionMemorySignal = {
+  missingFallbackRegression: boolean;
+  escalationRegression: boolean;
+  qualityFailureReasons: string[];
+};
+
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   if (!memoryText) {
     return [];
@@ -498,6 +504,51 @@ function extractProceduralMemorySkillSignals(params: {
     weightedSkills,
     workflowChains: workflowHints.chains,
     multiSkillHint: workflowHints.multiSkillHint,
+  };
+}
+
+function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegressionMemorySignal {
+  if (!memoryText) {
+    return {
+      missingFallbackRegression: false,
+      escalationRegression: false,
+      qualityFailureReasons: [],
+    };
+  }
+  const match = memoryText.match(/Agentic regression guidance:\s*((?:\n-\s+[^\n]+)+)/i);
+  if (!match) {
+    return {
+      missingFallbackRegression: false,
+      escalationRegression: false,
+      qualityFailureReasons: [],
+    };
+  }
+  const lines = match[1]
+    .split("\n")
+    .map((line) => line.replace(/^\s*-\s+/, "").trim())
+    .filter(Boolean);
+  const qualityFailureReasons = uniqueCompact(
+    lines.flatMap((line) => {
+      const reasonsMatch = line.match(/reasons=([a-z0-9_,.-]+)/i);
+      if (!reasonsMatch) {
+        return [];
+      }
+      return reasonsMatch[1]
+        .split(",")
+        .map((reason) => reason.trim())
+        .filter(Boolean);
+    }),
+    6,
+  );
+  const normalized = lines.join("\n").toLowerCase();
+  return {
+    missingFallbackRegression:
+      normalized.includes("missing viable fallback") ||
+      normalized.includes("diagnostics_missing_fallback") ||
+      normalized.includes("no_viable_fallback"),
+    escalationRegression:
+      normalized.includes("escalation") || normalized.includes("trend=regressing"),
+    qualityFailureReasons,
   };
 }
 
@@ -1191,6 +1242,7 @@ function buildOrchestrationState(params: {
   memoryWeightedSkills?: Map<string, number>;
   memoryWorkflowChains?: string[][];
   memoryMultiSkillHint?: boolean;
+  memoryRegressionSignals?: AgenticRegressionMemorySignal;
   alternativeSkills?: string[];
   toolSignals?: ToolSignal[];
   plannerState?: AgenticPlannerState;
@@ -1201,6 +1253,11 @@ function buildOrchestrationState(params: {
   const memoryWeightedSkills = params.memoryWeightedSkills ?? new Map<string, number>();
   const memoryWorkflowChains = params.memoryWorkflowChains ?? [];
   const memoryMultiSkillHint = params.memoryMultiSkillHint === true;
+  const memoryRegressionSignals = params.memoryRegressionSignals ?? {
+    missingFallbackRegression: false,
+    escalationRegression: false,
+    qualityFailureReasons: [],
+  };
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const currentLikelySkill = likelySkills[0];
   const currentLikelyMemoryWeight = currentLikelySkill
@@ -1281,6 +1338,20 @@ function buildOrchestrationState(params: {
       ) {
         score -= 1;
         reasons.push("same-path-replan");
+      }
+      if (
+        memoryRegressionSignals.missingFallbackRegression &&
+        (params.plannerState?.status === "needs_replan" ||
+          params.plannerState?.status === "blocked")
+      ) {
+        if (skill.name === likelySkills[0]) {
+          score -= 1.5;
+          reasons.push("memory-regression-guard");
+        }
+        if (alternativeSkills.includes(skill.name)) {
+          score += 1.25;
+          reasons.push("memory-regression-escape");
+        }
       }
       return { skill: skill.name, score, reasons };
     })
@@ -1495,8 +1566,34 @@ function reconcilePlannerStateWithOrchestration(params: {
   plannerState: AgenticPlannerState;
   orchestrationState: AgenticOrchestrationState;
   likelySkills?: string[];
+  memoryRegressionSignals?: AgenticRegressionMemorySignal;
 }): AgenticPlannerState {
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
+  const memoryRegressionSignals = params.memoryRegressionSignals ?? {
+    missingFallbackRegression: false,
+    escalationRegression: false,
+    qualityFailureReasons: [],
+  };
+  const rankedAlternatives = params.orchestrationState.rankedSkills.filter(
+    (skill) => !likelySkills.includes(skill),
+  );
+  if (
+    params.plannerState.retryClass === "same_path_retry" &&
+    params.plannerState.status === "needs_replan" &&
+    memoryRegressionSignals.missingFallbackRegression &&
+    rankedAlternatives.length > 0
+  ) {
+    return {
+      ...params.plannerState,
+      retryClass: "skill_fallback",
+      suggestedSkill: rankedAlternatives[0],
+      alternativeSkills: rankedAlternatives,
+      nextAction: `Avoid the historically regressing path and switch to ${rankedAlternatives[0]}. Consider alternative skills: ${rankedAlternatives.slice(0, 3).join(", ")}.`,
+      rationale: params.plannerState.rationale
+        ? `${params.plannerState.rationale}; memory-regression:no_viable_fallback`
+        : "memory-regression:no_viable_fallback",
+    };
+  }
   if (
     params.orchestrationState.capabilityGaps.includes("no_viable_fallback") &&
     !params.orchestrationState.hasViableFallback &&
@@ -1519,9 +1616,6 @@ function reconcilePlannerStateWithOrchestration(params: {
   if (params.plannerState.retryClass !== "skill_fallback") {
     return params.plannerState;
   }
-  const rankedAlternatives = params.orchestrationState.rankedSkills.filter(
-    (skill) => !likelySkills.includes(skill),
-  );
   if (rankedAlternatives.length === 0) {
     return params.plannerState;
   }
@@ -1529,11 +1623,19 @@ function reconcilePlannerStateWithOrchestration(params: {
   const nextAction = params.plannerState.nextAction?.includes("fallback workflow using")
     ? `Switch to a fallback workflow using ${suggestedSkill} before retrying. Consider alternative skills: ${rankedAlternatives.slice(0, 3).join(", ")}.`
     : params.plannerState.nextAction;
+  const rationale =
+    memoryRegressionSignals.missingFallbackRegression &&
+    !(params.plannerState.rationale ?? "").includes("memory-regression:no_viable_fallback")
+      ? params.plannerState.rationale
+        ? `${params.plannerState.rationale}; memory-regression:no_viable_fallback`
+        : "memory-regression:no_viable_fallback"
+      : params.plannerState.rationale;
   return {
     ...params.plannerState,
     suggestedSkill,
     alternativeSkills: rankedAlternatives,
     nextAction,
+    rationale,
   };
 }
 
@@ -1661,6 +1763,9 @@ export function buildAgenticExecutionState(params: {
     memoryText: params.memorySystemPromptAddition,
     availableSkills: availableSkillInfo.map((skill) => skill.name),
   });
+  const memoryRegressionSignals = extractAgenticRegressionMemorySignals(
+    params.memorySystemPromptAddition,
+  );
   const orchestrationState = buildOrchestrationState({
     taskMode: taskState.taskMode,
     objectiveText: taskState.objective,
@@ -1670,6 +1775,7 @@ export function buildAgenticExecutionState(params: {
     memoryWeightedSkills: memorySkillSignals.weightedSkills,
     memoryWorkflowChains: memorySkillSignals.workflowChains,
     memoryMultiSkillHint: memorySkillSignals.multiSkillHint,
+    memoryRegressionSignals,
     alternativeSkills: plannerState.alternativeSkills,
     toolSignals: params.toolSignals,
     plannerState,
@@ -1689,6 +1795,7 @@ export function buildAgenticExecutionState(params: {
     plannerState,
     orchestrationState,
     likelySkills: params.likelySkills,
+    memoryRegressionSignals,
   });
   const governanceState = buildGovernanceState({
     messages: params.messages,

@@ -435,6 +435,8 @@ function extractProceduralWorkflowChains(params: {
 function extractProceduralMemorySkillSignals(params: {
   memoryText?: string;
   availableSkills?: string[];
+  taskMode?: AgenticTaskMode;
+  preferredEnv?: string;
 }): ProceduralMemorySkillSignal {
   const recommendedSkills = extractRecommendedProceduralSkills(params.memoryText);
   const workflowHints = extractProceduralWorkflowChains(params);
@@ -518,7 +520,16 @@ function extractProceduralMemorySkillSignals(params: {
   for (const line of effectivenessLines) {
     const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
     const family = line.match(/family=([a-z0-9._-]+)/i)?.[1]?.trim();
-    const score = Number(line.match(/score=(-?\d+(?:\.\d+)?)/i)?.[1] ?? Number.NaN);
+    const rawScore = Number(line.match(/score=(-?\d+(?:\.\d+)?)/i)?.[1] ?? Number.NaN);
+    const scopedTaskMode = line.match(/task_mode=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedEnv = line.match(/env=([a-z0-9._-]+)/i)?.[1]?.trim();
+    let score = rawScore;
+    if (Number.isFinite(score) && params.taskMode && scopedTaskMode) {
+      score *= scopedTaskMode === params.taskMode ? 1 : score >= 0 ? -0.2 : 0.2;
+    }
+    if (Number.isFinite(score) && params.preferredEnv && scopedEnv) {
+      score *= scopedEnv === params.preferredEnv ? 1.15 : score >= 0 ? -0.15 : 0.15;
+    }
     if (skill && Number.isFinite(score) && params.availableSkills.includes(skill)) {
       weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
     }
@@ -1846,9 +1857,15 @@ export function buildAgenticExecutionState(params: {
     params.availableSkillInfo && params.availableSkillInfo.length > 0
       ? params.availableSkillInfo
       : (params.availableSkills ?? []).map((skill) => ({ name: skill }));
+  const preferredEnv = inferPreferredSkillEnvironment(
+    taskState.objective ?? "",
+    taskState.taskMode,
+  );
   const memorySkillSignals = extractProceduralMemorySkillSignals({
     memoryText: params.memorySystemPromptAddition,
     availableSkills: availableSkillInfo.map((skill) => skill.name),
+    taskMode: taskState.taskMode,
+    preferredEnv,
   });
   const memoryRegressionSignals = extractAgenticRegressionMemorySignals(
     params.memorySystemPromptAddition,

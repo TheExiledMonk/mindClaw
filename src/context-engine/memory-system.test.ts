@@ -2991,6 +2991,10 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("Skill effectiveness guidance:");
     expect(packet.text).toContain("skill=acceptance-report");
     expect(packet.text).toContain("family=verification");
+    expect(packet.text).toContain("task_mode=debugging");
+    expect(packet.text).toContain("workspace=project");
+    expect(packet.text).toContain("env=node");
+    expect(packet.text).toContain("validation=exec");
     expect(packet.text).toContain("score=");
   });
 

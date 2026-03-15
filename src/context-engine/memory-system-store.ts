@@ -833,10 +833,29 @@ function inferSkillFamilyFromName(skill: string): string {
   return parts[0] ?? normalized;
 }
 
-function deriveSkillEffectivenessGuidance(
-  entries: LongTermMemoryEntry[],
-): Array<{ skill: string; family: string; score: number; evidenceCount: number }> {
-  const scores = new Map<string, { family: string; score: number; evidenceCount: number }>();
+function deriveSkillEffectivenessGuidance(entries: LongTermMemoryEntry[]): Array<{
+  skill: string;
+  family: string;
+  taskMode: string;
+  workspaceKind: string;
+  env: string;
+  validation: string;
+  score: number;
+  evidenceCount: number;
+}> {
+  const scores = new Map<
+    string,
+    {
+      skill: string;
+      family: string;
+      taskMode: string;
+      workspaceKind: string;
+      env: string;
+      validation: string;
+      score: number;
+      evidenceCount: number;
+    }
+  >();
   for (const entry of entries) {
     const rankedSkills = (entry.environmentTags ?? [])
       .filter((tag) => tag.startsWith("procedural:ranked-skill:"))
@@ -852,6 +871,26 @@ function deriveSkillEffectivenessGuidance(
         .find((tag) => tag.startsWith("procedural:suggested-skill:"))
         ?.replace("procedural:suggested-skill:", "")
         .trim() || undefined;
+    const taskMode =
+      (entry.environmentTags ?? [])
+        .find((tag) => tag.startsWith("task-mode:"))
+        ?.replace("task-mode:", "")
+        .trim() || "general";
+    const workspaceKind =
+      (entry.environmentTags ?? [])
+        .find((tag) => tag.startsWith("procedural:workspace:"))
+        ?.replace("procedural:workspace:", "")
+        .trim() || "unknown";
+    const env =
+      (entry.environmentTags ?? [])
+        .find((tag) => tag.startsWith("procedural:skill-env:"))
+        ?.replace("procedural:skill-env:", "")
+        .trim() || "unknown";
+    const validation =
+      (entry.environmentTags ?? [])
+        .find((tag) => tag.startsWith("procedural:validation-tool:"))
+        ?.replace("procedural:validation-tool:", "")
+        .trim() || "unknown";
     const candidateSkills = uniqueStrings(
       [primarySkill, suggestedSkill, ...rankedSkills].filter(
         (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
@@ -892,16 +931,30 @@ function deriveSkillEffectivenessGuidance(
       outcomeWeight + goalWeight + fallbackPenalty + escalationPenalty + nearMissPenalty;
     for (const skill of candidateSkills) {
       const family = inferSkillFamilyFromName(skill);
-      const bucket = scores.get(skill) ?? { family, score: 0, evidenceCount: 0 };
+      const key = [skill, taskMode, workspaceKind, env, validation].join("|");
+      const bucket = scores.get(key) ?? {
+        skill,
+        family,
+        taskMode,
+        workspaceKind,
+        env,
+        validation,
+        score: 0,
+        evidenceCount: 0,
+      };
       bucket.score += baseScore;
       bucket.evidenceCount += 1;
-      scores.set(skill, bucket);
+      scores.set(key, bucket);
     }
   }
-  return [...scores.entries()]
-    .map(([skill, value]) => ({
-      skill,
+  return [...scores.values()]
+    .map((value) => ({
+      skill: value.skill,
       family: value.family,
+      taskMode: value.taskMode,
+      workspaceKind: value.workspaceKind,
+      env: value.env,
+      validation: value.validation,
       score: Math.round(value.score * 100) / 100,
       evidenceCount: value.evidenceCount,
     }))
@@ -909,7 +962,7 @@ function deriveSkillEffectivenessGuidance(
       (a, b) =>
         b.score - a.score || b.evidenceCount - a.evidenceCount || a.skill.localeCompare(b.skill),
     )
-    .slice(0, 5);
+    .slice(0, 6);
 }
 
 function normalizeComparable(text: string): string {
@@ -6312,7 +6365,7 @@ export function retrieveMemoryContextPacket(
         `Skill effectiveness guidance:\n- ${effectivenessGuidance
           .map(
             (item) =>
-              `skill=${item.skill} family=${item.family} score=${item.score.toFixed(2)} evidence=${item.evidenceCount}`,
+              `skill=${item.skill} family=${item.family} task_mode=${item.taskMode} workspace=${item.workspaceKind} env=${item.env} validation=${item.validation} score=${item.score.toFixed(2)} evidence=${item.evidenceCount}`,
           )
           .join("\n- ")}`,
       );

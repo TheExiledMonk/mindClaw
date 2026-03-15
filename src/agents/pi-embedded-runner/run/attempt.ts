@@ -131,6 +131,7 @@ import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { buildAgenticExecutionState, buildAgenticSystemPromptAddition } from "./agentic-state.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   selectCompactionTimeoutSnapshot,
@@ -1458,6 +1459,19 @@ export function buildAfterTurnRuntimeContext(params: {
     params.agentDir.includes("openclaw") ? "openclaw-agent-dir" : "",
     workspaceState.gitBranch ? "git-worktree" : "",
   ].filter(Boolean);
+  const promptErrorSummary = params.promptError
+    ? describeUnknownError(params.promptError)
+    : undefined;
+  const agenticState = buildAgenticExecutionState({
+    messages: params.messages ?? [],
+    activeArtifacts,
+    workspaceTags,
+    toolSignals,
+    diffSignals,
+    checkpointSignals,
+    retrySignals,
+    promptErrorSummary,
+  });
   return {
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
@@ -1483,7 +1497,10 @@ export function buildAfterTurnRuntimeContext(params: {
     diffSignals,
     checkpointSignals,
     retrySignals,
-    promptErrorSummary: params.promptError ? describeUnknownError(params.promptError) : undefined,
+    promptErrorSummary,
+    taskState: agenticState.taskState,
+    verificationState: agenticState.verificationState,
+    plannerState: agenticState.plannerState,
   };
 }
 
@@ -2319,6 +2336,18 @@ export async function runEmbeddedAttempt(
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
+        }
+        const agenticPromptAddition = buildAgenticSystemPromptAddition(
+          buildAgenticExecutionState({
+            messages: activeSession.messages,
+          }),
+        );
+        if (agenticPromptAddition) {
+          systemPromptText = prependSystemPromptAddition({
+            systemPrompt: systemPromptText,
+            systemPromptAddition: agenticPromptAddition,
+          });
+          applySystemPromptOverrideToSession(activeSession, systemPromptText);
         }
 
         if (params.contextEngine) {

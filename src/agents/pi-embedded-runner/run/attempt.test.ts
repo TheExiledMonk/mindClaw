@@ -1243,6 +1243,68 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
     expect(runtimeContext.workspaceTags).toContain("git-worktree");
     expect(runtimeContext.activeArtifacts).toContain(path.join("sessions", "main.jsonl"));
+    expect(runtimeContext.taskState).toMatchObject({
+      version: 1,
+      taskMode: expect.any(String),
+    });
+    expect(runtimeContext.verificationState).toMatchObject({
+      version: 1,
+      outcome: expect.any(String),
+    });
+    expect(runtimeContext.plannerState).toMatchObject({
+      version: 1,
+      status: expect.any(String),
+    });
+  });
+
+  it("captures structured task, verification, and planner state for runtime context", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the failing TypeScript build in src/context-engine/memory-system.ts and verify with typecheck.",
+          timestamp: Date.now(),
+        } as never,
+        {
+          role: "toolResult",
+          toolName: "exec",
+          isError: false,
+          content:
+            "Ran pnpm exec tsc -p tsconfig.json --noEmit for src/context-engine/memory-system.ts and the typecheck passed.",
+          timestamp: Date.now(),
+        } as never,
+      ],
+    });
+
+    expect(runtimeContext.taskState).toMatchObject({
+      objective: expect.stringContaining("Fix the failing TypeScript build"),
+      activeArtifacts: expect.arrayContaining(["src/context-engine/memory-system.ts"]),
+    });
+    expect(runtimeContext.verificationState).toMatchObject({
+      outcome: "verified",
+      checksRun: expect.arrayContaining(["exec:success"]),
+    });
+    expect(runtimeContext.plannerState).toMatchObject({
+      status: "continue",
+    });
   });
 
   it("emits checkpoint and diff signals for runtime memory ingestion", () => {

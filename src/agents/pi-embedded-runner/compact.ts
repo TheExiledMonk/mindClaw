@@ -88,6 +88,11 @@ import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
+import type {
+  AgenticPlannerState,
+  AgenticTaskState,
+  AgenticVerificationState,
+} from "./run/agentic-state.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
@@ -176,6 +181,9 @@ export type CompactEmbeddedPiSessionParams = {
     summary: string;
   }>;
   promptErrorSummary?: string;
+  taskState?: AgenticTaskState;
+  verificationState?: AgenticVerificationState;
+  plannerState?: AgenticPlannerState;
 };
 
 type CompactionMessageMetrics = {

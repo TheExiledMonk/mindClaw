@@ -5,7 +5,7 @@ describe("agentic soak suite", () => {
   it("passes the built-in soak scenarios", () => {
     const report = runAgenticSoakSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(5);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(6);
     expect(report.failedScenarioIds).toEqual([]);
 
     const retryLifecycle = report.scenarios.find(
@@ -60,6 +60,18 @@ describe("agentic soak suite", () => {
     );
     expect(failureDerivedLifecycle?.phases.at(-1)?.details).toContain(
       "Memory-backed template-ready families: verification@debugging/node.",
+    );
+
+    const environmentGuardLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
+    );
+    expect(environmentGuardLifecycle?.phases[0]?.passed).toBe(true);
+    expect(environmentGuardLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(environmentGuardLifecycle?.phases[0]?.details).toContain(
+      "Protected-branch or high-risk mutation work requires approval before continuing.",
+    );
+    expect(environmentGuardLifecycle?.phases.at(-1)?.details).toContain(
+      "Capture an observed validation command before allowing another retry on project work.",
     );
   });
 

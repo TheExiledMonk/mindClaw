@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAgenticQualityGateReport,
+  buildAgenticExecutionState,
   inspectAgenticExecutionObservability,
   runAgenticQualityGate,
 } from "./agentic-state.js";
@@ -113,6 +114,103 @@ describe("agentic quality gate", () => {
     );
     expect(report.recommendations).toContain(
       "Memory-backed merge-ready families: verification@debugging/node.",
+    );
+  });
+
+  it("surfaces environment guard recommendations in the quality gate", () => {
+    const protectedBranchState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the release-branch diagnostics regression without repeating the failing path.",
+          timestamp: Date.now(),
+        },
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const protectedReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(protectedBranchState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+    expect(protectedReport.recommendations).toContain(
+      "Protected-branch or high-risk mutation work requires approval before continuing.",
+    );
+
+    const validationThinState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Implement the diagnostics formatter changes in src/diagnostics/formatter.ts.",
+          timestamp: Date.now(),
+        },
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+    });
+    const validationThinReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(validationThinState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+    expect(validationThinReport.recommendations).toContain(
+      "Capture an observed validation command before allowing another retry on project work.",
     );
   });
 

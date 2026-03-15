@@ -325,7 +325,8 @@ export type AgenticSoakScenarioId =
   | "recovered_watch_stabilization"
   | "consolidation_mode_transition"
   | "failure_derived_consolidation_replan"
-  | "failure_derived_recovery_transition";
+  | "failure_derived_recovery_transition"
+  | "environment_guarded_retry_lifecycle";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -5712,6 +5713,141 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     });
   }
 
+  {
+    const protectedBranchState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the release-branch diagnostics regression without repeating the failing path.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 4,
+          summary: "Recovered after the first retry.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const protectedBranchGate = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: inspectAgenticExecutionObservability(protectedBranchState),
+    });
+    const validationThinState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Implement the diagnostics formatter changes in src/diagnostics/formatter.ts.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+    });
+    const validationThinGate = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: inspectAgenticExecutionObservability(validationThinState),
+    });
+    const phases = [
+      buildSoakPhaseResult({
+        label: "protected_branch_retry_boundary",
+        state: protectedBranchState,
+        passed:
+          protectedBranchState.governanceState.autonomyMode === "approval_required" &&
+          protectedBranchState.plannerState.retryClass === "skill_fallback" &&
+          protectedBranchState.plannerState.remainingRetryBudget === 1 &&
+          protectedBranchGate.recommendations.includes(
+            "Protected-branch or high-risk mutation work requires approval before continuing.",
+          ),
+        details: `retry=${protectedBranchState.plannerState.retryClass} autonomy=${protectedBranchState.governanceState.autonomyMode} recommendations=${protectedBranchGate.recommendations.join("|")}`,
+      }),
+      buildSoakPhaseResult({
+        label: "validation_context_retry_boundary",
+        state: validationThinState,
+        passed:
+          validationThinState.plannerState.retryClass === "clarify" &&
+          validationThinState.plannerState.remainingRetryBudget === 1 &&
+          validationThinState.governanceState.riskLevel === "medium" &&
+          validationThinGate.recommendations.includes(
+            "Capture an observed validation command before allowing another retry on project work.",
+          ),
+        details: `retry=${validationThinState.plannerState.retryClass} risk=${validationThinState.governanceState.riskLevel} recommendations=${validationThinGate.recommendations.join("|")}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "environment_guarded_retry_lifecycle",
+      passed,
+      summary: passed
+        ? "Protected-branch and validation-thin environments keep retries bounded across the long-run gate."
+        : "Environment retry guards did not stay bounded across soak and quality validation.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
   const failedScenarioIds = scenarios
     .filter((scenario) => !scenario.passed)
     .map((scenario) => scenario.id);
@@ -5825,6 +5961,12 @@ export function runAgenticQualityGate(params?: {
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
   const recommendations = uniqueCompact(
     [
+      diagnostics.autonomyMode === "approval_required"
+        ? "Protected-branch or high-risk mutation work requires approval before continuing."
+        : undefined,
+      diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"
+        ? "Capture an observed validation command before allowing another retry on project work."
+        : undefined,
       diagnostics.consolidationAction === "generalize_existing" &&
       diagnostics.mergeCandidate &&
       diagnostics.mergeSkills.length > 0

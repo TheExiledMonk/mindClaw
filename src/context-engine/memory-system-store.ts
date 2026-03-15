@@ -331,6 +331,17 @@ export type MemoryAcceptanceReport = {
   summary: string;
 };
 
+export type MemoryDiagnosticsReport = {
+  generatedAt: number;
+  workspaceDir: string;
+  sessionId: string;
+  backendKind: MemoryStoreBackendKind;
+  health: MemoryStoreHealthReport;
+  retrieval?: MemoryRetrievalObservabilityReport;
+  acceptance?: MemoryAcceptanceReport;
+  summary: string;
+};
+
 type MemoryStorePaths = {
   rootDir: string;
   sessionsDir: string;
@@ -5025,8 +5036,13 @@ export async function runMemoryAcceptanceSuite(params: {
   const paritySnapshots: Array<{ backend: MemoryStoreBackendKind; snapshot: MemoryStoreSnapshot }> =
     [];
   for (const backendKind of backendKinds) {
+    const backendWorkspaceDir = path.join(
+      params.workspaceDir,
+      `${MEMORY_SYSTEM_DIRNAME}-acceptance-${backendKind}`,
+    );
+    await fs.mkdir(backendWorkspaceDir, { recursive: true });
     await persistMemoryStoreSnapshot({
-      workspaceDir: params.workspaceDir,
+      workspaceDir: backendWorkspaceDir,
       sessionId: `${paritySessionId}:${backendKind}`,
       backendKind,
       workingMemory: parityCompiled.workingMemory,
@@ -5036,7 +5052,7 @@ export async function runMemoryAcceptanceSuite(params: {
       graph: parityCompiled.graph,
     });
     const loaded = await loadMemoryStoreSnapshot({
-      workspaceDir: params.workspaceDir,
+      workspaceDir: backendWorkspaceDir,
       sessionId: `${paritySessionId}:${backendKind}`,
       backendKind,
     });
@@ -5088,6 +5104,59 @@ function userMessageForSuite(content: string): AgentMessage {
     content,
     timestamp: Date.now(),
   } as AgentMessage;
+}
+
+export async function generateMemoryDiagnosticsReport(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+  messages?: AgentMessage[];
+  includeAcceptance?: boolean;
+  acceptanceBackendKinds?: MemoryStoreBackendKind[];
+}): Promise<MemoryDiagnosticsReport> {
+  const backendKind = params.backendKind ?? "fs-json";
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  const health = await inspectMemoryStoreHealth({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+  });
+  const retrieval =
+    params.messages && params.messages.length > 0
+      ? inspectMemoryRetrievalObservability(snapshot, { messages: params.messages })
+      : undefined;
+  const acceptance = params.includeAcceptance
+    ? await runMemoryAcceptanceSuite({
+        workspaceDir: params.workspaceDir,
+        sessionIdPrefix: `${params.sessionId}:acceptance`,
+        backendKinds: params.acceptanceBackendKinds,
+      })
+    : undefined;
+  const summary = clipText(
+    [
+      `backend=${backendKind}`,
+      `health=${health.summary}`,
+      retrieval ? `retrieval=${retrieval.summary}` : "",
+      acceptance ? `acceptance=${acceptance.summary}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | "),
+    600,
+  );
+  return {
+    generatedAt: Date.now(),
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind,
+    health,
+    retrieval,
+    acceptance,
+    summary,
+  };
 }
 
 export function runMemorySleepReview(params: {

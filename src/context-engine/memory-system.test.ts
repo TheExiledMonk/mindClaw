@@ -10,6 +10,7 @@ import {
   compileMemoryState,
   deriveLongTermMemoryCandidates,
   exportMemoryStoreBundle,
+  generateMemoryDiagnosticsReport,
   importMemoryStoreBundle,
   inspectMemoryStoreHealth,
   inspectMemoryRetrievalObservability,
@@ -2254,6 +2255,51 @@ describe("MemorySystemContextEngine", () => {
     expect(report.summary).toContain("task=");
     expect(report.accessedConceptCount).toBeGreaterThan(0);
     expect(report.longTermItemCount).toBeGreaterThan(0);
+  });
+
+  it("generates a diagnostics report with health, retrieval, and acceptance summaries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-"));
+    const sessionId = "agent:diagnostics";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+        userMessage(
+          "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      messages: [
+        userMessage(
+          "For install profile profile-a, use the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+      includeAcceptance: true,
+      acceptanceBackendKinds: ["fs-json", "sqlite-graph"],
+    });
+
+    expect(report.summary).toContain("backend=sqlite-graph");
+    expect(report.health.summary).toContain("backend=sqlite-graph");
+    expect(report.retrieval?.summary).toContain("task=");
+    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(4);
   });
 
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {

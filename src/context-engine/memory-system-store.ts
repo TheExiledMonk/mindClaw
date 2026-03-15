@@ -219,10 +219,15 @@ export type MemoryReviewResult = {
   staleMemoryIds: string[];
   reviewedPendingIds: string[];
   contradictoryMemoryIds: string[];
+  contradictoryConceptIds: string[];
   supersededMemoryIds: string[];
+  supersededConceptIds: string[];
   permanentEligibleIds: string[];
+  permanentEligibleConceptIds: string[];
   permanentDeferredIds: string[];
+  permanentDeferredConceptIds: string[];
   permanentBlockedIds: string[];
+  permanentBlockedConceptIds: string[];
 };
 
 export type MemoryRetrievalItem = {
@@ -230,12 +235,14 @@ export type MemoryRetrievalItem = {
   text: string;
   reason: string;
   memoryId?: string;
+  conceptId?: string;
 };
 
 export type MemoryContextPacket = {
   text?: string;
   taskMode: MemoryTaskMode;
   accessedLongTermIds: string[];
+  accessedConceptIds: string[];
   sections: string[];
   retrievalItems: MemoryRetrievalItem[];
 };
@@ -758,6 +765,14 @@ function evaluatePermanenceStatus(
 
 function buildStableMemoryId(prefix: "ltm" | "pattern", semanticKey: string): string {
   return `${prefix}-${stableHash(semanticKey)}`;
+}
+
+function buildStableConceptId(conceptKey: string): string {
+  return `concept-${stableHash(conceptKey)}`;
+}
+
+function getEntryConceptId(entry: Pick<LongTermMemoryEntry, "conceptKey" | "semanticKey">): string {
+  return buildStableConceptId(entry.conceptKey || entry.semanticKey);
 }
 
 function findConceptMatch(
@@ -2052,6 +2067,8 @@ function reviewMemoryState(params: {
   longTermMemory: LongTermMemoryEntry[];
   pendingSignificance: PendingMemoryEntry[];
 }): MemoryReviewResult {
+  const conceptIdsFor = (entries: LongTermMemoryEntry[]) =>
+    uniqueIds(entries.map((entry) => getEntryConceptId(entry))).slice(0, MAX_WORKING_ITEMS);
   const archivedMemoryIds = params.longTermMemory
     .filter(
       (entry) =>
@@ -2071,22 +2088,37 @@ function reviewMemoryState(params: {
     .filter((entry) => entry.contradictionCount > 0)
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const contradictoryConceptIds = conceptIdsFor(
+    params.longTermMemory.filter((entry) => entry.contradictionCount > 0),
+  );
   const supersededMemoryIds = params.longTermMemory
     .filter((entry) => entry.activeStatus === "superseded")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const supersededConceptIds = conceptIdsFor(
+    params.longTermMemory.filter((entry) => entry.activeStatus === "superseded"),
+  );
   const permanentEligibleIds = params.longTermMemory
     .filter((entry) => entry.permanenceStatus === "eligible")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const permanentEligibleConceptIds = conceptIdsFor(
+    params.longTermMemory.filter((entry) => entry.permanenceStatus === "eligible"),
+  );
   const permanentDeferredIds = params.longTermMemory
     .filter((entry) => entry.permanenceStatus === "deferred")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const permanentDeferredConceptIds = conceptIdsFor(
+    params.longTermMemory.filter((entry) => entry.permanenceStatus === "deferred"),
+  );
   const permanentBlockedIds = params.longTermMemory
     .filter((entry) => entry.permanenceStatus === "blocked")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
+  const permanentBlockedConceptIds = conceptIdsFor(
+    params.longTermMemory.filter((entry) => entry.permanenceStatus === "blocked"),
+  );
   const carryForwardSummary = clipText(
     [
       params.workingMemory.rollingSummary,
@@ -2115,10 +2147,15 @@ function reviewMemoryState(params: {
     staleMemoryIds,
     reviewedPendingIds,
     contradictoryMemoryIds,
+    contradictoryConceptIds,
     supersededMemoryIds,
+    supersededConceptIds,
     permanentEligibleIds,
+    permanentEligibleConceptIds,
     permanentDeferredIds,
+    permanentDeferredConceptIds,
     permanentBlockedIds,
+    permanentBlockedConceptIds,
   };
 }
 
@@ -2688,7 +2725,7 @@ function rankLongTermEntries(
     }
     return 0;
   };
-  return [...entries]
+  const ranked = [...entries]
     .filter((entry) => includeMemoryForContext(entry, taskMode))
     .toSorted((a, b) => {
       const scopeBonus = (entry: LongTermMemoryEntry): number => {
@@ -2747,6 +2784,17 @@ function rankLongTermEntries(
         scopeBonus(b);
       return bScore - aScore;
     });
+  const seenConcepts = new Set<string>();
+  const deduped: LongTermMemoryEntry[] = [];
+  for (const entry of ranked) {
+    const conceptId = getEntryConceptId(entry);
+    if (seenConcepts.has(conceptId)) {
+      continue;
+    }
+    seenConcepts.add(conceptId);
+    deduped.push(entry);
+  }
+  return deduped;
 }
 
 function classifyArtifactAnchorBucket(
@@ -3182,6 +3230,7 @@ export function retrieveMemoryContextPacket(
   const retrievalItems: MemoryRetrievalItem[] = [];
   const sections: string[] = [];
   const accessedLongTermIds: string[] = [];
+  const accessedConceptIds: string[] = [];
 
   const workingItems = selectWorkingContext(snapshot);
   if (workingItems.length > 0) {
@@ -3200,11 +3249,13 @@ export function retrieveMemoryContextPacket(
       ...longTerm.map((item) => ({
         kind: "long-term" as const,
         text: formatMemoryWithState(item),
-        reason: `relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+        reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
         memoryId: item.id,
+        conceptId: getEntryConceptId(item),
       })),
     );
     accessedLongTermIds.push(...longTerm.map((item) => item.id));
+    accessedConceptIds.push(...longTerm.map((item) => getEntryConceptId(item)));
     sections.push(
       `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );
@@ -3239,9 +3290,11 @@ export function retrieveMemoryContextPacket(
         text: formatMemoryWithState(item),
         reason: `artifact anchor for ${item.artifactRefs[0] ?? "current scope"}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
         memoryId: item.id,
+        conceptId: getEntryConceptId(item),
       })),
     );
     accessedLongTermIds.push(...anchoredEntries.map((item) => item.id));
+    accessedConceptIds.push(...anchoredEntries.map((item) => getEntryConceptId(item)));
     sections.push(
       `Artifact-anchored constraints, patterns, and outcomes:\n- ${artifactAnchorLines.join("\n- ")}`,
     );
@@ -3260,9 +3313,11 @@ export function retrieveMemoryContextPacket(
         text: formatMemoryWithState(item.entry),
         reason: `artifact ${item.facet} traversal via ${item.via}${describeMemoryStateDowngrade(item.entry).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item.entry).join(",")}` : ""}`,
         memoryId: item.entry.id,
+        conceptId: getEntryConceptId(item.entry),
       })),
     );
     accessedLongTermIds.push(...artifactTraversal.map((item) => item.entry.id));
+    accessedConceptIds.push(...artifactTraversal.map((item) => getEntryConceptId(item.entry)));
     sections.push(
       `Artifact traversal expansion:\n- ${artifactTraversal.map((item) => formatMemoryWithState(item.entry)).join("\n- ")}`,
     );
@@ -3279,11 +3334,13 @@ export function retrieveMemoryContextPacket(
       ...relatedExpansion.map((item) => ({
         kind: "long-term" as const,
         text: formatMemoryWithState(item),
-        reason: `graph expansion via ${item.relations[0]?.type ?? "linked"} relation${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+        reason: `concept=${getEntryConceptId(item).slice(0, 10)} graph expansion via ${item.relations[0]?.type ?? "linked"} relation${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
         memoryId: item.id,
+        conceptId: getEntryConceptId(item),
       })),
     );
     accessedLongTermIds.push(...relatedExpansion.map((item) => item.id));
+    accessedConceptIds.push(...relatedExpansion.map((item) => getEntryConceptId(item)));
     sections.push(
       `Related memory expansion:\n- ${relatedExpansion.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );
@@ -3301,6 +3358,7 @@ export function retrieveMemoryContextPacket(
         text: item.text,
         reason: `pending significance: ${item.pendingReason}`,
         memoryId: item.id,
+        conceptId: getEntryConceptId(item),
       })),
     );
     sections.push(
@@ -3388,6 +3446,7 @@ export function retrieveMemoryContextPacket(
     sections,
     retrievalItems,
     accessedLongTermIds: uniqueIds(accessedLongTermIds),
+    accessedConceptIds: uniqueIds(accessedConceptIds),
   };
 }
 

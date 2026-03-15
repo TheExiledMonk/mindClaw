@@ -274,10 +274,15 @@ export class MemorySystemContextEngine implements ContextEngine {
       archivedMemoryIds: reviewed.review.archivedMemoryIds,
       staleMemoryIds: reviewed.review.staleMemoryIds,
       contradictoryMemoryIds: reviewed.review.contradictoryMemoryIds,
+      contradictoryConceptIds: reviewed.review.contradictoryConceptIds,
       supersededMemoryIds: reviewed.review.supersededMemoryIds,
+      supersededConceptIds: reviewed.review.supersededConceptIds,
       permanentEligibleIds: reviewed.review.permanentEligibleIds,
+      permanentEligibleConceptIds: reviewed.review.permanentEligibleConceptIds,
       permanentDeferredIds: reviewed.review.permanentDeferredIds,
+      permanentDeferredConceptIds: reviewed.review.permanentDeferredConceptIds,
       permanentBlockedIds: reviewed.review.permanentBlockedIds,
+      permanentBlockedConceptIds: reviewed.review.permanentBlockedConceptIds,
     };
   }
 

@@ -49,10 +49,15 @@ export type ReviewResult = {
   archivedMemoryIds?: string[];
   staleMemoryIds?: string[];
   contradictoryMemoryIds?: string[];
+  contradictoryConceptIds?: string[];
   supersededMemoryIds?: string[];
+  supersededConceptIds?: string[];
   permanentEligibleIds?: string[];
+  permanentEligibleConceptIds?: string[];
   permanentDeferredIds?: string[];
+  permanentDeferredConceptIds?: string[];
   permanentBlockedIds?: string[];
+  permanentBlockedConceptIds?: string[];
 };
 
 export type ContextEngineInfo = {

@@ -436,7 +436,56 @@ describe("memory system store", () => {
 
     expect(packet.taskMode).toBe("coding");
     expect(packet.accessedLongTermIds).toContain("ltm-1");
+    expect(packet.accessedConceptIds.length).toBeGreaterThan(0);
     expect(packet.text).toContain("Retrieval audit");
+  });
+
+  it("deduplicates retrieval at the concept level while preserving concept ids", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "concept-dedupe-a",
+          messages: [userMessage("Use the permanent memory-system path for this migration.")],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-concept-a",
+            conceptKey: "concept::constraint::memory-path",
+            canonicalText: "use permanent memory-system path",
+            conceptAliases: [
+              "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+              "The permanent path for memory-system integration should be used.",
+            ],
+            text: "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.92,
+          }),
+          longTermEntry({
+            id: "ltm-concept-b",
+            conceptKey: "concept::constraint::memory-path",
+            canonicalText: "use permanent memory-system path",
+            conceptAliases: [
+              "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+              "The permanent path for memory-system integration should be used.",
+            ],
+            text: "The permanent path for memory-system integration should be used.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.88,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      { messages: [userMessage("Plan the permanent memory-system path rollout.")] },
+    );
+
+    const ranked = packet.retrievalItems.filter(
+      (item) => item.kind === "long-term" && item.reason.includes("relevance="),
+    );
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]?.conceptId).toBeTruthy();
+    expect(packet.accessedConceptIds).toHaveLength(1);
   });
 
   it("expands retrieval through related memories and includes continuity output", () => {
@@ -1420,6 +1469,8 @@ describe("memory system store", () => {
 
     expect(compiled.review.supersededMemoryIds).toContain("ltm-replace-old");
     expect(compiled.review.contradictoryMemoryIds.length).toBeGreaterThan(0);
+    expect(compiled.review.supersededConceptIds.length).toBeGreaterThan(0);
+    expect(compiled.review.contradictoryConceptIds.length).toBeGreaterThan(0);
     expect(compiled.workingMemory.carryForwardSummary).toContain("Contradictions need resolution");
     expect(compiled.workingMemory.carryForwardSummary).toContain("Superseded memories to retire");
   });

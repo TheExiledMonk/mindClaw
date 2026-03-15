@@ -299,7 +299,8 @@ export type AgenticAcceptanceScenarioId =
   | "failure_derived_merge_family_alignment"
   | "failure_derived_template_family_alignment"
   | "failure_derived_quality_gate_alignment"
-  | "protected_branch_governance_alignment";
+  | "protected_branch_governance_alignment"
+  | "environment_guard_retry_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -2217,10 +2218,42 @@ function buildRepoFingerprint(params: {
 function reconcilePlannerStateWithEnvironment(params: {
   plannerState: AgenticPlannerState;
   environmentState: AgenticEnvironmentState;
+  taskState: AgenticTaskState;
+  verificationState: AgenticVerificationState;
 }): AgenticPlannerState {
-  const { plannerState, environmentState } = params;
+  const { plannerState, environmentState, taskState, verificationState } = params;
   const validationCommands = environmentState.validationCommands ?? [];
   const branchConventions = environmentState.branchConventions ?? [];
+  const protectedBranch =
+    branchConventions.includes("default_branch") ||
+    branchConventions.includes("release_branch") ||
+    branchConventions.includes("hotfix_branch");
+  const validationThinProjectWork =
+    environmentState.workspaceKind === "project" &&
+    (taskState.taskMode === "coding" ||
+      taskState.taskMode === "debugging" ||
+      taskState.taskMode === "operations") &&
+    (environmentState.preferredValidationTools?.length ?? 0) === 0;
+  let retryClass = plannerState.retryClass;
+  let suggestedSkill = plannerState.suggestedSkill;
+  let remainingRetryBudget = plannerState.remainingRetryBudget;
+  const alternativeSkills = plannerState.alternativeSkills;
+  if (
+    protectedBranch &&
+    verificationState.outcome !== "verified" &&
+    retryClass === "same_path_retry" &&
+    alternativeSkills.length > 0
+  ) {
+    retryClass = "skill_fallback";
+    suggestedSkill = suggestedSkill ?? alternativeSkills[0];
+  }
+  if (validationThinProjectWork && retryClass === "same_path_retry") {
+    retryClass = "clarify";
+  }
+  if (protectedBranch || validationThinProjectWork) {
+    remainingRetryBudget =
+      typeof remainingRetryBudget === "number" ? Math.min(remainingRetryBudget, 1) : 1;
+  }
   const nextActionParts = uniqueCompact(
     [
       plannerState.nextAction,
@@ -2230,8 +2263,14 @@ function reconcilePlannerStateWithEnvironment(params: {
       branchConventions.includes("release_branch") || branchConventions.includes("hotfix_branch")
         ? `Respect branch convention: ${branchConventions.join(", ")}.`
         : undefined,
+      protectedBranch && verificationState.outcome !== "verified"
+        ? "Avoid repeated same-path retries on protected branches; prefer review-safe fallback or approval."
+        : undefined,
+      validationThinProjectWork
+        ? "Establish an observed validation command before retrying project changes."
+        : undefined,
     ],
-    3,
+    5,
   );
   const rationaleParts = uniqueCompact(
     [
@@ -2239,11 +2278,18 @@ function reconcilePlannerStateWithEnvironment(params: {
       environmentState.repoFingerprint
         ? `environment=${truncate(environmentState.repoFingerprint, 120)}`
         : undefined,
+      protectedBranch && verificationState.outcome !== "verified"
+        ? "protected-branch-retry-guard"
+        : undefined,
+      validationThinProjectWork ? "validation-context-required" : undefined,
     ],
-    4,
+    6,
   );
   return {
     ...plannerState,
+    retryClass,
+    suggestedSkill,
+    remainingRetryBudget,
     nextAction: nextActionParts.length > 0 ? nextActionParts.join(" ") : plannerState.nextAction,
     rationale: rationaleParts.length > 0 ? rationaleParts.join(" | ") : plannerState.rationale,
   };
@@ -2563,6 +2609,8 @@ export function buildAgenticExecutionState(params: {
   const reconciledPlannerState = reconcilePlannerStateWithEnvironment({
     plannerState: orchestrationReconciledPlannerState,
     environmentState,
+    taskState,
+    verificationState,
   });
   const governanceState = buildGovernanceState({
     messages: params.messages,
@@ -4559,6 +4607,87 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Protected branch mutation work now requires approval and branch-aware guidance."
         : "Protected branch mutation work did not trigger the expected governance boundary.",
       details: `autonomy=${protectedBranchState.governanceState.autonomyMode} reasons=${protectedBranchState.governanceState.reasons.join("|")} next=${protectedBranchState.plannerState.nextAction ?? "none"}`,
+    });
+  }
+
+  {
+    const protectedRetryState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the release-branch diagnostics regression without repeating the failing path.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 4,
+          summary: "Recovered after the first retry.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const validationThinState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Implement the diagnostics formatter changes in src/diagnostics/formatter.ts.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+    });
+    const passed =
+      protectedRetryState.plannerState.retryClass === "skill_fallback" &&
+      protectedRetryState.plannerState.suggestedSkill === "diagnostics-report" &&
+      protectedRetryState.plannerState.remainingRetryBudget === 1 &&
+      (protectedRetryState.plannerState.nextAction ?? "").includes(
+        "Avoid repeated same-path retries on protected branches",
+      ) &&
+      validationThinState.plannerState.retryClass === "clarify" &&
+      validationThinState.plannerState.remainingRetryBudget === 1 &&
+      (validationThinState.plannerState.nextAction ?? "").includes(
+        "Establish an observed validation command before retrying project changes.",
+      );
+    scenarios.push({
+      id: "environment_guard_retry_alignment",
+      passed,
+      summary: passed
+        ? "Environment guards now constrain replanning with protected-branch fallback bias and validation-context throttling."
+        : "Environment guards did not correctly constrain retry and replanning behavior.",
+      details: `protected=${protectedRetryState.plannerState.retryClass}/${protectedRetryState.plannerState.suggestedSkill ?? "none"}/${protectedRetryState.plannerState.remainingRetryBudget ?? -1} validation=${validationThinState.plannerState.retryClass}/${validationThinState.plannerState.remainingRetryBudget ?? -1}`,
     });
   }
 

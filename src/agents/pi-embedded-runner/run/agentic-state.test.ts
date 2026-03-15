@@ -1117,6 +1117,49 @@ describe("agentic-state", () => {
     expect(state.plannerState.nextAction).toContain("Respect branch convention: release_branch");
   });
 
+  it("biases protected-branch replanning toward fallback skills and caps retry budget", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the release-branch diagnostics regression without repeating the failing path.",
+        ),
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 4,
+          summary: "Recovered after the first retry.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    expect(state.plannerState.retryClass).toBe("skill_fallback");
+    expect(state.plannerState.suggestedSkill).toBe("diagnostics-report");
+    expect(state.plannerState.remainingRetryBudget).toBe(1);
+    expect(state.plannerState.nextAction).toContain(
+      "Avoid repeated same-path retries on protected branches",
+    );
+  });
+
   it("raises medium governance risk when project code work lacks validation context", () => {
     const state = buildAgenticExecutionState({
       messages: [
@@ -1142,6 +1185,11 @@ describe("agentic-state", () => {
     expect(state.governanceState.autonomyMode).toBe("continue");
     expect(state.governanceState.riskLevel).toBe("medium");
     expect(state.governanceState.reasons).toContain("missing_validation_context");
+    expect(state.plannerState.retryClass).toBe("clarify");
+    expect(state.plannerState.remainingRetryBudget).toBe(1);
+    expect(state.plannerState.nextAction).toContain(
+      "Establish an observed validation command before retrying project changes.",
+    );
   });
 
   it("flags secret extraction requests in governance state", () => {

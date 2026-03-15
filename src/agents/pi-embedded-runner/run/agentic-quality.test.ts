@@ -214,6 +214,55 @@ describe("agentic quality gate", () => {
     );
   });
 
+  it("surfaces concrete clarification recommendations in the quality gate", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the build once the missing config file is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required config file: config/runtime.json",
+        },
+      ],
+    });
+
+    const clarificationReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(clarificationReport.recommendations).toContain(
+      "Need clarification on: config/runtime.json",
+    );
+    expect(formatAgenticQualityGateReport(clarificationReport, "summary")).toContain(
+      "Need clarification on: config/runtime.json",
+    );
+    expect(formatAgenticQualityGateReport(clarificationReport, "markdown")).toContain(
+      "Need clarification on: config/runtime.json",
+    );
+  });
+
   it("surfaces template-ready and merge-ready consolidation recommendations in the quality gate", () => {
     const templateDiagnostics = inspectAgenticExecutionObservability({
       taskState: {

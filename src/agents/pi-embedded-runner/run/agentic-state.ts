@@ -2236,7 +2236,16 @@ function extractClarificationSummary(state: AgenticExecutionState): string | und
     /\bmissing|not found|required|needs|unknown file|no such file\b/i.test(blocker),
   );
   if (missingBlocker) {
-    return `Need clarification on: ${truncate(missingBlocker.replace(/^[^:]+:\s*/, ""), 140)}`;
+    const normalizedBlocker = missingBlocker
+      .replace(/^[^:]+:\s*/, "")
+      .replace(
+        /^(?:missing(?:\s+required)?|required|unknown file|no such file|needs?)\s+(?:config\s+)?(?:file\s+)?/i,
+        "",
+      )
+      .replace(/^file:\s*/i, "")
+      .replace(/^:\s*/, "")
+      .trim();
+    return `Need clarification on: ${truncate(normalizedBlocker, 140)}`;
   }
   const unresolved = state.verificationState.unresolvedCriteria[0];
   if (unresolved) {
@@ -6533,6 +6542,9 @@ export function runAgenticQualityGate(params?: {
     [
       diagnostics.autonomyMode === "approval_required"
         ? "Protected-branch or high-risk mutation work requires approval before continuing."
+        : undefined,
+      diagnostics.retryClass === "clarify" && diagnostics.clarificationSummary
+        ? diagnostics.clarificationSummary
         : undefined,
       diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"
         ? "Capture an observed validation command before allowing another retry on project work."

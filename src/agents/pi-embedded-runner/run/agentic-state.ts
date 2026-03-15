@@ -180,6 +180,28 @@ export type AgenticExecutionObservabilityReport = {
   recommendations: string[];
 };
 
+export type AgenticAcceptanceScenarioId =
+  | "memory_guided_fallback"
+  | "verified_memory_preferred"
+  | "missing_fallback_escalation"
+  | "environment_prerequisite_guard";
+
+export type AgenticAcceptanceScenarioResult = {
+  id: AgenticAcceptanceScenarioId;
+  passed: boolean;
+  summary: string;
+  details?: string;
+};
+
+export type AgenticAcceptanceReport = {
+  passed: boolean;
+  totalScenarios: number;
+  passedScenarios: number;
+  failedScenarioIds: AgenticAcceptanceScenarioId[];
+  scenarios: AgenticAcceptanceScenarioResult[];
+  summary: string;
+};
+
 type ToolSignal = {
   toolName: string;
   status: "success" | "error";
@@ -1462,4 +1484,206 @@ export function inspectAgenticExecutionObservability(
     escalationRequired: state.plannerState.shouldEscalate,
     recommendations,
   };
+}
+
+export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
+  const scenarios: AgenticAcceptanceScenarioResult[] = [];
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow and switch to the strongest remembered reporting path if needed.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: with outcome failed: failure pattern near_miss",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+    const passed =
+      state.plannerState.retryClass === "skill_fallback" &&
+      state.plannerState.suggestedSkill === "acceptance-report";
+    scenarios.push({
+      id: "memory_guided_fallback",
+      passed,
+      summary: passed
+        ? "Memory-guided fallback selects the stronger remembered workflow."
+        : "Fallback selection did not follow stronger remembered workflow quality.",
+      details: `suggested=${state.plannerState.suggestedSkill ?? "none"} retry=${state.plannerState.retryClass}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Keep the diagnostics workflow moving and reuse the strongest reporting workflow.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: fallback chain acceptance-report: with outcome failed: failure pattern near_miss: suggested fallback acceptance-report",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+    const passed =
+      state.orchestrationState.primarySkill === "acceptance-report" &&
+      state.orchestrationState.rankedSkills[0] === "acceptance-report";
+    scenarios.push({
+      id: "verified_memory_preferred",
+      passed,
+      summary: passed
+        ? "Verified procedural memory outranks weaker near-miss memory."
+        : "Verified procedural memory did not outrank weaker near-miss memory.",
+      details: `primary=${state.orchestrationState.primarySkill ?? "none"} ranked=${state.orchestrationState.rankedSkills.join(">")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow and find a viable fallback.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const passed =
+      state.plannerState.retryClass === "escalate" &&
+      state.governanceState.autonomyMode === "escalate" &&
+      !state.orchestrationState.hasViableFallback;
+    scenarios.push({
+      id: "missing_fallback_escalation",
+      passed,
+      summary: passed
+        ? "Missing viable fallback escalates instead of looping weak retries."
+        : "Missing viable fallback did not escalate correctly.",
+      details: `retry=${state.plannerState.retryClass} autonomy=${state.governanceState.autonomyMode} fallback=${state.orchestrationState.hasViableFallback}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Implement the Python migration helper and keep the docker-only deployment skill as a fallback.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pytest successfully for the migration helper.",
+        },
+      ],
+      availableSkills: ["python-migration", "docker-release"],
+      likelySkills: ["python-migration"],
+      availableSkillInfo: [
+        { name: "python-migration", primaryEnv: "python", requiredEnv: ["python"] },
+        { name: "docker-release", primaryEnv: "node", requiredEnv: ["docker"] },
+      ],
+    });
+    const passed =
+      state.orchestrationState.primarySkill === "python-migration" &&
+      state.orchestrationState.prerequisiteWarnings.includes("docker-release:missing-env:docker");
+    scenarios.push({
+      id: "environment_prerequisite_guard",
+      passed,
+      summary: passed
+        ? "Environment prerequisites downgrade incompatible fallback skills."
+        : "Environment prerequisites failed to guard incompatible fallback skills.",
+      details: `primary=${state.orchestrationState.primarySkill ?? "none"} prereqs=${state.orchestrationState.prerequisiteWarnings.join(",")}`,
+    });
+  }
+
+  const failedScenarioIds = scenarios
+    .filter((scenario) => !scenario.passed)
+    .map((scenario) => scenario.id);
+  const passedScenarios = scenarios.length - failedScenarioIds.length;
+  const passed = failedScenarioIds.length === 0;
+  return {
+    passed,
+    totalScenarios: scenarios.length,
+    passedScenarios,
+    failedScenarioIds,
+    scenarios,
+    summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
+  };
+}
+
+export function formatAgenticAcceptanceReport(
+  report: AgenticAcceptanceReport,
+  format: "json" | "summary" | "markdown" = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [
+      report.summary,
+      ...report.scenarios.map(
+        (scenario) => `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary}`,
+      ),
+    ];
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Agentic Acceptance Report",
+    "",
+    `- Summary: ${report.summary}`,
+    `- Passed: ${report.passed ? "yes" : "no"}`,
+    "",
+    ...report.scenarios.map(
+      (scenario) =>
+        `- ${scenario.passed ? "PASS" : "FAIL"} \`${scenario.id}\`: ${scenario.summary}${scenario.details ? ` (${scenario.details})` : ""}`,
+    ),
+  ];
+  return `${lines.join("\n")}\n`;
 }

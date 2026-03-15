@@ -128,6 +128,8 @@ export type AgenticOrchestrationState = {
   skillChain: string[];
   workflowSteps: AgenticWorkflowStep[];
   rankedSkills: string[];
+  effectiveSkills: string[];
+  effectiveFamilies: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
   hasViableFallback: boolean;
@@ -186,6 +188,8 @@ export type ProceduralExecutionRecord = {
   skillChain: string[];
   workflowSteps: AgenticWorkflowStep[];
   rankedSkills: string[];
+  effectiveSkills: string[];
+  effectiveFamilies: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
   hasViableFallback: boolean;
@@ -210,6 +214,8 @@ export type AgenticExecutionObservabilityReport = {
   suggestedSkill?: string;
   workflowSteps: AgenticWorkflowStep[];
   rankedSkills: string[];
+  effectiveSkills: string[];
+  effectiveFamilies: string[];
   consolidationAction: AgenticConsolidationAction;
   overlappingSkills: string[];
   capabilityGaps: string[];
@@ -455,19 +461,12 @@ function extractProceduralMemorySkillSignals(params: {
     };
   }
   const guidanceMatch = params.memoryText.match(/Procedural guidance:\s*((?:\n-\s+[^\n]+)+)/i);
-  if (!guidanceMatch) {
-    return {
-      recommendedSkills,
-      weightedSkills,
-      weightedFamilies,
-      workflowChains: workflowHints.chains,
-      multiSkillHint: workflowHints.multiSkillHint,
-    };
-  }
-  const guidanceLines = guidanceMatch[1]
-    .split("\n")
-    .map((line) => line.replace(/^\s*-\s+/, "").trim())
-    .filter(Boolean);
+  const guidanceLines = guidanceMatch
+    ? guidanceMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
   for (const line of guidanceLines) {
     const normalizedLine = line.toLowerCase();
     const outcomeBoost = normalizedLine.includes("with outcome verified")
@@ -1534,6 +1533,16 @@ function buildOrchestrationState(params: {
     5,
   );
   const overlapSignals = detectOverlappingSkills(rankedSkills);
+  const effectiveSkills = rankedSkills.filter(
+    (skill) => (memoryWeightedSkills.get(skill) ?? 0) >= 1.5,
+  );
+  const effectiveFamilies = uniqueCompact(
+    [...memoryWeightedFamilies.entries()]
+      .filter(([, score]) => score >= 1)
+      .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([family]) => family),
+    6,
+  );
   const multiSkillCandidate =
     (chainedWorkflow || memoryMultiSkillHint || rankedSkills.length > 1) &&
     (params.plannerState?.retryClass === "skill_fallback" ||
@@ -1545,10 +1554,16 @@ function buildOrchestrationState(params: {
   const overlapFamilies = overlapSignals.families.filter((family) =>
     memoryRegressionSignals.consolidationPreferredFamilies.includes(family),
   );
+  const strongPrimaryFamily =
+    primarySkill && effectiveFamilies.includes(inferSkillFamily(primarySkill))
+      ? inferSkillFamily(primarySkill)
+      : undefined;
   const consolidationAction: AgenticConsolidationAction =
     overlapSignals.overlappingSkills.length >= 3 || overlapFamilies.length > 0
       ? "generalize_existing"
-      : overlapSignals.overlappingSkills.length >= 2 || multiSkillCandidate
+      : overlapSignals.overlappingSkills.length >= 2 ||
+          multiSkillCandidate ||
+          Boolean(strongPrimaryFamily)
         ? "extend_existing"
         : availableSkills.length === 0
           ? "create_new"
@@ -1565,6 +1580,8 @@ function buildOrchestrationState(params: {
     skillChain,
     workflowSteps,
     rankedSkills,
+    effectiveSkills,
+    effectiveFamilies,
     prerequisiteWarnings,
     capabilityGaps,
     hasViableFallback,
@@ -2107,6 +2124,8 @@ export function buildProceduralExecutionRecord(params: {
           ),
           6,
         );
+  const resolvedEffectiveSkills = params.orchestrationState.effectiveSkills;
+  const resolvedEffectiveFamilies = params.orchestrationState.effectiveFamilies;
   const resolvedWorkflowSteps =
     params.orchestrationState.workflowSteps.length > 0
       ? params.orchestrationState.workflowSteps
@@ -2167,6 +2186,8 @@ export function buildProceduralExecutionRecord(params: {
     skillChain: resolvedSkillChain,
     workflowSteps: resolvedWorkflowSteps,
     rankedSkills: resolvedRankedSkills,
+    effectiveSkills: resolvedEffectiveSkills,
+    effectiveFamilies: resolvedEffectiveFamilies,
     prerequisiteWarnings: params.orchestrationState.prerequisiteWarnings,
     capabilityGaps: params.orchestrationState.capabilityGaps,
     hasViableFallback: params.orchestrationState.hasViableFallback,
@@ -2229,6 +2250,8 @@ export function inspectAgenticExecutionObservability(
     suggestedSkill: state.plannerState.suggestedSkill,
     workflowSteps: state.orchestrationState.workflowSteps,
     rankedSkills: state.orchestrationState.rankedSkills,
+    effectiveSkills: state.orchestrationState.effectiveSkills,
+    effectiveFamilies: state.orchestrationState.effectiveFamilies,
     consolidationAction: state.orchestrationState.consolidationAction,
     overlappingSkills: state.orchestrationState.overlappingSkills,
     capabilityGaps: state.orchestrationState.capabilityGaps,
@@ -2254,6 +2277,12 @@ export function formatAgenticExecutionObservabilityReport(
       report.summary,
       `escalation=${report.escalationRequired ? "yes" : "no"} fallback=${report.hasViableFallback ? "viable" : "missing"}`,
       report.rankedSkills.length > 0 ? `ranked=${report.rankedSkills.join(">")}` : "ranked=none",
+      report.effectiveSkills.length > 0
+        ? `effective_skills=${report.effectiveSkills.join(">")}`
+        : "effective_skills=none",
+      report.effectiveFamilies.length > 0
+        ? `effective_families=${report.effectiveFamilies.join(">")}`
+        : "effective_families=none",
       report.workflowSteps.length > 0
         ? `workflow=${report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(">")}`
         : "workflow=none",
@@ -2278,6 +2307,8 @@ export function formatAgenticExecutionObservabilityReport(
     `- Primary skill: ${report.primarySkill ?? "none"}`,
     `- Suggested skill: ${report.suggestedSkill ?? "none"}`,
     `- Ranked skills: ${report.rankedSkills.length > 0 ? report.rankedSkills.join(" > ") : "none"}`,
+    `- Effective skills: ${report.effectiveSkills.length > 0 ? report.effectiveSkills.join(" > ") : "none"}`,
+    `- Effective families: ${report.effectiveFamilies.length > 0 ? report.effectiveFamilies.join(", ") : "none"}`,
     `- Workflow chain: ${report.workflowSteps.length > 0 ? report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ") : "none"}`,
     `- Consolidation action: ${report.consolidationAction}`,
     `- Overlapping skills: ${report.overlappingSkills.length > 0 ? report.overlappingSkills.join(", ") : "none"}`,

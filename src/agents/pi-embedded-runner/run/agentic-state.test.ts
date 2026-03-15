@@ -346,6 +346,24 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
   });
 
+  it("uses strong in-scope family effectiveness to prefer extending an existing family", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Improve the diagnostics skill instead of creating a new fork.")],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=memory-diagnostics family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.20 evidence=3",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.effectiveSkills).toContain("memory-diagnostics");
+    expect(state.orchestrationState.effectiveFamilies).toContain("diagnostics");
+    expect(state.orchestrationState.consolidationAction).toBe("extend_existing");
+  });
+
   it("uses memory-weighted orchestration to choose the fallback skill", () => {
     const state = buildAgenticExecutionState({
       messages: [
@@ -539,11 +557,17 @@ describe("agentic-state", () => {
       "escalation=yes fallback=missing",
     );
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("plan=");
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "effective_skills=",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "## Plan Steps",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Effective skills:",
     );
   });
 

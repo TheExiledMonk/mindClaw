@@ -15,7 +15,7 @@ describe("memory system acceptance suite", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.scenarioCount).toBeGreaterThanOrEqual(4);
+    expect(report.scenarioCount).toBeGreaterThanOrEqual(6);
     expect(report.failedCount).toBe(0);
     expect(report.summary).toContain("acceptance");
     expect(report.scenarios.every((scenario) => scenario.details.length > 0)).toBe(true);
@@ -34,5 +34,25 @@ describe("memory system acceptance suite", () => {
     expect(parity).toBeTruthy();
     expect(parity?.passed).toBe(true);
     expect(parity?.summary).toContain("parity=");
+  });
+
+  it("includes runtime lifecycle and permanence invalidation scenarios", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-acceptance-"));
+
+    const report = await runMemoryAcceptanceSuite({
+      workspaceDir: tempDir,
+      sessionIdPrefix: "acceptance-lifecycle",
+      backendKinds: ["fs-json", "sqlite-graph"],
+    });
+
+    const runtime = report.scenarios.find((scenario) => scenario.scenario === "runtime_lifecycle");
+    const invalidation = report.scenarios.find(
+      (scenario) => scenario.scenario === "permanence_invalidation",
+    );
+
+    expect(runtime?.passed).toBe(true);
+    expect(runtime?.summary).toContain("branch=");
+    expect(invalidation?.passed).toBe(true);
+    expect(invalidation?.summary).toContain("superseded=");
   });
 });

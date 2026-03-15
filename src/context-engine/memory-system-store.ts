@@ -316,7 +316,13 @@ export type MemoryRetrievalObservabilityReport = {
 };
 
 export type MemoryAcceptanceScenarioResult = {
-  scenario: "drift_stability" | "scope_isolation" | "contested_visibility" | "backend_parity";
+  scenario:
+    | "drift_stability"
+    | "scope_isolation"
+    | "contested_visibility"
+    | "backend_parity"
+    | "runtime_lifecycle"
+    | "permanence_invalidation";
   passed: boolean;
   summary: string;
   details: string[];
@@ -4914,6 +4920,21 @@ export async function runMemoryAcceptanceSuite(params: {
   const sessionIdPrefix = params.sessionIdPrefix ?? "acceptance";
   const backendKinds = params.backendKinds ?? ["fs-json", "sqlite-graph"];
   const scenarios: MemoryAcceptanceScenarioResult[] = [];
+  const findPermanentNodeByText = (
+    node: PermanentMemoryNode,
+    pattern: string,
+  ): PermanentMemoryNode | undefined => {
+    if (node.summary?.includes(pattern) || node.label.includes(pattern)) {
+      return node;
+    }
+    for (const child of node.children) {
+      const match = findPermanentNodeByText(child, pattern);
+      if (match) {
+        return match;
+      }
+    }
+    return undefined;
+  };
 
   const driftTurns = [
     "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
@@ -5081,6 +5102,120 @@ export async function runMemoryAcceptanceSuite(params: {
       ({ backend, snapshot }) =>
         `${backend}: long-term=${snapshot.longTermMemory.length} pending=${snapshot.pendingSignificance.length} graph=${snapshot.graph.nodes.length}/${snapshot.graph.edges.length}`,
     ),
+  });
+
+  const lifecycleFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:runtime`,
+    messages: [
+      userMessageForSuite("Start the memory-system migration on branch feature/memory-v1."),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v1",
+        workspaceName: "openclaw",
+        sessionRelativePath: "sessions/runtime.jsonl",
+      },
+    },
+  });
+  const lifecycleSecond = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:runtime`,
+    previous: lifecycleFirst,
+    messages: [
+      userMessageForSuite(
+        "Continue the memory-system migration on branch feature/memory-v2 after retry recovery.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+        workspaceName: "openclaw",
+        sessionRelativePath: "sessions/runtime.jsonl",
+      },
+      checkpointSignals: [
+        {
+          kind: "failure",
+          summary: "Prompt assembly failed before retrying the migration step.",
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+        },
+        {
+          kind: "handoff",
+          summary: "Hand off the recovered migration state to the next turn.",
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+        },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          summary: "Recovered from prompt overflow during migration.",
+          attempt: 2,
+          maxAttempts: 3,
+        },
+      ],
+    },
+  });
+  const lifecycleTexts = lifecycleSecond.longTermMemory.map((entry) => entry.text);
+  const lifecyclePassed =
+    lifecycleSecond.workingMemory.lastWorkspaceBranch === "feature/memory-v2" &&
+    lifecycleTexts.some((text) =>
+      text.includes("Workspace git branch changed from feature/memory-v1 to feature/memory-v2."),
+    ) &&
+    lifecycleTexts.some((text) => text.includes("Runtime prompt retry recovered")) &&
+    lifecycleTexts.some((text) => text.includes("Runtime failure checkpoint recorded")) &&
+    lifecycleTexts.some((text) => text.includes("Runtime handoff checkpoint recorded"));
+  scenarios.push({
+    scenario: "runtime_lifecycle",
+    passed: lifecyclePassed,
+    summary: `runtime lifecycle branch=${lifecycleSecond.workingMemory.lastWorkspaceBranch} captured=${lifecycleTexts.length}`,
+    details: lifecycleTexts.filter((text) =>
+      /Workspace git branch changed|Runtime prompt retry recovered|Runtime failure checkpoint recorded|Runtime handoff checkpoint recorded/.test(
+        text,
+      ),
+    ),
+  });
+
+  const invalidationFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:permanence`,
+    messages: [
+      userMessageForSuite(
+        "Use the old memory-system workaround in src/context-engine/memory-system.ts for migration planning.",
+      ),
+    ],
+  });
+  const invalidationSecond = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:permanence`,
+    previous: invalidationFirst,
+    messages: [
+      userMessageForSuite(
+        "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the old workaround.",
+      ),
+    ],
+  });
+  const retiredOldNode = findPermanentNodeByText(
+    invalidationSecond.permanentMemory,
+    "old memory-system workaround",
+  );
+  const currentReplacementNode = findPermanentNodeByText(
+    invalidationSecond.permanentMemory,
+    "permanent memory-system path",
+  );
+  const invalidationPassed =
+    invalidationSecond.review.supersededMemoryIds.length > 0 &&
+    Boolean(currentReplacementNode) &&
+    (retiredOldNode?.activeStatus === "superseded" || retiredOldNode?.activeStatus === "archived");
+  scenarios.push({
+    scenario: "permanence_invalidation",
+    passed: invalidationPassed,
+    summary: `superseded=${invalidationSecond.review.supersededMemoryIds.length} old-status=${retiredOldNode?.activeStatus ?? "missing"}`,
+    details: [
+      ...invalidationSecond.review.supersededMemoryIds,
+      retiredOldNode
+        ? `retired-node:${retiredOldNode.label}:${retiredOldNode.activeStatus}`
+        : "retired-node:missing",
+      currentReplacementNode
+        ? `replacement-node:${currentReplacementNode.label}:${currentReplacementNode.activeStatus}`
+        : "replacement-node:missing",
+    ],
   });
 
   const passedCount = scenarios.filter((scenario) => scenario.passed).length;

@@ -358,6 +358,7 @@ export type AgenticSoakPhaseResult = {
   goalSatisfaction: AgenticGoalSatisfaction;
   retryClass: AgenticRetryClass;
   autonomyMode: AgenticAutonomyMode;
+  clarificationProfile: AgenticQualityGateReport["clarificationProfile"];
   primarySkill?: string;
   planStepSummary: string[];
   pendingHandoffSteps: number;
@@ -378,6 +379,8 @@ export type AgenticSoakReport = {
   passedScenarios: number;
   failedScenarioIds: AgenticSoakScenarioId[];
   scenarios: AgenticSoakScenarioResult[];
+  clarificationProfileCounts?: string[];
+  dominantClarificationProfile?: AgenticQualityGateReport["clarificationProfile"];
   summary: string;
 };
 
@@ -522,6 +525,44 @@ function mapClarificationReasonToProfile(
       : reason === "missing_information:external_input"
         ? "external_input"
         : undefined;
+}
+
+function summarizeClarificationProfiles(
+  profiles: AgenticQualityGateReport["clarificationProfile"][],
+): {
+  counts: string[];
+  dominantProfile: AgenticQualityGateReport["clarificationProfile"];
+} {
+  const normalizedProfiles = profiles.filter((profile) => profile !== "none");
+  if (normalizedProfiles.length === 0) {
+    return {
+      counts: [],
+      dominantProfile: "none",
+    };
+  }
+  const counts = new Map<
+    Exclude<AgenticQualityGateReport["clarificationProfile"], "none" | "mixed">,
+    number
+  >();
+  for (const profile of normalizedProfiles) {
+    if (profile === "mixed") {
+      continue;
+    }
+    counts.set(profile, (counts.get(profile) ?? 0) + 1);
+  }
+  const entries = [...counts.entries()].toSorted((left, right) => right[1] - left[1]);
+  if (entries.length === 0) {
+    return {
+      counts: [],
+      dominantProfile: "mixed",
+    };
+  }
+  const highestCount = entries[0][1];
+  const topProfiles = entries.filter((entry) => entry[1] === highestCount);
+  return {
+    counts: entries.map(([profile, count]) => `${profile}:${count}`),
+    dominantProfile: topProfiles.length === 1 ? topProfiles[0][0] : "mixed",
+  };
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -5688,6 +5729,9 @@ function buildSoakPhaseResult(params: {
   details?: string;
 }): AgenticSoakPhaseResult {
   const handoffReport = buildAgenticHandoffReport(params.state);
+  const clarificationReason = inspectAgenticExecutionObservability(
+    params.state,
+  ).clarificationReason;
   return {
     label: params.label,
     passed: params.passed,
@@ -5695,6 +5739,7 @@ function buildSoakPhaseResult(params: {
     goalSatisfaction: params.state.verificationState.goalSatisfaction,
     retryClass: params.state.plannerState.retryClass,
     autonomyMode: params.state.governanceState.autonomyMode,
+    clarificationProfile: mapClarificationReasonToProfile(clarificationReason) ?? "none",
     primarySkill: params.state.orchestrationState.primarySkill,
     planStepSummary: params.state.taskState.planSteps.map(
       (step) => `${step.kind}:${step.status}:${step.title}`,
@@ -7253,12 +7298,17 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     .filter((scenario) => !scenario.passed)
     .map((scenario) => scenario.id);
   const passedScenarios = scenarios.length - failedScenarioIds.length;
+  const clarificationSummary = summarizeClarificationProfiles(
+    scenarios.flatMap((scenario) => scenario.phases.map((phase) => phase.clarificationProfile)),
+  );
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
     passedScenarios,
     failedScenarioIds,
     scenarios,
+    clarificationProfileCounts: clarificationSummary.counts,
+    dominantClarificationProfile: clarificationSummary.dominantProfile,
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7271,8 +7321,11 @@ export function formatAgenticSoakReport(
     return `${JSON.stringify(report, null, 2)}\n`;
   }
   if (format === "summary") {
+    const clarificationProfileCounts = report.clarificationProfileCounts ?? [];
     const lines = [
       report.summary,
+      `clarification_profile=${report.dominantClarificationProfile ?? "none"}`,
+      `clarification_mix=${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(",") : "none"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
@@ -7282,10 +7335,13 @@ export function formatAgenticSoakReport(
     ];
     return `${lines.join("\n")}\n`;
   }
+  const clarificationProfileCounts = report.clarificationProfileCounts ?? [];
   const lines = [
     "# Agentic Soak Report",
     "",
     `Summary: ${report.summary}`,
+    `Dominant clarification profile: ${report.dominantClarificationProfile ?? "none"}`,
+    `Clarification mix: ${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(", ") : "none"}`,
     "",
     ...report.scenarios.flatMap((scenario) => [
       `## ${scenario.id}`,
@@ -7295,7 +7351,7 @@ export function formatAgenticSoakReport(
       "- Phases:",
       ...scenario.phases.map(
         (phase) =>
-          `  - ${phase.label}: ${phase.passed ? "passed" : "failed"} outcome=${phase.outcome} goal=${phase.goalSatisfaction} retry=${phase.retryClass} autonomy=${phase.autonomyMode} pending_handoff=${phase.pendingHandoffSteps}`,
+          `  - ${phase.label}: ${phase.passed ? "passed" : "failed"} outcome=${phase.outcome} goal=${phase.goalSatisfaction} retry=${phase.retryClass} autonomy=${phase.autonomyMode} clarification=${phase.clarificationProfile} pending_handoff=${phase.pendingHandoffSteps}`,
       ),
       "",
     ]),

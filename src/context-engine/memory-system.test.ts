@@ -2228,6 +2228,7 @@ describe("MemorySystemContextEngine", () => {
     expect(health.summary).toContain("backend=sqlite-graph");
     expect(health.contestedConceptCount).toBeGreaterThan(0);
     expect(health.contestedEntityConflictCount).toBeGreaterThanOrEqual(0);
+    expect(health.fragileWinnerCount).toBeGreaterThanOrEqual(0);
     expect(health.sourceTypeCounts.user_stated).toBeGreaterThan(0);
     expect(health.authoritativeSourceTypeCounts.user_stated).toBeGreaterThanOrEqual(0);
     expect(Array.isArray(health.issues)).toBe(true);
@@ -2354,7 +2355,7 @@ describe("MemorySystemContextEngine", () => {
     expect(report.health.summary).toContain("backend=sqlite-graph");
     expect(report.health.sourceTypeCounts.user_stated).toBeGreaterThanOrEqual(0);
     expect(report.retrieval?.summary).toContain("task=");
-    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(14);
+    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(15);
     expect(report.failedAcceptanceScenarios).toEqual([]);
     expect(report.maintenance).toBeUndefined();
     expect(report.recommendations.length).toBeGreaterThan(0);

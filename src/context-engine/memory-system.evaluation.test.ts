@@ -247,6 +247,72 @@ describe("memory system evaluation scenarios", () => {
     ).toBe(false);
   });
 
+  it("marks same-entity rivalry as contested instead of leaving a fragile authoritative winner", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-rivalry-governance",
+      messages: [
+        userMessage(
+          "Use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-rivalry-governance",
+      previous: first,
+      messages: [
+        userMessage(
+          "Do not use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const third = compileMemoryState({
+      sessionId: "eval-rivalry-governance",
+      previous: second,
+      messages: [
+        userMessage(
+          "Avoid using the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+
+    const packet = retrieveMemoryContextPacket(third, {
+      messages: [
+        userMessage(
+          "For install profile profile-a on feature/memory-v2, should we keep the old workaround in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.includes("adjudication=contested") || item.kind === "contradiction",
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.reason.includes("adjudication=authoritative:winner") &&
+          item.text.includes("old workaround"),
+      ),
+    ).toBe(false);
+  });
+
   it("stays stable through a longer project lifecycle without scope bleed or concept explosion", () => {
     const turns = [
       {

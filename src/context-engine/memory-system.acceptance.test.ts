@@ -15,7 +15,7 @@ describe("memory system acceptance suite", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.scenarioCount).toBeGreaterThanOrEqual(14);
+    expect(report.scenarioCount).toBeGreaterThanOrEqual(15);
     expect(report.failedCount).toBe(0);
     expect(report.summary).toContain("acceptance");
     expect(report.scenarios.every((scenario) => scenario.details.length > 0)).toBe(true);
@@ -56,7 +56,7 @@ describe("memory system acceptance suite", () => {
     expect(invalidation?.summary).toContain("superseded=");
   });
 
-  it("includes entity resolution, evidence priority, weak-evidence governance, handoff continuity, store recovery, soak, long-run lifecycle, and scope-matrix scenarios", async () => {
+  it("includes entity resolution, evidence priority, weak-evidence governance, rivalry governance, handoff continuity, store recovery, soak, long-run lifecycle, and scope-matrix scenarios", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-acceptance-"));
 
     const report = await runMemoryAcceptanceSuite({
@@ -73,6 +73,9 @@ describe("memory system acceptance suite", () => {
     );
     const weakEvidenceGovernance = report.scenarios.find(
       (scenario) => scenario.scenario === "weak_evidence_governance",
+    );
+    const rivalryGovernance = report.scenarios.find(
+      (scenario) => scenario.scenario === "rivalry_governance",
     );
     const handoff = report.scenarios.find(
       (scenario) => scenario.scenario === "session_handoff_continuity",
@@ -94,6 +97,8 @@ describe("memory system acceptance suite", () => {
     expect(evidencePriority?.summary).toContain("evidence winner=");
     expect(weakEvidenceGovernance?.passed).toBe(true);
     expect(weakEvidenceGovernance?.summary).toContain("weak-evidence contested=");
+    expect(rivalryGovernance?.passed).toBe(true);
+    expect(rivalryGovernance?.summary).toContain("fragile-winners=");
     expect(handoff?.passed).toBe(true);
     expect(handoff?.summary).toContain("handoff long-term=");
     expect(storeRecovery?.passed).toBe(true);

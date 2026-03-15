@@ -242,6 +242,7 @@ export type MemoryStoreHealthReport = {
   scopedAlternativeConceptCount: number;
   entityLinkedConceptCount: number;
   weakEvidenceWinnerCount: number;
+  fragileWinnerCount: number;
   sourceTypeCounts: Record<MemorySourceType, number>;
   authoritativeSourceTypeCounts: Record<MemorySourceType, number>;
   supersededMemoryCount: number;
@@ -344,7 +345,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "store_recovery"
     | "mixed_lifecycle_soak"
     | "project_lifecycle_long_run"
-    | "scope_matrix_resilience";
+    | "scope_matrix_resilience"
+    | "rivalry_governance";
   passed: boolean;
   summary: string;
   details: string[];
@@ -5836,6 +5838,77 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
+  const rivalryFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:rivalry`,
+    messages: [
+      userMessageForSuite(
+        "Use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const rivalrySecond = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:rivalry`,
+    previous: rivalryFirst,
+    messages: [
+      userMessageForSuite(
+        "Do not use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const rivalryThird = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:rivalry`,
+    previous: rivalrySecond,
+    messages: [
+      userMessageForSuite(
+        "Avoid using the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const rivalryAdjudications = buildPersistedMemoryAdjudications({
+    sessionId: `${sessionIdPrefix}:rivalry`,
+    entries: rivalryThird.longTermMemory,
+    revisions: collectPersistedMemoryRevisions(rivalryThird.longTermMemory),
+  });
+  const rivalryFragileWinnerCount = countFragileWinners(
+    rivalryThird.longTermMemory,
+    rivalryAdjudications,
+  );
+  const rivalryPacket = retrieveMemoryContextPacket(rivalryThird, {
+    messages: [
+      userMessageForSuite(
+        "For install profile profile-a on feature/memory-v2, should we keep the old workaround in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  scenarios.push({
+    scenario: "rivalry_governance",
+    passed:
+      rivalryFragileWinnerCount === 0 &&
+      rivalryAdjudications.some((item) => item.status === "contested") &&
+      rivalryPacket.retrievalItems.some(
+        (item) => item.reason.includes("adjudication=contested") || item.kind === "contradiction",
+      ),
+    summary: `rivalry contested=${rivalryAdjudications.some((item) => item.status === "contested")} fragile-winners=${rivalryFragileWinnerCount}`,
+    details: rivalryPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const handoffWorkspaceDir = path.join(
     params.workspaceDir,
     `${MEMORY_SYSTEM_DIRNAME}-handoff-${sessionIdPrefix}`,
@@ -7203,6 +7276,33 @@ function countWeakEvidenceWinners(
   }).length;
 }
 
+function countFragileWinners(
+  entries: LongTermMemoryEntry[],
+  adjudications: PersistedMemoryAdjudication[],
+): number {
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+  return adjudications.filter((item) => {
+    if (
+      item.status !== "authoritative" ||
+      item.resolutionKind !== "winner" ||
+      !item.winningMemoryId
+    ) {
+      return false;
+    }
+    const winner = entriesById.get(item.winningMemoryId);
+    if (!winner) {
+      return false;
+    }
+    const closeDecision = typeof item.scoreGap === "number" && item.scoreGap < 0.12;
+    const alternativePressure =
+      item.losingMemoryIds.length > 0 ||
+      item.alternativeConceptIds.length > 0 ||
+      item.entityIds.length > 0;
+    const weakSource = isWeakEvidenceSource(winner.sourceType);
+    return alternativePressure && (closeDecision || weakSource);
+  }).length;
+}
+
 function reviseReviewInputsFromHistory(params: {
   entries: LongTermMemoryEntry[];
   revisions: PersistedMemoryRevision[];
@@ -7543,6 +7643,16 @@ function buildPersistedMemoryAdjudications(params: {
           b.entry.updatedAt - a.entry.updatedAt,
       );
     const strongestAlternative = scoredAlternativeEntries[0];
+    const closeEntityAlternatives = scoredAlternativeEntries.filter((candidate) => {
+      if (!winner || candidate.entry.id === winner.id) {
+        return false;
+      }
+      const sharesEntityFamily =
+        countSharedEntityIds(winner, candidate.entry) > 0 ||
+        countCanonicalEntityKindOverlap(winner, candidate.entry) > 0 ||
+        isContradictoryPair(winner, candidate.entry);
+      return sharesEntityFamily && candidate.score + 0.12 >= winningScore;
+    });
     const winnerSourceScore = winner ? sourceTypeReliabilityScore(winner.sourceType) : 0;
     const strongestAlternativeSourceScore = Math.max(
       0,
@@ -7588,6 +7698,18 @@ function buildPersistedMemoryAdjudications(params: {
       resolutionKind = "contested";
       rationale =
         "weak-evidence winner is too close to a stronger competing observation on the same entity family";
+    } else if (
+      winner &&
+      closeEntityAlternatives.length >= 2 &&
+      scoreGap < 0.18 &&
+      closeEntityAlternatives.some(
+        (candidate) => sourceTypeReliabilityScore(candidate.entry.sourceType) >= winnerSourceScore,
+      )
+    ) {
+      status = "contested";
+      resolutionKind = "contested";
+      rationale =
+        "multiple close entity-linked alternatives keep the concept family too ambiguous for one stable winner";
     } else if (alternativeConceptIds.length > 0) {
       status = winner?.activeStatus === "superseded" ? "superseded" : "authoritative";
       resolutionKind = "scoped_alternative";
@@ -8499,6 +8621,7 @@ export async function inspectMemoryStoreHealth(params: {
       scopedAlternativeConceptCount: 0,
       entityLinkedConceptCount: 0,
       weakEvidenceWinnerCount: 0,
+      fragileWinnerCount: 0,
       sourceTypeCounts: createSourceTypeCounts(),
       authoritativeSourceTypeCounts: createSourceTypeCounts(),
       supersededMemoryCount: 0,
@@ -8551,6 +8674,7 @@ export async function inspectMemoryStoreHealth(params: {
     (item) => item.status === "contested" && item.entityIds.length > 0,
   ).length;
   const weakEvidenceWinnerCount = countWeakEvidenceWinners(snapshot.longTermMemory, adjudications);
+  const fragileWinnerCount = countFragileWinners(snapshot.longTermMemory, adjudications);
   const permanentEligibleCount = snapshot.longTermMemory.filter(
     (entry) => entry.permanenceStatus === "eligible",
   ).length;
@@ -8566,6 +8690,9 @@ export async function inspectMemoryStoreHealth(params: {
   }
   if (weakEvidenceWinnerCount > 0) {
     issues.push(`weak-evidence winners: ${weakEvidenceWinnerCount}`);
+  }
+  if (fragileWinnerCount > 0) {
+    issues.push(`fragile authoritative winners: ${fragileWinnerCount}`);
   }
   if (supersededMemoryCount > Math.max(5, Math.floor(snapshot.longTermMemory.length * 0.25))) {
     issues.push(`superseded memory backlog: ${supersededMemoryCount}`);
@@ -8595,6 +8722,11 @@ export async function inspectMemoryStoreHealth(params: {
   if (weakEvidenceWinnerCount > 0) {
     recommendations.push(
       "review authoritative winners backed only by inferred or summary-derived evidence",
+    );
+  }
+  if (fragileWinnerCount > 0) {
+    recommendations.push(
+      "inspect close authoritative winners with small adjudication margins before treating them as stable",
     );
   }
   if (scopedAlternativeConceptCount > 0) {
@@ -8628,6 +8760,7 @@ export async function inspectMemoryStoreHealth(params: {
       `scoped-alternatives=${scopedAlternativeConceptCount}`,
       `entity-linked=${entityLinkedConceptCount}`,
       `weak-winners=${weakEvidenceWinnerCount}`,
+      `fragile-winners=${fragileWinnerCount}`,
       `superseded=${supersededMemoryCount}`,
       `stale=${staleMemoryCount}`,
       `permanent-eligible=${permanentEligibleCount}`,
@@ -8648,6 +8781,7 @@ export async function inspectMemoryStoreHealth(params: {
     scopedAlternativeConceptCount,
     entityLinkedConceptCount,
     weakEvidenceWinnerCount,
+    fragileWinnerCount,
     sourceTypeCounts,
     authoritativeSourceTypeCounts,
     supersededMemoryCount,

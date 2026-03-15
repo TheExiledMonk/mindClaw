@@ -11,10 +11,12 @@ type CliArgs = {
   failOnIssues: boolean;
   failOnAcceptance: boolean;
   failOnWeakWinners: boolean;
+  failOnFragileWinners: boolean;
   failOnEntityConflicts: boolean;
   runRepair: boolean;
   runRecover: boolean;
   outputPath?: string;
+  summaryOnly: boolean;
   messages: AgentMessage[];
 };
 
@@ -26,10 +28,12 @@ function parseArgs(argv: string[]): CliArgs {
   let failOnIssues = false;
   let failOnAcceptance = false;
   let failOnWeakWinners = false;
+  let failOnFragileWinners = false;
   let failOnEntityConflicts = false;
   let runRepair = false;
   let runRecover = false;
   let outputPath: string | undefined;
+  let summaryOnly = false;
   const acceptanceBackendKinds: Array<"fs-json" | "sqlite-doc" | "sqlite-graph"> = [];
   const messages: AgentMessage[] = [];
 
@@ -69,6 +73,10 @@ function parseArgs(argv: string[]): CliArgs {
       failOnWeakWinners = true;
       continue;
     }
+    if (arg === "--fail-on-fragile-winners") {
+      failOnFragileWinners = true;
+      continue;
+    }
     if (arg === "--fail-on-entity-conflicts") {
       failOnEntityConflicts = true;
       continue;
@@ -93,6 +101,10 @@ function parseArgs(argv: string[]): CliArgs {
       index += 1;
       continue;
     }
+    if (arg === "--summary-only") {
+      summaryOnly = true;
+      continue;
+    }
     if (arg === "--message" && next) {
       messages.push({
         role: "user",
@@ -113,12 +125,36 @@ function parseArgs(argv: string[]): CliArgs {
     failOnIssues,
     failOnAcceptance,
     failOnWeakWinners,
+    failOnFragileWinners,
     failOnEntityConflicts,
     runRepair,
     runRecover,
     outputPath,
+    summaryOnly,
     messages,
   };
+}
+
+function buildSummaryOutput(
+  report: Awaited<ReturnType<typeof generateMemoryDiagnosticsReport>>,
+): string {
+  const lines = [`summary: ${report.summary}`, `health: ${report.health.summary}`];
+  if (report.retrieval) {
+    lines.push(`retrieval: ${report.retrieval.summary}`);
+  }
+  if (report.acceptance) {
+    lines.push(`acceptance: ${report.acceptance.summary}`);
+  }
+  if (report.failedAcceptanceScenarios.length > 0) {
+    lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
+  }
+  if (report.health.issues.length > 0) {
+    lines.push(`issues: ${report.health.issues.join(" | ")}`);
+  }
+  if (report.recommendations.length > 0) {
+    lines.push(`recommendations: ${report.recommendations.join(" | ")}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 async function main(): Promise<void> {
@@ -133,7 +169,9 @@ async function main(): Promise<void> {
     runRepair: args.runRepair,
     runRecover: args.runRecover,
   });
-  const payload = `${JSON.stringify(report, null, 2)}\n`;
+  const payload = args.summaryOnly
+    ? buildSummaryOutput(report)
+    : `${JSON.stringify(report, null, 2)}\n`;
   if (args.outputPath) {
     const fs = await import("node:fs/promises");
     await fs.writeFile(args.outputPath, payload, "utf8");
@@ -146,6 +184,9 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   }
   if (args.failOnWeakWinners && report.health.weakEvidenceWinnerCount > 0) {
+    process.exitCode = 1;
+  }
+  if (args.failOnFragileWinners && report.health.fragileWinnerCount > 0) {
     process.exitCode = 1;
   }
   if (args.failOnEntityConflicts && report.health.contestedEntityConflictCount > 0) {

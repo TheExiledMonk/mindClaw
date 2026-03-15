@@ -5,7 +5,7 @@ describe("agentic soak suite", () => {
   it("passes the built-in soak scenarios", () => {
     const report = runAgenticSoakSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(9);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(10);
     expect(report.failedScenarioIds).toEqual([]);
 
     const retryLifecycle = report.scenarios.find(
@@ -99,6 +99,22 @@ describe("agentic soak suite", () => {
     expect(clarificationLifecycle?.phases.at(-1)?.passed).toBe(true);
     expect(clarificationLifecycle?.phases[0]?.details).toContain("config/runtime.json");
     expect(clarificationLifecycle?.phases.at(-1)?.details).toContain("clarification=none");
+
+    const richClarificationLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "rich_clarification_resume_boundary",
+    );
+    expect(richClarificationLifecycle?.phases[0]?.passed).toBe(true);
+    expect(richClarificationLifecycle?.phases[1]?.passed).toBe(true);
+    expect(richClarificationLifecycle?.phases[2]?.passed).toBe(true);
+    expect(richClarificationLifecycle?.phases[3]?.passed).toBe(true);
+    expect(richClarificationLifecycle?.phases[0]?.details).toContain(
+      "environment variable OPENAI_API_KEY",
+    );
+    expect(richClarificationLifecycle?.phases[1]?.details).toContain("clarification=none");
+    expect(richClarificationLifecycle?.phases[2]?.details).toContain(
+      "operator approval for production deployment",
+    );
+    expect(richClarificationLifecycle?.phases[3]?.details).toContain("clarification=none");
   });
 
   it("formats the soak report in summary and markdown forms", () => {

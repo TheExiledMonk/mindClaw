@@ -343,7 +343,8 @@ export type AgenticSoakScenarioId =
   | "environment_guarded_retry_lifecycle"
   | "guarded_handoff_boundary"
   | "concise_progress_resume_boundary"
-  | "clarification_resume_boundary";
+  | "clarification_resume_boundary"
+  | "rich_clarification_resume_boundary";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -6548,6 +6549,151 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       summary: passed
         ? "Concrete clarification needs pause execution only until the missing prerequisite is restored."
         : "Clarification pause/resume behavior drifted across the lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
+  {
+    const blockedEnvVarState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Run the deployment smoke test after the required environment variable is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a handoff until OPENAI_API_KEY is configured.",
+        },
+      ],
+    });
+    const resumedEnvVarState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Run the deployment smoke test after the required environment variable is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Configured OPENAI_API_KEY and ran the deployment smoke test successfully.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary: "Deployment smoke test completed after OPENAI_API_KEY was configured.",
+        },
+      ],
+    });
+    const blockedApprovalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Deploy the production hotfix once the release approval is granted.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Approval required: production deployment",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a handoff until production deployment approval is granted.",
+        },
+      ],
+    });
+    const resumedApprovalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Deploy the production hotfix once the release approval is granted.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Production deployment approved and hotfix deployed successfully.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary: "Production hotfix completed after deployment approval was granted.",
+        },
+      ],
+    });
+    const blockedEnvVarObservability = inspectAgenticExecutionObservability(blockedEnvVarState);
+    const resumedEnvVarObservability = inspectAgenticExecutionObservability(resumedEnvVarState);
+    const blockedApprovalObservability = inspectAgenticExecutionObservability(blockedApprovalState);
+    const resumedApprovalObservability = inspectAgenticExecutionObservability(resumedApprovalState);
+    const phases = [
+      buildSoakPhaseResult({
+        label: "env_var_pause",
+        state: blockedEnvVarState,
+        passed:
+          blockedEnvVarState.plannerState.retryClass === "clarify" &&
+          blockedEnvVarObservability.clarificationSummary ===
+            "Need clarification on: environment variable OPENAI_API_KEY",
+        details: `clarification=${blockedEnvVarObservability.clarificationSummary ?? "none"}`,
+      }),
+      buildSoakPhaseResult({
+        label: "env_var_resume",
+        state: resumedEnvVarState,
+        passed:
+          resumedEnvVarState.verificationState.outcome !== "blocked" &&
+          resumedEnvVarState.plannerState.retryClass === "same_path_retry" &&
+          resumedEnvVarObservability.clarificationSummary === undefined,
+        details: `clarification=${resumedEnvVarObservability.clarificationSummary ?? "none"} outcome=${resumedEnvVarState.verificationState.outcome}`,
+      }),
+      buildSoakPhaseResult({
+        label: "approval_pause",
+        state: blockedApprovalState,
+        passed:
+          blockedApprovalState.plannerState.retryClass === "clarify" &&
+          blockedApprovalObservability.clarificationSummary ===
+            "Need clarification on: operator approval for production deployment",
+        details: `clarification=${blockedApprovalObservability.clarificationSummary ?? "none"}`,
+      }),
+      buildSoakPhaseResult({
+        label: "approval_resume",
+        state: resumedApprovalState,
+        passed:
+          resumedApprovalState.verificationState.outcome !== "blocked" &&
+          resumedApprovalState.plannerState.retryClass === "same_path_retry" &&
+          resumedApprovalObservability.clarificationSummary === undefined,
+        details: `clarification=${resumedApprovalObservability.clarificationSummary ?? "none"} outcome=${resumedApprovalState.verificationState.outcome}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "rich_clarification_resume_boundary",
+      passed,
+      summary: passed
+        ? "Environment-variable and approval prerequisites pause cleanly and clear once the prerequisite is restored."
+        : "Rich clarification payloads did not stay stable across pause/resume lifecycles.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });

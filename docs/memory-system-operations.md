@@ -4,6 +4,8 @@
 
 This document is the operator-facing entry point for inspecting, validating, and recovering the integrated memory system.
 
+MindClaw currently forks OpenClaw from tag `v2026.3.13-1`, the `2026.03.13` stable line. Even after the MindClaw rename, the runtime remains intentionally compatible with the inherited OpenClaw config/state layout for now, so operators should still expect `openclaw.json`, `~/.openclaw`, and `OPENCLAW_*` naming unless and until a dedicated migration is introduced.
+
 The memory stack now supports:
 
 - working, long-term, and permanent memory layers
@@ -141,3 +143,9 @@ The acceptance suite currently covers:
 - Use `sqlite-graph` as the default durable backend.
 - Keep `fs-json` available for parity checks and simple recovery flows.
 - Treat `sqlite-doc` as transitional rather than the preferred production target.
+
+## Compatibility Guidance
+
+- Use the `mindclaw` CLI surface for day-to-day operation.
+- Expect existing config/state compatibility to remain on OpenClaw naming for now.
+- Do not rename runtime homes or config files to `.mindclaw` or `mindclaw.json` unless a dedicated migration is added and documented.

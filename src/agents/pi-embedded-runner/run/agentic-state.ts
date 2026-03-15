@@ -230,6 +230,7 @@ export type ProceduralExecutionRecord = {
 export type AgenticExecutionObservabilityReport = {
   summary: string;
   progressSummary: string;
+  clarificationSummary?: string;
   retryClass: AgenticRetryClass;
   autonomyMode: AgenticAutonomyMode;
   riskLevel: AgenticRiskLevel;
@@ -260,6 +261,7 @@ export type AgenticExecutionObservabilityReport = {
 export type AgenticHandoffReport = {
   summary: string;
   progressSummary: string;
+  clarificationSummary?: string;
   objective?: string;
   completedSteps: string[];
   pendingSteps: string[];
@@ -309,7 +311,8 @@ export type AgenticAcceptanceScenarioId =
   | "protected_branch_governance_alignment"
   | "environment_guard_retry_alignment"
   | "guarded_handoff_alignment"
-  | "concise_progress_alignment";
+  | "concise_progress_alignment"
+  | "clarification_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -337,7 +340,8 @@ export type AgenticSoakScenarioId =
   | "failure_derived_recovery_transition"
   | "environment_guarded_retry_lifecycle"
   | "guarded_handoff_boundary"
-  | "concise_progress_resume_boundary";
+  | "concise_progress_resume_boundary"
+  | "clarification_resume_boundary";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -1293,19 +1297,16 @@ function buildPlannerState(params: {
     memoryRegressionSignals.templatePreferredFamilies.includes(likelyPrimaryFamily ?? "");
   const suggestedSkill = mergeFamilyFallbackSkills[0] ?? alternativeSkills[0];
   const shouldEscalate =
-    retryFailures.length > 0 ||
-    dominantFailureClass === "environment_mismatch" ||
-    (dominantFailureClass === "missing_information" && alternativeSkills.length === 0);
+    retryFailures.length > 0 || dominantFailureClass === "environment_mismatch";
   const escalationReason: AgenticEscalationReason | undefined =
     retryFailures.length > 0
       ? "repeated_failure"
       : dominantFailureClass === "environment_mismatch"
         ? "environment_mismatch"
-        : dominantFailureClass === "missing_information" && alternativeSkills.length === 0
-          ? "missing_information"
-          : params.verificationState.outcome === "blocked"
-            ? "low_confidence"
-            : undefined;
+        : params.verificationState.outcome === "blocked" &&
+            dominantFailureClass !== "missing_information"
+          ? "low_confidence"
+          : undefined;
   const retryClass: AgenticRetryClass = shouldEscalate
     ? "escalate"
     : dominantFailureClass === "missing_information"
@@ -2227,6 +2228,27 @@ function buildRepoFingerprint(params: {
   return `${workspace}:${relativePath}:${params.workspaceKind}:${languagePart}:${frameworkPart}:${validationPart}`;
 }
 
+function extractClarificationSummary(state: AgenticExecutionState): string | undefined {
+  if (state.plannerState.retryClass !== "clarify") {
+    return undefined;
+  }
+  const missingBlocker = state.taskState.blockers.find((blocker) =>
+    /\bmissing|not found|required|needs|unknown file|no such file\b/i.test(blocker),
+  );
+  if (missingBlocker) {
+    return `Need clarification on: ${truncate(missingBlocker.replace(/^[^:]+:\s*/, ""), 140)}`;
+  }
+  const unresolved = state.verificationState.unresolvedCriteria[0];
+  if (unresolved) {
+    return `Need clarification on: ${truncate(unresolved, 140)}`;
+  }
+  const objective = state.taskState.objective;
+  if (objective) {
+    return `Need clarification before retrying: ${truncate(objective, 140)}`;
+  }
+  return "Need clarification before retrying.";
+}
+
 function reconcilePlannerStateWithEnvironment(params: {
   plannerState: AgenticPlannerState;
   environmentState: AgenticEnvironmentState;
@@ -3036,9 +3058,11 @@ export function inspectAgenticExecutionObservability(
     ],
     4,
   ).join(" ");
+  const clarificationSummary = extractClarificationSummary(state);
   return {
     summary,
     progressSummary,
+    clarificationSummary,
     retryClass: state.plannerState.retryClass,
     autonomyMode: state.governanceState.autonomyMode,
     riskLevel: state.governanceState.riskLevel,
@@ -3078,6 +3102,9 @@ export function formatAgenticExecutionObservabilityReport(
     const lines = [
       report.summary,
       `progress=${report.progressSummary}`,
+      report.clarificationSummary
+        ? `clarification=${report.clarificationSummary}`
+        : "clarification=none",
       `escalation=${report.escalationRequired ? "yes" : "no"} fallback=${report.hasViableFallback ? "viable" : "missing"}`,
       report.rankedSkills.length > 0 ? `ranked=${report.rankedSkills.join(">")}` : "ranked=none",
       report.effectiveSkills.length > 0
@@ -3118,6 +3145,7 @@ export function formatAgenticExecutionObservabilityReport(
     "",
     `- Summary: ${report.summary}`,
     `- Progress: ${report.progressSummary}`,
+    `- Clarification: ${report.clarificationSummary ?? "none"}`,
     `- Retry class: ${report.retryClass}`,
     `- Autonomy mode: ${report.autonomyMode}`,
     `- Risk level: ${report.riskLevel}`,
@@ -3176,6 +3204,7 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
     ],
     4,
   ).join(" ");
+  const clarificationSummary = extractClarificationSummary(state);
   const operatorReason =
     state.governanceState.reasons[0] ??
     (state.plannerState.retryClass === "clarify" ? "await_validation_context" : undefined);
@@ -3233,6 +3262,7 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
   return {
     summary: summaryParts.join(" "),
     progressSummary,
+    clarificationSummary,
     objective: state.taskState.objective,
     completedSteps,
     pendingSteps,
@@ -3260,6 +3290,9 @@ export function formatAgenticHandoffReport(
     const lines = [
       report.summary || "handoff=empty",
       `progress=${report.progressSummary}`,
+      report.clarificationSummary
+        ? `clarification=${report.clarificationSummary}`
+        : "clarification=none",
       `operator=${report.operatorMode}${report.operatorReason ? ` reason=${report.operatorReason}` : ""}`,
       report.nextAction ? `next=${report.nextAction}` : "next=none",
       report.pendingSteps.length > 0
@@ -3280,6 +3313,7 @@ export function formatAgenticHandoffReport(
     "",
     `- Summary: ${report.summary || "none"}`,
     `- Progress: ${report.progressSummary}`,
+    `- Clarification: ${report.clarificationSummary ?? "none"}`,
     `- Objective: ${report.objective ?? "none"}`,
     `- Operator mode: ${report.operatorMode}`,
     `- Operator reason: ${report.operatorReason ?? "none"}`,
@@ -4916,6 +4950,51 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   }
 
   {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the build once the missing config file is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required config file: config/runtime.json",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a handoff until the missing config file is restored.",
+        },
+      ],
+    });
+    const observability = inspectAgenticExecutionObservability(state);
+    const handoff = buildAgenticHandoffReport(state);
+    const passed =
+      state.plannerState.retryClass === "clarify" &&
+      (observability.clarificationSummary ?? "").includes("config/runtime.json") &&
+      (handoff.clarificationSummary ?? "").includes("config/runtime.json") &&
+      formatAgenticExecutionObservabilityReport(observability, "summary").includes(
+        "clarification=Need clarification on:",
+      ) &&
+      formatAgenticHandoffReport(handoff, "summary").includes(
+        "clarification=Need clarification on:",
+      );
+    scenarios.push({
+      id: "clarification_alignment",
+      passed,
+      summary: passed
+        ? "Missing-information retries now surface a concrete clarification payload for operators."
+        : "Clarification payloads did not stay concrete for missing-information retries.",
+      details: `clarification=${observability.clarificationSummary ?? "none"} handoff=${handoff.clarificationSummary ?? "none"}`,
+    });
+  }
+
+  {
     const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
@@ -6253,6 +6332,87 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       summary: passed
         ? "Concise progress and assumptions stay visible across handoff and resume."
         : "Concise progress or assumptions drifted across the handoff/resume lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
+  {
+    const blockedState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the build once the missing config file is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required config file: config/runtime.json",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a handoff until the missing config file is restored.",
+        },
+      ],
+    });
+    const resumedState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the build once the missing config file is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary:
+            "Ran pnpm exec tsc -p tsconfig.json --noEmit successfully after restoring config/runtime.json.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary: "Build fixed after the missing config file was restored.",
+        },
+      ],
+    });
+    const blockedObservability = inspectAgenticExecutionObservability(blockedState);
+    const blockedHandoff = buildAgenticHandoffReport(blockedState);
+    const resumedObservability = inspectAgenticExecutionObservability(resumedState);
+    const phases = [
+      buildSoakPhaseResult({
+        label: "clarification_pause",
+        state: blockedState,
+        passed:
+          blockedState.plannerState.retryClass === "clarify" &&
+          (blockedObservability.clarificationSummary ?? "").includes("config/runtime.json") &&
+          (blockedHandoff.clarificationSummary ?? "").includes("config/runtime.json"),
+        details: `clarification=${blockedObservability.clarificationSummary ?? "none"}`,
+      }),
+      buildSoakPhaseResult({
+        label: "clarification_resume",
+        state: resumedState,
+        passed:
+          resumedState.verificationState.outcome !== "blocked" &&
+          resumedState.plannerState.retryClass === "same_path_retry" &&
+          resumedObservability.clarificationSummary === undefined,
+        details: `clarification=${resumedObservability.clarificationSummary ?? "none"} outcome=${resumedState.verificationState.outcome}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "clarification_resume_boundary",
+      passed,
+      summary: passed
+        ? "Concrete clarification needs pause execution only until the missing prerequisite is restored."
+        : "Clarification pause/resume behavior drifted across the lifecycle.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });

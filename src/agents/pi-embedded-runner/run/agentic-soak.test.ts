@@ -5,7 +5,7 @@ describe("agentic soak suite", () => {
   it("passes the built-in soak scenarios", () => {
     const report = runAgenticSoakSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(8);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(9);
     expect(report.failedScenarioIds).toEqual([]);
 
     const retryLifecycle = report.scenarios.find(
@@ -91,6 +91,14 @@ describe("agentic soak suite", () => {
     expect(conciseProgressLifecycle?.phases.at(-1)?.passed).toBe(true);
     expect(conciseProgressLifecycle?.phases[0]?.details).toContain("progress=");
     expect(conciseProgressLifecycle?.phases.at(-1)?.details).toContain("completed=");
+
+    const clarificationLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "clarification_resume_boundary",
+    );
+    expect(clarificationLifecycle?.phases[0]?.passed).toBe(true);
+    expect(clarificationLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(clarificationLifecycle?.phases[0]?.details).toContain("config/runtime.json");
+    expect(clarificationLifecycle?.phases.at(-1)?.details).toContain("clarification=none");
   });
 
   it("formats the soak report in summary and markdown forms", () => {

@@ -875,6 +875,9 @@ describe("agentic-state", () => {
       "escalation=yes fallback=missing",
     );
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("progress=");
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "clarification=none",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("assumptions=");
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("plan=");
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
@@ -887,6 +890,9 @@ describe("agentic-state", () => {
       "# Agentic Diagnostics Report",
     );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain("Progress:");
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Clarification:",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "## Plan Steps",
     );
@@ -1131,6 +1137,31 @@ describe("agentic-state", () => {
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Operator mode:");
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Progress:");
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Assumptions:");
+  });
+
+  it("surfaces concrete clarification needs only for missing-information retries", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the build once the missing config file is available.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required config file: config/runtime.json",
+        },
+      ],
+    });
+
+    expect(state.plannerState.retryClass).toBe("clarify");
+    const observability = inspectAgenticExecutionObservability(state);
+    const handoff = buildAgenticHandoffReport(state);
+    expect(observability.clarificationSummary).toContain("config/runtime.json");
+    expect(handoff.clarificationSummary).toContain("config/runtime.json");
+    expect(formatAgenticExecutionObservabilityReport(observability, "summary")).toContain(
+      "clarification=Need clarification on:",
+    );
+    expect(formatAgenticHandoffReport(handoff, "summary")).toContain(
+      "clarification=Need clarification on:",
+    );
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {

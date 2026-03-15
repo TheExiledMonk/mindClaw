@@ -55,6 +55,7 @@ export type AgenticPlannerState = {
   status: AgenticPlannerStatus;
   nextAction?: string;
   rationale?: string;
+  alternativeSkills: string[];
 };
 
 export type AgenticExecutionState = {
@@ -67,12 +68,14 @@ export type ProceduralExecutionRecord = {
   version: 1;
   availableSkills: string[];
   likelySkills: string[];
+  alternativeSkills: string[];
   toolChain: string[];
   changedArtifacts: string[];
   outcome: AgenticVerificationOutcome;
   taskMode: AgenticTaskMode;
   templateCandidate: boolean;
   consolidationCandidate: boolean;
+  nearMissCandidate: boolean;
   nextImprovement?: string;
 };
 
@@ -311,6 +314,8 @@ function buildVerificationState(params: {
     checksRun.length > 0
   ) {
     outcome = "verified";
+  } else if (failingChecks.length > 0) {
+    outcome = checksRun.length > 0 ? "failed" : "blocked";
   } else if (checksRun.length > 0 && failingChecks.length === 0) {
     outcome = "verified";
   } else if (
@@ -337,32 +342,44 @@ function buildPlannerState(params: {
   checkpointSignals?: CheckpointSignal[];
   activeArtifacts: string[];
   retrySignals?: RetrySignal[];
+  availableSkills?: string[];
+  likelySkills?: string[];
 }): AgenticPlannerState {
   const checkpointSignals = params.checkpointSignals ?? [];
   const retrySignals = params.retrySignals ?? [];
+  const likelySkills = params.likelySkills ?? [];
+  const alternativeSkills = (params.availableSkills ?? []).filter(
+    (skill) => !likelySkills.includes(skill),
+  );
   if (checkpointSignals.some((signal) => signal.kind === "completion")) {
     return {
       version: 1,
       status: "complete",
       nextAction: "Confirm final deliverable and prepare handoff or follow-up notes.",
       rationale: "A completion checkpoint was observed in the current execution flow.",
+      alternativeSkills: [],
     };
   }
   if (params.blockers.length > 0) {
     const retryFailures = retrySignals.filter((signal) => signal.outcome === "failed");
     const dominantFailureClass = params.verificationState.failureClasses[0];
+    const fallbackHint =
+      alternativeSkills.length > 0
+        ? ` Consider alternative skills: ${alternativeSkills.slice(0, 3).join(", ")}.`
+        : "";
     return {
       version: 1,
       status: retryFailures.length > 0 ? "blocked" : "needs_replan",
       nextAction:
         retryFailures.length > 0
-          ? "Escalate or unblock the current failure before continuing."
+          ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
           : dominantFailureClass === "verification_failure"
-            ? "Do not repeat the same failing validation path; change the implementation strategy before retrying."
-            : "Replan around the current blocker and try a different execution path.",
+            ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
+            : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
       rationale: dominantFailureClass
         ? `${dominantFailureClass}: ${params.blockers[0]}`
         : params.blockers[0],
+      alternativeSkills,
     };
   }
   if (params.activeArtifacts.length > 0) {
@@ -374,6 +391,7 @@ function buildPlannerState(params: {
         params.verificationState.outcome === "verified"
           ? "Recent work has evidence behind it, so the next step is forward progress."
           : "Work is active, but more verification is still needed.",
+      alternativeSkills: [],
     };
   }
   return {
@@ -383,6 +401,7 @@ function buildPlannerState(params: {
       ? `Continue progressing toward: ${truncate(params.objective, 120)}`
       : "Clarify or restate the current objective before continuing.",
     rationale: params.verificationState.outcome === "blocked" ? "Execution is blocked." : undefined,
+    alternativeSkills,
   };
 }
 
@@ -395,6 +414,8 @@ export function buildAgenticExecutionState(params: {
   checkpointSignals?: CheckpointSignal[];
   retrySignals?: RetrySignal[];
   promptErrorSummary?: string;
+  availableSkills?: string[];
+  likelySkills?: string[];
 }): AgenticExecutionState {
   const texts = params.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
@@ -477,6 +498,8 @@ export function buildAgenticExecutionState(params: {
     checkpointSignals: params.checkpointSignals,
     activeArtifacts,
     retrySignals: params.retrySignals,
+    availableSkills: params.availableSkills,
+    likelySkills: params.likelySkills,
   });
 
   return {
@@ -495,6 +518,10 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.plannerState.status === "needs_replan" || state.plannerState.status === "blocked"
       ? "Do not repeat the same failing path. Change strategy, narrow scope, or escalate."
       : undefined;
+  const fallbackSkillGuidance =
+    state.plannerState.alternativeSkills.length > 0
+      ? `Fallback skills to consider: ${state.plannerState.alternativeSkills.slice(0, 3).join(", ")}`
+      : undefined;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -511,6 +538,7 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     `Verification state: ${state.verificationState.outcome}`,
     failureGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
+    fallbackSkillGuidance,
     antiRepeatGuidance,
   ].filter((line): line is string => Boolean(line));
 
@@ -539,15 +567,22 @@ export function buildProceduralExecutionRecord(params: {
     params.diffSignals?.map((signal) => signal.artifactRef) ?? [],
     8,
   );
+  const alternativeSkills = availableSkills.filter((skill) => !likelySkills.includes(skill));
   const toolChain = uniqueCompact(params.toolSignals?.map((signal) => signal.toolName) ?? [], 8);
   const consolidationCandidate = likelySkills.length > 1;
+  const nearMissCandidate =
+    params.verificationState.outcome === "partial" ||
+    params.verificationState.outcome === "failed" ||
+    params.verificationState.outcome === "blocked";
   const templateCandidate =
     params.verificationState.outcome !== "failed" &&
     params.verificationState.outcome !== "blocked" &&
     (changedArtifacts.length > 1 || toolChain.length > 1);
 
   let nextImprovement: string | undefined;
-  if (
+  if (nearMissCandidate && alternativeSkills.length > 0) {
+    nextImprovement = `Capture why the primary path fell short and compare it with alternative skills such as ${alternativeSkills.slice(0, 3).join(", ")}.`;
+  } else if (
     params.verificationState.outcome === "failed" ||
     params.verificationState.outcome === "blocked"
   ) {
@@ -566,12 +601,14 @@ export function buildProceduralExecutionRecord(params: {
     version: 1,
     availableSkills,
     likelySkills,
+    alternativeSkills,
     toolChain,
     changedArtifacts,
     outcome: params.verificationState.outcome,
     taskMode: params.taskState.taskMode,
     templateCandidate,
     consolidationCandidate,
+    nearMissCandidate,
     nextImprovement,
   };
 }

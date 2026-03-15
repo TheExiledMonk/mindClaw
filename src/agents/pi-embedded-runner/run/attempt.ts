@@ -160,6 +160,10 @@ type PromptBuildHookRunner = {
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
@@ -1300,6 +1304,9 @@ export function buildAfterTurnRuntimeContext(params: {
   promptErrorSource?: "prompt" | "compaction" | null;
   compactionOccurred?: boolean;
 }): Partial<CompactEmbeddedPiSessionParams> {
+  const availableSkillNames = uniqueStrings(
+    params.attempt.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
+  );
   const extractMessageText = (message: AgentMessage): string => {
     const content = (message as { content?: unknown }).content;
     if (typeof content === "string") {
@@ -1475,6 +1482,13 @@ export function buildAfterTurnRuntimeContext(params: {
     checkpointSignals,
     retrySignals,
     promptErrorSummary,
+    availableSkills: availableSkillNames,
+    likelySkills: availableSkillNames.filter((skill) =>
+      (params.messages ?? [])
+        .map((message) => extractMessageText(message).toLowerCase())
+        .join(" ")
+        .includes(skill.toLowerCase()),
+    ),
   });
   const proceduralExecution = buildProceduralExecutionRecord({
     skillsSnapshot: params.attempt.skillsSnapshot,
@@ -2353,6 +2367,9 @@ export async function runEmbeddedAttempt(
         const agenticPromptAddition = buildAgenticSystemPromptAddition(
           buildAgenticExecutionState({
             messages: activeSession.messages,
+            availableSkills: uniqueStrings(
+              params.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
+            ),
           }),
         );
         if (agenticPromptAddition) {

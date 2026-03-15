@@ -104,8 +104,31 @@ describe("agentic-state", () => {
     expect(state.plannerState.nextAction).toContain(
       "Do not repeat the same failing validation path",
     );
+    expect(state.plannerState.alternativeSkills).toEqual([]);
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Failure classes: verification_failure",
+    );
+  });
+
+  it("surfaces fallback skills when the current path is failing", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the diagnostics workflow and stop the failing validation path.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    expect(state.plannerState.alternativeSkills).toEqual(
+      expect.arrayContaining(["acceptance-report", "release-checks"]),
+    );
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Fallback skills to consider: acceptance-report, release-checks",
     );
   });
 
@@ -189,6 +212,46 @@ describe("agentic-state", () => {
         "docs/memory-system-operations.md",
       ]),
     );
+    expect(record.alternativeSkills).toEqual([]);
     expect(record.templateCandidate).toBe(true);
+  });
+
+  it("marks failed procedural workflows as near-miss candidates", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Update the diagnostics workflow and recover from the failing path.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again in the diagnostics path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "acceptance-report", primaryEnv: "node" },
+        ],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again in the diagnostics path.",
+        },
+      ],
+      diffSignals: [],
+    });
+
+    expect(record.nearMissCandidate).toBe(true);
+    expect(record.alternativeSkills).toEqual(expect.arrayContaining(["acceptance-report"]));
+    expect(record.nextImprovement).toContain("alternative skills");
   });
 });

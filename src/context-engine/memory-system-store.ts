@@ -372,6 +372,7 @@ export type MemoryDiagnosticsReport = {
   health: MemoryStoreHealthReport;
   retrieval?: MemoryRetrievalObservabilityReport;
   acceptance?: MemoryAcceptanceReport;
+  agenticTrends?: MemoryAgenticTrendReport;
   failedAcceptanceScenarios: string[];
   maintenance?: {
     repair?: MemoryStoreMaintenanceReport;
@@ -382,6 +383,21 @@ export type MemoryDiagnosticsReport = {
 };
 
 export type MemoryDiagnosticsReportFormat = "json" | "summary" | "markdown";
+
+export type MemoryAgenticTrendReport = {
+  totalSignals: number;
+  observabilitySignals: number;
+  soakSignals: number;
+  qualityGateSignals: number;
+  missingFallbackSignals: number;
+  escalationSignals: number;
+  failingSoakSignals: number;
+  failingQualityGateSignals: number;
+  qualityFailureReasons: string[];
+  latestSummaries: string[];
+  trend: "stable" | "watch" | "regressing";
+  summary: string;
+};
 
 export type MemoryStoreMaintenanceReport = {
   action: "repair" | "recovery";
@@ -7736,6 +7752,81 @@ function userMessageForSuite(content: string): AgentMessage {
   } as AgentMessage;
 }
 
+function inspectMemoryAgenticTrends(
+  snapshot: MemoryStoreSnapshot,
+): MemoryAgenticTrendReport | undefined {
+  const agenticEntries = snapshot.longTermMemory
+    .filter((entry) =>
+      (entry.environmentTags ?? []).some((tag) => tag.startsWith("runtime:agentic-")),
+    )
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (agenticEntries.length === 0) {
+    return undefined;
+  }
+  const observabilitySignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("runtime:agentic-observability"),
+  ).length;
+  const soakSignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("runtime:agentic-soak"),
+  ).length;
+  const qualityGateSignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("runtime:agentic-quality-gate"),
+  ).length;
+  const missingFallbackSignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("agentic:missing-fallback"),
+  ).length;
+  const escalationSignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("agentic:escalation-required"),
+  ).length;
+  const failingSoakSignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("agentic:soak:fail"),
+  ).length;
+  const failingQualityGateSignals = agenticEntries.filter((entry) =>
+    (entry.environmentTags ?? []).includes("agentic:quality:fail"),
+  ).length;
+  const qualityFailureReasons = uniqueStrings(
+    agenticEntries.flatMap((entry) =>
+      (entry.environmentTags ?? [])
+        .filter((tag) => tag.startsWith("agentic:quality-failure:"))
+        .map((tag) => tag.replace("agentic:quality-failure:", "")),
+    ),
+  );
+  const latestSummaries = agenticEntries.slice(0, 3).map((entry) => clipText(entry.text, 160));
+  const trend =
+    failingQualityGateSignals > 0 || failingSoakSignals > 0
+      ? "regressing"
+      : missingFallbackSignals > 0 || escalationSignals > 0
+        ? "watch"
+        : "stable";
+  return {
+    totalSignals: agenticEntries.length,
+    observabilitySignals,
+    soakSignals,
+    qualityGateSignals,
+    missingFallbackSignals,
+    escalationSignals,
+    failingSoakSignals,
+    failingQualityGateSignals,
+    qualityFailureReasons,
+    latestSummaries,
+    trend,
+    summary: clipText(
+      [
+        `trend=${trend}`,
+        `signals=${agenticEntries.length}`,
+        `missing_fallback=${missingFallbackSignals}`,
+        `escalations=${escalationSignals}`,
+        `soak_failures=${failingSoakSignals}`,
+        `quality_failures=${failingQualityGateSignals}`,
+        qualityFailureReasons.length > 0 ? `reasons=${qualityFailureReasons.join(",")}` : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      220,
+    ),
+  };
+}
+
 export async function generateMemoryDiagnosticsReport(params: {
   workspaceDir: string;
   sessionId: string;
@@ -7776,6 +7867,7 @@ export async function generateMemoryDiagnosticsReport(params: {
     sessionId: params.sessionId,
     backendKind,
   });
+  const agenticTrends = inspectMemoryAgenticTrends(snapshot);
   const retrieval =
     params.messages && params.messages.length > 0
       ? inspectMemoryRetrievalObservability(snapshot, { messages: params.messages })
@@ -7797,6 +7889,11 @@ export async function generateMemoryDiagnosticsReport(params: {
     ...(failedAcceptanceScenarios.length > 0
       ? ["review failed acceptance scenarios before promoting the store"]
       : []),
+    ...(agenticTrends?.trend === "regressing"
+      ? ["investigate agentic quality regressions before promoting the store"]
+      : agenticTrends?.trend === "watch"
+        ? ["monitor agentic fallback and escalation drift before promotion"]
+        : []),
   ]);
   const summary = clipText(
     [
@@ -7804,6 +7901,7 @@ export async function generateMemoryDiagnosticsReport(params: {
       `health=${health.summary}`,
       retrieval ? `retrieval=${retrieval.summary}` : "",
       acceptance ? `acceptance=${acceptance.summary}` : "",
+      agenticTrends ? `agentic=${agenticTrends.summary}` : "",
       maintenance.repair ? `repair=${maintenance.repair.summary}` : "",
       maintenance.recovery ? `recovery=${maintenance.recovery.summary}` : "",
       recommendations.length > 0 ? `recommendations=${recommendations.length}` : "",
@@ -7820,6 +7918,7 @@ export async function generateMemoryDiagnosticsReport(params: {
     health,
     retrieval,
     acceptance,
+    agenticTrends,
     failedAcceptanceScenarios,
     maintenance: maintenance.repair || maintenance.recovery ? maintenance : undefined,
     recommendations,
@@ -7841,6 +7940,9 @@ export function formatMemoryDiagnosticsReport(
     }
     if (report.acceptance) {
       lines.push(`acceptance: ${report.acceptance.summary}`);
+    }
+    if (report.agenticTrends) {
+      lines.push(`agentic: ${report.agenticTrends.summary}`);
     }
     if (report.failedAcceptanceScenarios.length > 0) {
       lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
@@ -7877,6 +7979,22 @@ export function formatMemoryDiagnosticsReport(
     `- Entity-linked concepts: ${report.health.entityLinkedConceptCount}`,
     "",
   ];
+  if (report.agenticTrends) {
+    lines.push(
+      "## Agentic Trends",
+      "",
+      `- Summary: ${report.agenticTrends.summary}`,
+      `- Trend: ${report.agenticTrends.trend}`,
+      `- Total signals: ${report.agenticTrends.totalSignals}`,
+      `- Missing fallback signals: ${report.agenticTrends.missingFallbackSignals}`,
+      `- Escalation signals: ${report.agenticTrends.escalationSignals}`,
+      `- Failing soak signals: ${report.agenticTrends.failingSoakSignals}`,
+      `- Failing quality-gate signals: ${report.agenticTrends.failingQualityGateSignals}`,
+      `- Quality failure reasons: ${report.agenticTrends.qualityFailureReasons.length > 0 ? report.agenticTrends.qualityFailureReasons.join(", ") : "none"}`,
+      `- Latest summaries: ${report.agenticTrends.latestSummaries.length > 0 ? report.agenticTrends.latestSummaries.join("; ") : "none"}`,
+      "",
+    );
+  }
   if (report.retrieval) {
     lines.push(
       "## Retrieval",

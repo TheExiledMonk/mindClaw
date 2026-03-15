@@ -16,6 +16,7 @@ type CliArgs = {
   failOnWeakWinners: boolean;
   failOnFragileWinners: boolean;
   failOnEntityConflicts: boolean;
+  failOnAgenticRegressions: boolean;
   runRepair: boolean;
   runRecover: boolean;
   outputPath?: string;
@@ -33,6 +34,7 @@ function parseArgs(argv: string[]): CliArgs {
   let failOnWeakWinners = false;
   let failOnFragileWinners = false;
   let failOnEntityConflicts = false;
+  let failOnAgenticRegressions = false;
   let runRepair = false;
   let runRecover = false;
   let outputPath: string | undefined;
@@ -82,6 +84,10 @@ function parseArgs(argv: string[]): CliArgs {
     }
     if (arg === "--fail-on-entity-conflicts") {
       failOnEntityConflicts = true;
+      continue;
+    }
+    if (arg === "--fail-on-agentic-regressions") {
+      failOnAgenticRegressions = true;
       continue;
     }
     if (arg === "--run-repair") {
@@ -137,6 +143,7 @@ function parseArgs(argv: string[]): CliArgs {
     failOnWeakWinners,
     failOnFragileWinners,
     failOnEntityConflicts,
+    failOnAgenticRegressions,
     runRepair,
     runRecover,
     outputPath,
@@ -176,6 +183,9 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   }
   if (args.failOnEntityConflicts && report.health.contestedEntityConflictCount > 0) {
+    process.exitCode = 1;
+  }
+  if (args.failOnAgenticRegressions && report.agenticTrends?.trend === "regressing") {
     process.exitCode = 1;
   }
 }

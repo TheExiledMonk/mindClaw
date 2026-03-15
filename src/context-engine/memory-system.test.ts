@@ -2654,6 +2654,122 @@ describe("MemorySystemContextEngine", () => {
     expect(acceptanceSummary).toContain("scenarios:");
   });
 
+  it("surfaces agentic trend summaries in memory diagnostics", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-agentic-trends-"));
+    const sessionId = "agent:agentic-trends";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Track agentic regressions in memory diagnostics and release gating."),
+      ],
+      runtimeContext: {
+        agenticObservability: {
+          version: 1,
+          summary:
+            "retry=escalate autonomy=escalate risk=high failure=blocked_path fallback=missing",
+          retryClass: "escalate",
+          autonomyMode: "escalate",
+          riskLevel: "high",
+          failurePattern: "blocked_path",
+          suggestedSkill: undefined,
+          rankedSkills: ["memory-diagnostics"],
+          capabilityGaps: ["no_viable_fallback"],
+          overlappingSkills: [],
+          skillFamilies: [],
+          consolidationAction: "none",
+          workflowSteps: [],
+          hasViableFallback: false,
+          escalationRequired: true,
+          planSteps: [],
+          goalSatisfaction: "uncertain",
+          unresolvedCriteria: ["find a viable fallback"],
+          recommendations: ["Add or learn a viable fallback workflow before retrying."],
+        },
+        agenticSoak: {
+          passed: false,
+          totalScenarios: 2,
+          passedScenarios: 1,
+          failedScenarioIds: ["retry_replan_recover_complete"],
+          scenarios: [],
+          summary: "agentic soak 1/2 passed",
+        },
+        agenticQualityGate: {
+          passed: false,
+          acceptancePassed: true,
+          soakPassed: false,
+          diagnosticsPassed: false,
+          failReasons: ["soak_failed", "diagnostics_missing_fallback"],
+          acceptance: {
+            passed: true,
+            totalScenarios: 16,
+            passedScenarios: 16,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic acceptance 16/16 passed",
+          },
+          soak: {
+            passed: false,
+            totalScenarios: 2,
+            passedScenarios: 1,
+            failedScenarioIds: ["retry_replan_recover_complete"],
+            scenarios: [],
+            summary: "agentic soak 1/2 passed",
+          },
+          diagnostics: {
+            summary:
+              "retry=escalate autonomy=escalate risk=high failure=blocked_path fallback=missing",
+            retryClass: "escalate",
+            autonomyMode: "escalate",
+            riskLevel: "high",
+            failurePattern: "blocked_path",
+            suggestedSkill: undefined,
+            rankedSkills: ["memory-diagnostics"],
+            capabilityGaps: ["no_viable_fallback"],
+            overlappingSkills: [],
+            skillFamilies: [],
+            consolidationAction: "none",
+            workflowSteps: [],
+            hasViableFallback: false,
+            escalationRequired: true,
+            planSteps: [],
+            goalSatisfaction: "uncertain",
+            unresolvedCriteria: ["find a viable fallback"],
+            recommendations: ["Add or learn a viable fallback workflow before retrying."],
+          },
+          summary: "agentic quality gate acceptance=pass soak=fail diagnostics=fail",
+        },
+      } as never,
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+    });
+
+    expect(report.agenticTrends?.trend).toBe("regressing");
+    expect(report.agenticTrends?.missingFallbackSignals).toBeGreaterThan(0);
+    expect(report.agenticTrends?.qualityFailureReasons).toContain("diagnostics_missing_fallback");
+    expect(report.recommendations).toContain(
+      "investigate agentic quality regressions before promoting the store",
+    );
+    const summary = formatMemoryDiagnosticsReport(report, "summary");
+    const markdown = formatMemoryDiagnosticsReport(report, "markdown");
+    expect(summary).toContain("agentic:");
+    expect(markdown).toContain("## Agentic Trends");
+  });
+
   it("includes maintenance details when diagnostics runs repair", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-repair-"));
     const sessionId = "agent:diagnostics-repair";

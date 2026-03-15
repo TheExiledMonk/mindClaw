@@ -335,6 +335,7 @@ export type AgenticAcceptanceReport = {
   passedScenarios: number;
   failedScenarioIds: AgenticAcceptanceScenarioId[];
   scenarios: AgenticAcceptanceScenarioResult[];
+  clarificationTrendPolicyStatus?: "unknown" | "aligned_and_guarded";
   summary: string;
 };
 
@@ -5852,12 +5853,24 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     .map((scenario) => scenario.id);
   const passedScenarios = scenarios.length - failedScenarioIds.length;
   const passed = failedScenarioIds.length === 0;
+  const clarificationTrendPolicyAlignmentScenario = scenarios.find(
+    (scenario) => scenario.id === "clarification_trend_policy_alignment",
+  );
+  const clarificationTrendPolicyDriftGuardScenario = scenarios.find(
+    (scenario) => scenario.id === "clarification_trend_policy_drift_guard",
+  );
+  const clarificationTrendPolicyStatus: AgenticAcceptanceReport["clarificationTrendPolicyStatus"] =
+    clarificationTrendPolicyAlignmentScenario?.passed &&
+    clarificationTrendPolicyDriftGuardScenario?.passed
+      ? "aligned_and_guarded"
+      : "unknown";
   return {
     passed,
     totalScenarios: scenarios.length,
     passedScenarios,
     failedScenarioIds,
     scenarios,
+    clarificationTrendPolicyStatus,
     summary: `agentic acceptance ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -5872,6 +5885,7 @@ export function formatAgenticAcceptanceReport(
   if (format === "summary") {
     const lines = [
       report.summary,
+      `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "unknown"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary}${scenario.details ? ` details=${scenario.details}` : ""}`,
@@ -5884,6 +5898,7 @@ export function formatAgenticAcceptanceReport(
     "",
     `- Summary: ${report.summary}`,
     `- Passed: ${report.passed ? "yes" : "no"}`,
+    `- Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "unknown"}`,
     "",
     ...report.scenarios.map(
       (scenario) =>

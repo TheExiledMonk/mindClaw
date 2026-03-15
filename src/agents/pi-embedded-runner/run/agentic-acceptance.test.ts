@@ -7,6 +7,7 @@ describe("agentic acceptance suite", () => {
     expect(report.passed).toBe(true);
     expect(report.totalScenarios).toBeGreaterThanOrEqual(34);
     expect(report.failedScenarioIds).toEqual([]);
+    expect(report.clarificationTrendPolicyStatus).toBe("aligned_and_guarded");
     const recoveringScenario = report.scenarios.find(
       (scenario) => scenario.id === "recovering_skills_guidance_alignment",
     );
@@ -109,6 +110,9 @@ describe("agentic acceptance suite", () => {
     const report = runAgenticAcceptanceSuite();
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain("agentic acceptance");
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
+      "clarification_trend_policy_status=aligned_and_guarded",
+    );
+    expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
       "clarification_trend_policy_alignment",
     );
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain(
@@ -121,6 +125,9 @@ describe("agentic acceptance suite", () => {
     expect(formatAgenticAcceptanceReport(report, "summary")).toContain("blocking_policy=blocking");
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "# Agentic Acceptance Report",
+    );
+    expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
+      "Clarification trend policy status: aligned_and_guarded",
     );
     expect(formatAgenticAcceptanceReport(report, "markdown")).toContain(
       "soak_warning_policy=observe",

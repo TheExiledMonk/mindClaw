@@ -263,6 +263,50 @@ describe("agentic quality gate", () => {
     );
   });
 
+  it("surfaces normalized clarification recommendations for environment variables", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Run the deployment smoke test after the required environment variable is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+    });
+
+    const clarificationReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(clarificationReport.recommendations).toContain(
+      "Need clarification on: environment variable OPENAI_API_KEY",
+    );
+  });
+
   it("surfaces template-ready and merge-ready consolidation recommendations in the quality gate", () => {
     const templateDiagnostics = inspectAgenticExecutionObservability({
       taskState: {

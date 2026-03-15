@@ -1164,6 +1164,47 @@ describe("agentic-state", () => {
     );
   });
 
+  it("normalizes clarification payloads for environment variables and approval gates", () => {
+    const envVarState = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Run the deployment smoke test after the required environment variable is available.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+    });
+    const approvalState = buildAgenticExecutionState({
+      messages: [msg("user", "Deploy the production hotfix once the release approval is granted.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Approval required: production deployment",
+        },
+      ],
+    });
+
+    expect(inspectAgenticExecutionObservability(envVarState).clarificationSummary).toBe(
+      "Need clarification on: environment variable OPENAI_API_KEY",
+    );
+    expect(buildAgenticHandoffReport(envVarState).clarificationSummary).toBe(
+      "Need clarification on: environment variable OPENAI_API_KEY",
+    );
+    expect(inspectAgenticExecutionObservability(approvalState).clarificationSummary).toBe(
+      "Need clarification on: operator approval for production deployment",
+    );
+    expect(buildAgenticHandoffReport(approvalState).clarificationSummary).toBe(
+      "Need clarification on: operator approval for production deployment",
+    );
+  });
+
   it("prefers fallback over clarification for non-blocking missing-information failures", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Repair the release notes generation flow and keep moving.")],

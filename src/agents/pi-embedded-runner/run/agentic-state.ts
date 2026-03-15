@@ -313,7 +313,8 @@ export type AgenticAcceptanceScenarioId =
   | "guarded_handoff_alignment"
   | "concise_progress_alignment"
   | "clarification_alignment"
-  | "nonblocking_missing_information_alignment";
+  | "nonblocking_missing_information_alignment"
+  | "clarification_payload_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -2232,23 +2233,50 @@ function buildRepoFingerprint(params: {
   return `${workspace}:${relativePath}:${params.workspaceKind}:${languagePart}:${frameworkPart}:${validationPart}`;
 }
 
+function normalizeClarificationNeed(blocker: string): string {
+  const rawBlocker = blocker.replace(/^[^:]+:\s*/, "").trim();
+  const envVarMatch = rawBlocker.match(
+    /\b(?:missing(?:\s+required)?|required)\s+(?:environment variable|env var|env)\s*:?\s*([A-Z][A-Z0-9_]+)/i,
+  );
+  if (envVarMatch?.[1]) {
+    return `environment variable ${envVarMatch[1]}`;
+  }
+  const approvalMatch = rawBlocker.match(
+    /\b(?:approval required|requires approval|awaiting approval|needs approval)\b[:\s-]*(.*)$/i,
+  );
+  if (approvalMatch) {
+    const approvalTarget = approvalMatch[1]?.trim();
+    return approvalTarget ? `operator approval for ${approvalTarget}` : "operator approval";
+  }
+  const externalInputMatch = rawBlocker.match(
+    /\b(?:missing(?:\s+required)?|required|awaiting|needs?)\s+(external input|customer input|user input|request payload|dataset id|api contract|credentials?)\b[:\s-]*(.*)$/i,
+  );
+  if (externalInputMatch) {
+    const inputKind = externalInputMatch[1]?.trim().toLowerCase();
+    const inputTail = externalInputMatch[2]?.trim();
+    return inputTail ? `${inputKind} ${inputTail}` : inputKind;
+  }
+  return rawBlocker
+    .replace(
+      /^(?:missing(?:\s+required)?|required|unknown file|no such file|needs?)\s+(?:config\s+)?(?:file\s+)?/i,
+      "",
+    )
+    .replace(/^file:\s*/i, "")
+    .replace(/^:\s*/, "")
+    .trim();
+}
+
 function extractClarificationSummary(state: AgenticExecutionState): string | undefined {
   if (state.plannerState.retryClass !== "clarify") {
     return undefined;
   }
   const missingBlocker = state.taskState.blockers.find((blocker) =>
-    /\bmissing|not found|required|needs|unknown file|no such file\b/i.test(blocker),
+    /\bmissing|not found|required|needs|unknown file|no such file|approval|awaiting|environment variable|env var|external input|customer input|user input|credentials?\b/i.test(
+      blocker,
+    ),
   );
   if (missingBlocker) {
-    const normalizedBlocker = missingBlocker
-      .replace(/^[^:]+:\s*/, "")
-      .replace(
-        /^(?:missing(?:\s+required)?|required|unknown file|no such file|needs?)\s+(?:config\s+)?(?:file\s+)?/i,
-        "",
-      )
-      .replace(/^file:\s*/i, "")
-      .replace(/^:\s*/, "")
-      .trim();
+    const normalizedBlocker = normalizeClarificationNeed(missingBlocker);
     return `Need clarification on: ${truncate(normalizedBlocker, 140)}`;
   }
   const unresolved = state.verificationState.unresolvedCriteria[0];
@@ -5045,6 +5073,59 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Non-blocking missing-information failures now prefer fallback or replanning over premature clarification."
         : "Non-blocking missing-information failures still over-trigger clarification.",
       details: `outcome=${state.verificationState.outcome} retry=${state.plannerState.retryClass} suggested=${state.plannerState.suggestedSkill ?? "none"} clarification=${observability.clarificationSummary ?? "none"}`,
+    });
+  }
+
+  {
+    const envVarState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Run the deployment smoke test after the required environment variable is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required environment variable: OPENAI_API_KEY",
+        },
+      ],
+    });
+    const approvalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Deploy the production hotfix once the release approval is granted.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Approval required: production deployment",
+        },
+      ],
+    });
+    const envVarObservability = inspectAgenticExecutionObservability(envVarState);
+    const approvalObservability = inspectAgenticExecutionObservability(approvalState);
+    const passed =
+      envVarState.plannerState.retryClass === "clarify" &&
+      approvalState.plannerState.retryClass === "clarify" &&
+      envVarObservability.clarificationSummary ===
+        "Need clarification on: environment variable OPENAI_API_KEY" &&
+      approvalObservability.clarificationSummary ===
+        "Need clarification on: operator approval for production deployment";
+    scenarios.push({
+      id: "clarification_payload_alignment",
+      passed,
+      summary: passed
+        ? "Clarification payloads stay concrete for environment variables and approval-gated work."
+        : "Clarification payloads drifted for environment variables or approval-gated work.",
+      details: `env=${envVarObservability.clarificationSummary ?? "none"} approval=${approvalObservability.clarificationSummary ?? "none"}`,
     });
   }
 

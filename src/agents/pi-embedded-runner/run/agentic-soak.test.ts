@@ -49,6 +49,18 @@ describe("agentic soak suite", () => {
     expect(consolidationLifecycle?.phases.at(-1)?.details).toContain(
       "Memory-backed merge-ready families: diagnostics@general/node.",
     );
+
+    const failureDerivedLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "failure_derived_consolidation_replan",
+    );
+    expect(failureDerivedLifecycle?.phases[0]?.passed).toBe(true);
+    expect(failureDerivedLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(failureDerivedLifecycle?.phases[0]?.details).toContain(
+      "Memory-backed merge-ready families: diagnostics@debugging/node.",
+    );
+    expect(failureDerivedLifecycle?.phases.at(-1)?.details).toContain(
+      "Memory-backed template-ready families: verification@debugging/node.",
+    );
   });
 
   it("formats the soak report in summary and markdown forms", () => {

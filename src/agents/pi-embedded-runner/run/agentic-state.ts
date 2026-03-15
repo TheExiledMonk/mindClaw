@@ -283,7 +283,9 @@ export type AgenticAcceptanceScenarioId =
   | "durable_template_family_quality_alignment"
   | "durable_merge_family_quality_alignment"
   | "durable_merge_family_fallback_alignment"
-  | "durable_template_family_replan_alignment";
+  | "durable_template_family_replan_alignment"
+  | "failure_derived_merge_family_alignment"
+  | "failure_derived_template_family_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -306,7 +308,8 @@ export type AgenticSoakScenarioId =
   | "handoff_resume_completion"
   | "effectiveness_drift_recovery"
   | "recovered_watch_stabilization"
-  | "consolidation_mode_transition";
+  | "consolidation_mode_transition"
+  | "failure_derived_consolidation_replan";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -3932,6 +3935,141 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   }
 
   {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow and use repeated failed sibling evidence to choose the strongest same-family fallback.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=diagnostics-report,memory-diagnostics durable=true",
+      ].join("\n"),
+    });
+    const report = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(state),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        mergeFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    const passed =
+      state.plannerState.suggestedSkill === "diagnostics-report" &&
+      state.orchestrationState.primarySkill === "diagnostics-report" &&
+      state.orchestrationState.mergeCandidate &&
+      report.recommendations.includes(
+        "Memory-backed merge-ready families: diagnostics@debugging/node.",
+      );
+    scenarios.push({
+      id: "failure_derived_merge_family_alignment",
+      passed,
+      summary: passed
+        ? "Failure-derived merge family guidance can shift later replanning onto a sibling fallback."
+        : "Failure-derived merge family guidance did not steer later replanning cleanly.",
+      details: `suggested=${state.plannerState.suggestedSkill ?? "none"} primary=${state.orchestrationState.primarySkill ?? "none"} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the acceptance workflow without creating another specialized fork after the last near-miss.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Acceptance workflow validation nearly worked but still needs refinement.",
+        },
+      ],
+      availableSkills: ["acceptance-report"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=verification task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+      ].join("\n"),
+    });
+    const report = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(state),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        templateFamilies: ["verification@debugging/node"],
+      },
+    });
+    const passed =
+      !state.plannerState.shouldEscalate &&
+      state.orchestrationState.primarySkill === "acceptance-report" &&
+      state.orchestrationState.consolidationAction === "generalize_existing" &&
+      report.recommendations.includes(
+        "Memory-backed template-ready families: verification@debugging/node.",
+      );
+    scenarios.push({
+      id: "failure_derived_template_family_alignment",
+      passed,
+      summary: passed
+        ? "Failure-derived template family guidance can keep replanning inside the stable workflow family."
+        : "Failure-derived template family guidance did not preserve stable-family replanning.",
+      details: `retry=${state.plannerState.retryClass} escalate=${state.plannerState.shouldEscalate} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
     const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
@@ -4811,6 +4949,142 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       summary: passed
         ? "Long-run consolidation can stay template-oriented for one stable path and later shift into merge-oriented sibling consolidation."
         : "Template-vs-merge consolidation modes did not stay distinct across the soak lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
+  {
+    const failureMergeState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow and let repeated failed overlap evidence pick the strongest sibling path.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=diagnostics-report,memory-diagnostics durable=true",
+      ].join("\n"),
+    });
+    const failureMergeGate = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: inspectAgenticExecutionObservability(failureMergeState),
+      memoryTrend: {
+        trend: "watch",
+        mergeFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    const failureTemplateState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the acceptance workflow without creating another specialized fork after the previous near-miss.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Acceptance workflow validation nearly worked but still needs refinement.",
+        },
+      ],
+      availableSkills: ["acceptance-report"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=verification task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+      ].join("\n"),
+    });
+    const failureTemplateGate = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      diagnosticsOverride: inspectAgenticExecutionObservability(failureTemplateState),
+      memoryTrend: {
+        trend: "watch",
+        templateFamilies: ["verification@debugging/node"],
+      },
+    });
+    const phases = [
+      buildSoakPhaseResult({
+        label: "failure_derived_merge_replan",
+        state: failureMergeState,
+        passed:
+          failureMergeState.plannerState.suggestedSkill === "diagnostics-report" &&
+          failureMergeState.orchestrationState.primarySkill === "diagnostics-report" &&
+          failureMergeGate.recommendations.includes(
+            "Memory-backed merge-ready families: diagnostics@debugging/node.",
+          ),
+        details: `suggested=${failureMergeState.plannerState.suggestedSkill ?? "none"} recommendations=${failureMergeGate.recommendations.join("|")}`,
+      }),
+      buildSoakPhaseResult({
+        label: "failure_derived_template_replan",
+        state: failureTemplateState,
+        passed:
+          !failureTemplateState.plannerState.shouldEscalate &&
+          failureTemplateState.orchestrationState.consolidationAction === "generalize_existing" &&
+          failureTemplateGate.recommendations.includes(
+            "Memory-backed template-ready families: verification@debugging/node.",
+          ),
+        details: `retry=${failureTemplateState.plannerState.retryClass} recommendations=${failureTemplateGate.recommendations.join("|")}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "failure_derived_consolidation_replan",
+      passed,
+      summary: passed
+        ? "Repeated failed forks can later steer merge-oriented fallback and template-oriented reuse through the long-run gate."
+        : "Failure-derived consolidation signals did not stay aligned across the long-run replan lifecycle.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });

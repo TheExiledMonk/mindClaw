@@ -15,7 +15,7 @@ describe("memory system acceptance suite", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.scenarioCount).toBeGreaterThanOrEqual(6);
+    expect(report.scenarioCount).toBeGreaterThanOrEqual(8);
     expect(report.failedCount).toBe(0);
     expect(report.summary).toContain("acceptance");
     expect(report.scenarios.every((scenario) => scenario.details.length > 0)).toBe(true);
@@ -54,5 +54,27 @@ describe("memory system acceptance suite", () => {
     expect(runtime?.summary).toContain("branch=");
     expect(invalidation?.passed).toBe(true);
     expect(invalidation?.summary).toContain("superseded=");
+  });
+
+  it("includes entity resolution and store recovery scenarios", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-acceptance-"));
+
+    const report = await runMemoryAcceptanceSuite({
+      workspaceDir: tempDir,
+      sessionIdPrefix: "acceptance-entity-recovery",
+      backendKinds: ["fs-json", "sqlite-graph"],
+    });
+
+    const entityResolution = report.scenarios.find(
+      (scenario) => scenario.scenario === "entity_resolution",
+    );
+    const storeRecovery = report.scenarios.find(
+      (scenario) => scenario.scenario === "store_recovery",
+    );
+
+    expect(entityResolution?.passed).toBe(true);
+    expect(entityResolution?.summary).toContain("entity-visible=");
+    expect(storeRecovery?.passed).toBe(true);
+    expect(storeRecovery?.summary).toContain("recovered-long-term=");
   });
 });

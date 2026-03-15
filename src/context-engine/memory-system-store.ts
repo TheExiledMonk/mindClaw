@@ -235,11 +235,16 @@ export type MemoryStoreHealthReport = {
   sessionId: string;
   metadata: MemoryStoreMetadata;
   issues: string[];
+  recommendations: string[];
   summary: string;
   contestedConceptCount: number;
+  scopedAlternativeConceptCount: number;
+  entityLinkedConceptCount: number;
   supersededMemoryCount: number;
   permanentEligibleCount: number;
   staleMemoryCount: number;
+  backupAvailable: boolean;
+  recoveryRecommended: boolean;
 };
 
 export type MemoryCompilerStageName =
@@ -322,9 +327,11 @@ export type MemoryAcceptanceScenarioResult = {
     | "drift_stability"
     | "scope_isolation"
     | "contested_visibility"
+    | "entity_resolution"
     | "backend_parity"
     | "runtime_lifecycle"
-    | "permanence_invalidation";
+    | "permanence_invalidation"
+    | "store_recovery";
   passed: boolean;
   summary: string;
   details: string[];
@@ -347,6 +354,7 @@ export type MemoryDiagnosticsReport = {
   health: MemoryStoreHealthReport;
   retrieval?: MemoryRetrievalObservabilityReport;
   acceptance?: MemoryAcceptanceReport;
+  recommendations: string[];
   summary: string;
 };
 
@@ -5303,6 +5311,58 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
+  const entityFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:entity`,
+    messages: [
+      userMessageForSuite(
+        "Use the permanent memory-system path in src/context-engine/memory-system.ts on branch feature/memory-v2.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const entitySecond = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:entity`,
+    previous: entityFirst,
+    messages: [
+      userMessageForSuite("Use the permanent path in memory-system.ts on feature/memory-v2."),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const entityPacket = retrieveMemoryContextPacket(entitySecond, {
+    messages: [userMessageForSuite("On feature/memory-v2, what should we do in memory-system.ts?")],
+  });
+  const entityConstraintCount = new Set(
+    entitySecond.longTermMemory
+      .filter(
+        (entry) =>
+          entry.artifactRefs.includes("src/context-engine/memory-system.ts") &&
+          entry.ontologyKind === "constraint",
+      )
+      .map((entry) => entry.conceptKey),
+  ).size;
+  const entityVisible = entityPacket.retrievalItems.some(
+    (item) =>
+      item.reason.includes("entities=") &&
+      item.reason.includes("memory-system.ts") &&
+      item.text.includes("permanent"),
+  );
+  scenarios.push({
+    scenario: "entity_resolution",
+    passed: entityConstraintCount === 1 && entityVisible,
+    summary: `entity concepts=${entityConstraintCount} entity-visible=${entityVisible}`,
+    details: entityPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const parityCompiled = compileMemoryState({
     sessionId: `${sessionIdPrefix}:parity`,
     messages: [
@@ -5482,6 +5542,53 @@ export async function runMemoryAcceptanceSuite(params: {
     ],
   });
 
+  const recoveryWorkspaceDir = path.join(params.workspaceDir, `${MEMORY_SYSTEM_DIRNAME}-recovery`);
+  await fs.mkdir(recoveryWorkspaceDir, { recursive: true });
+  const recoveryCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:recovery`,
+    messages: [
+      userMessageForSuite(
+        "Persist the permanent memory-system path in src/context-engine/memory-system.ts for recovery validation.",
+      ),
+    ],
+  });
+  await persistMemoryStoreSnapshot({
+    workspaceDir: recoveryWorkspaceDir,
+    sessionId: `${sessionIdPrefix}:recovery`,
+    backendKind: "sqlite-graph",
+    workingMemory: recoveryCompiled.workingMemory,
+    longTermMemory: recoveryCompiled.longTermMemory,
+    pendingSignificance: recoveryCompiled.pendingSignificance,
+    permanentMemory: recoveryCompiled.permanentMemory,
+    graph: recoveryCompiled.graph,
+  });
+  const recoveryPaths = resolveStorePaths(recoveryWorkspaceDir, `${sessionIdPrefix}:recovery`);
+  await fs.writeFile(path.join(recoveryPaths.rootDir, SQLITE_STORE_FILENAME), "broken");
+  const recoveredSnapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: recoveryWorkspaceDir,
+    sessionId: `${sessionIdPrefix}:recovery`,
+    backendKind: "sqlite-graph",
+  });
+  const recoveryHealth = await inspectMemoryStoreHealth({
+    workspaceDir: recoveryWorkspaceDir,
+    sessionId: `${sessionIdPrefix}:recovery`,
+    backendKind: "sqlite-graph",
+  });
+  scenarios.push({
+    scenario: "store_recovery",
+    passed:
+      recoveredSnapshot.longTermMemory.length > 0 &&
+      recoveryHealth.backupAvailable &&
+      recoveryHealth.metadata.lastIntegrityCheckResult === "ok",
+    summary: `recovered-long-term=${recoveredSnapshot.longTermMemory.length} integrity=${recoveryHealth.metadata.lastIntegrityCheckResult ?? "missing"}`,
+    details: [
+      recoveredSnapshot.longTermMemory.map((entry) => entry.id).join(","),
+      recoveryHealth.summary,
+      ...recoveryHealth.issues,
+      ...recoveryHealth.recommendations,
+    ].filter(Boolean),
+  });
+
   const passedCount = scenarios.filter((scenario) => scenario.passed).length;
   const failedCount = scenarios.length - passedCount;
   return {
@@ -5535,12 +5642,19 @@ export async function generateMemoryDiagnosticsReport(params: {
         backendKinds: params.acceptanceBackendKinds,
       })
     : undefined;
+  const recommendations = uniqueStrings([
+    ...health.recommendations,
+    ...(acceptance && !acceptance.passed
+      ? ["review failed acceptance scenarios before promoting the store"]
+      : []),
+  ]);
   const summary = clipText(
     [
       `backend=${backendKind}`,
       `health=${health.summary}`,
       retrieval ? `retrieval=${retrieval.summary}` : "",
       acceptance ? `acceptance=${acceptance.summary}` : "",
+      recommendations.length > 0 ? `recommendations=${recommendations.length}` : "",
     ]
       .filter(Boolean)
       .join(" | "),
@@ -5554,6 +5668,7 @@ export async function generateMemoryDiagnosticsReport(params: {
     health,
     retrieval,
     acceptance,
+    recommendations,
     summary,
   };
 }
@@ -6262,42 +6377,6 @@ function buildPersistedMemoryAdjudications(params: {
   entries: LongTermMemoryEntry[];
   revisions: PersistedMemoryRevision[];
 }): PersistedMemoryAdjudication[] {
-  const scoreEntry = (entry: LongTermMemoryEntry, history: PersistedMemoryRevision[]): number => {
-    const recencyDays = Math.max(0, (Date.now() - entry.updatedAt) / (1000 * 60 * 60 * 24));
-    const recencyScore = Math.max(0, 1 - recencyDays / 30);
-    const sourceScore =
-      entry.sourceType === "direct_observation"
-        ? 0.18
-        : entry.sourceType === "user_stated"
-          ? 0.14
-          : entry.sourceType === "summary_derived"
-            ? 0.08
-            : 0.1;
-    const importanceScore =
-      entry.importanceClass === "critical"
-        ? 0.16
-        : entry.importanceClass === "useful"
-          ? 0.1
-          : entry.importanceClass === "temporary"
-            ? -0.08
-            : -0.12;
-    const revisionSupport = Math.min(0.18, (entry.revisionCount + history.length) * 0.03);
-    const artifactSupport = Math.min(0.12, (entry.artifactRefs ?? []).length * 0.04);
-    const contradictionPenalty =
-      entry.contradictionCount > 0 || entry.adjudicationStatus === "contested" ? 0.22 : 0;
-    const supersededPenalty = entry.activeStatus === "superseded" ? 0.28 : 0;
-    return (
-      entry.confidence * 0.34 +
-      entry.strength * 0.22 +
-      recencyScore * 0.12 +
-      sourceScore +
-      importanceScore +
-      revisionSupport +
-      artifactSupport -
-      contradictionPenalty -
-      supersededPenalty
-    );
-  };
   const entriesByConcept = new Map<string, LongTermMemoryEntry[]>();
   const entriesByConceptFamily = new Map<string, LongTermMemoryEntry[]>();
   const entriesByEntityId = new Map<string, LongTermMemoryEntry[]>();
@@ -6322,6 +6401,63 @@ function buildPersistedMemoryAdjudications(params: {
     bucket.push(revision);
     revisionsByConcept.set(revision.conceptId, bucket);
   }
+
+  const scoreEntry = (entry: LongTermMemoryEntry, history: PersistedMemoryRevision[]): number => {
+    const recencyDays = Math.max(0, (Date.now() - entry.updatedAt) / (1000 * 60 * 60 * 24));
+    const recencyScore = Math.max(0, 1 - recencyDays / 30);
+    const sourceScore =
+      entry.sourceType === "direct_observation"
+        ? 0.18
+        : entry.sourceType === "user_stated"
+          ? 0.14
+          : entry.sourceType === "summary_derived"
+            ? 0.08
+            : 0.1;
+    const importanceScore =
+      entry.importanceClass === "critical"
+        ? 0.16
+        : entry.importanceClass === "useful"
+          ? 0.1
+          : entry.importanceClass === "temporary"
+            ? -0.08
+            : -0.12;
+    const revisionSupport = Math.min(0.18, (entry.revisionCount + history.length) * 0.03);
+    const artifactSupport = Math.min(0.12, (entry.artifactRefs ?? []).length * 0.04);
+    const contradictionPenalty =
+      entry.contradictionCount > 0 || entry.adjudicationStatus === "contested" ? 0.22 : 0;
+    const supersededPenalty = entry.activeStatus === "superseded" ? 0.28 : 0;
+    const entityNeighbors = uniqueIds(entry.entityIds ?? []).flatMap(
+      (entityId) => entriesByEntityId.get(entityId) ?? [],
+    );
+    const entityConsensusSupport = Math.min(
+      0.18,
+      entityNeighbors.filter(
+        (neighbor) =>
+          neighbor.id !== entry.id &&
+          neighbor.activeStatus !== "superseded" &&
+          !isContradictoryPair(entry, neighbor),
+      ).length * 0.05,
+    );
+    const entityConflictPenalty = Math.min(
+      0.24,
+      entityNeighbors.filter(
+        (neighbor) => neighbor.id !== entry.id && isContradictoryPair(entry, neighbor),
+      ).length * 0.08,
+    );
+    return (
+      entry.confidence * 0.34 +
+      entry.strength * 0.22 +
+      recencyScore * 0.12 +
+      sourceScore +
+      importanceScore +
+      revisionSupport +
+      artifactSupport -
+      entityConflictPenalty +
+      entityConsensusSupport -
+      contradictionPenalty -
+      supersededPenalty
+    );
+  };
 
   const adjudications: PersistedMemoryAdjudication[] = [];
   for (const [conceptId, conceptEntries] of entriesByConcept.entries()) {
@@ -6352,6 +6488,9 @@ function buildPersistedMemoryAdjudications(params: {
     const scoreGap = winningScore - runnerUpScore;
     const conceptFamilyKey = getEntryConceptFamilyKey(winner ?? conceptEntries[0]);
     const entityIds = uniqueIds(conceptEntries.flatMap((entry) => entry.entityIds ?? []));
+    const entityNeighborEntries = entityIds.flatMap(
+      (entityId) => entriesByEntityId.get(entityId) ?? [],
+    );
     const losingMemoryIds = conceptEntries
       .filter((entry) => entry.id !== winner?.id)
       .map((entry) => entry.id);
@@ -6359,13 +6498,17 @@ function buildPersistedMemoryAdjudications(params: {
     const familyAlternativeEntries = (entriesByConceptFamily.get(conceptFamilyKey) ?? []).filter(
       (entry) => getEntryConceptId(entry) !== conceptId,
     );
-    const entityAlternativeEntries = entityIds.flatMap(
-      (entityId) => entriesByEntityId.get(entityId) ?? [],
-    );
+    const entityAlternativeEntries = entityNeighborEntries;
     const alternativeConceptIds = uniqueIds(
       [...familyAlternativeEntries, ...entityAlternativeEntries]
         .filter((entry) => getEntryConceptId(entry) !== conceptId)
         .filter((entry) => buildScopeSignature(entry) !== winnerScopeSignature)
+        .map((entry) => getEntryConceptId(entry)),
+    );
+    const conflictingEntityAlternatives = uniqueIds(
+      entityNeighborEntries
+        .filter((entry) => getEntryConceptId(entry) !== conceptId)
+        .filter((entry) => isContradictoryPair(entry, winner ?? conceptEntries[0]))
         .map((entry) => getEntryConceptId(entry)),
     );
     let status: MemoryAdjudicationStatus = winner?.adjudicationStatus ?? "authoritative";
@@ -6384,6 +6527,11 @@ function buildPersistedMemoryAdjudications(params: {
       status = "contested";
       resolutionKind = "contested";
       rationale = "weighted evidence gap between competing concept observations is too small";
+    } else if (conflictingEntityAlternatives.length > 0 && scoreGap < 0.14) {
+      status = "contested";
+      resolutionKind = "contested";
+      rationale =
+        "shared canonical entities point to conflicting concept states without enough winning margin";
     } else if (alternativeConceptIds.length > 0) {
       status = winner?.activeStatus === "superseded" ? "superseded" : "authoritative";
       resolutionKind = "scoped_alternative";
@@ -7144,9 +7292,29 @@ export async function inspectMemoryStoreHealth(params: {
     sessionId: params.sessionId,
     backendKind,
   });
+  const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  const backupAvailable = await fs
+    .stat(paths.backupFile)
+    .then(() => true)
+    .catch(() => false);
+  const adjudications = buildPersistedMemoryAdjudications({
+    sessionId: params.sessionId,
+    entries: snapshot.longTermMemory,
+    revisions: collectPersistedMemoryRevisions(snapshot.longTermMemory),
+  });
   const contestedConceptCount = new Set(
     snapshot.longTermMemory
       .filter((entry) => entry.adjudicationStatus === "contested")
+      .map((entry) => getEntryConceptId(entry)),
+  ).size;
+  const scopedAlternativeConceptCount = new Set(
+    adjudications
+      .filter((item) => item.resolutionKind === "scoped_alternative")
+      .map((item) => item.conceptId),
+  ).size;
+  const entityLinkedConceptCount = new Set(
+    snapshot.longTermMemory
+      .filter((entry) => (entry.entityIds?.length ?? 0) > 0)
       .map((entry) => getEntryConceptId(entry)),
   ).size;
   const supersededMemoryCount = snapshot.longTermMemory.filter(
@@ -7172,15 +7340,49 @@ export async function inspectMemoryStoreHealth(params: {
   if (integrityStatus !== undefined && integrityStatus !== "ok") {
     issues.push(`integrity status: ${integrityStatus}`);
   }
+  if (backendKind === "sqlite-graph" && !metadata.schemaVersion) {
+    issues.push("sqlite-graph metadata missing schema version");
+  }
+  if (!backupAvailable) {
+    issues.push("backup bundle missing");
+  }
+  const recommendations: string[] = [];
+  if (contestedConceptCount > 0) {
+    recommendations.push("run diagnostics acceptance and inspect contested concept adjudications");
+  }
+  if (scopedAlternativeConceptCount > 0) {
+    recommendations.push(
+      "review scoped alternatives for explicit version/profile/customer boundaries",
+    );
+  }
+  if (staleMemoryCount > Math.max(8, Math.floor(snapshot.longTermMemory.length * 0.35))) {
+    recommendations.push("run sleep review or archival cleanup to reduce stale memory pressure");
+  }
+  if (!backupAvailable) {
+    recommendations.push("persist the store once to create a recovery backup bundle");
+  }
+  if (backendKind === "sqlite-graph" && !metadata.schemaVersion) {
+    recommendations.push("run store repair to rewrite sqlite metadata and migration state");
+  }
+  if (recommendations.length === 0) {
+    recommendations.push("no immediate repair action recommended");
+  }
+  const recoveryRecommended =
+    (integrityStatus !== undefined && integrityStatus !== "ok") ||
+    !backupAvailable ||
+    (backendKind === "sqlite-graph" && !metadata.schemaVersion);
   const summary = clipText(
     [
       `backend=${backendKind}`,
       `long-term=${snapshot.longTermMemory.length}`,
       `concepts=${metadata.conceptCount ?? 0}`,
       `contested=${contestedConceptCount}`,
+      `scoped-alternatives=${scopedAlternativeConceptCount}`,
+      `entity-linked=${entityLinkedConceptCount}`,
       `superseded=${supersededMemoryCount}`,
       `stale=${staleMemoryCount}`,
       `permanent-eligible=${permanentEligibleCount}`,
+      `backup=${backupAvailable ? "yes" : "no"}`,
       issues[0] ? `issues=${issues.join("; ")}` : "issues=none",
     ].join(" | "),
     320,
@@ -7190,10 +7392,15 @@ export async function inspectMemoryStoreHealth(params: {
     sessionId: params.sessionId,
     metadata,
     issues,
+    recommendations,
     summary,
     contestedConceptCount,
+    scopedAlternativeConceptCount,
+    entityLinkedConceptCount,
     supersededMemoryCount,
     permanentEligibleCount,
     staleMemoryCount,
+    backupAvailable,
+    recoveryRecommended,
   };
 }

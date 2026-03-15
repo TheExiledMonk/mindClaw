@@ -8,6 +8,7 @@ type CliArgs = {
   backendKind?: "fs-json" | "sqlite-doc" | "sqlite-graph";
   includeAcceptance: boolean;
   acceptanceBackendKinds?: Array<"fs-json" | "sqlite-doc" | "sqlite-graph">;
+  outputPath?: string;
   messages: AgentMessage[];
 };
 
@@ -16,6 +17,7 @@ function parseArgs(argv: string[]): CliArgs {
   let sessionId = "default";
   let backendKind: CliArgs["backendKind"];
   let includeAcceptance = false;
+  let outputPath: string | undefined;
   const acceptanceBackendKinds: Array<"fs-json" | "sqlite-doc" | "sqlite-graph"> = [];
   const messages: AgentMessage[] = [];
 
@@ -50,6 +52,11 @@ function parseArgs(argv: string[]): CliArgs {
       index += 1;
       continue;
     }
+    if (arg === "--out" && next) {
+      outputPath = next;
+      index += 1;
+      continue;
+    }
     if (arg === "--message" && next) {
       messages.push({
         role: "user",
@@ -67,6 +74,7 @@ function parseArgs(argv: string[]): CliArgs {
     backendKind,
     includeAcceptance,
     acceptanceBackendKinds: acceptanceBackendKinds.length > 0 ? acceptanceBackendKinds : undefined,
+    outputPath,
     messages,
   };
 }
@@ -81,7 +89,12 @@ async function main(): Promise<void> {
     includeAcceptance: args.includeAcceptance,
     acceptanceBackendKinds: args.acceptanceBackendKinds,
   });
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  const payload = `${JSON.stringify(report, null, 2)}\n`;
+  if (args.outputPath) {
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(args.outputPath, payload, "utf8");
+  }
+  process.stdout.write(payload);
 }
 
 await main();

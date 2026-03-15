@@ -2226,6 +2226,8 @@ describe("MemorySystemContextEngine", () => {
     expect(health.summary).toContain("backend=sqlite-graph");
     expect(health.contestedConceptCount).toBeGreaterThan(0);
     expect(Array.isArray(health.issues)).toBe(true);
+    expect(Array.isArray(health.recommendations)).toBe(true);
+    expect(health.backupAvailable).toBe(true);
   });
 
   it("reports explicit compiler stages and retrieval observability", () => {
@@ -2299,7 +2301,8 @@ describe("MemorySystemContextEngine", () => {
     expect(report.summary).toContain("backend=sqlite-graph");
     expect(report.health.summary).toContain("backend=sqlite-graph");
     expect(report.retrieval?.summary).toContain("task=");
-    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(4);
+    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(8);
+    expect(report.recommendations.length).toBeGreaterThan(0);
   });
 
   it("materializes entity aliases from scope, artifact, and branch context", async () => {

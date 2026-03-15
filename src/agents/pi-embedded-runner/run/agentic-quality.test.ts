@@ -212,6 +212,7 @@ describe("agentic quality gate", () => {
     expect(protectedReport.diagnostics.workspaceKind).toBe("project");
     expect(protectedReport.diagnostics.branchConventions.length).toBeGreaterThan(0);
     expect(protectedReport.diagnostics.permissionSignals.length).toBeGreaterThan(0);
+    expect(protectedReport.protectedBranchGovernanceStatus).toBe("guarded");
     expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
       "workspace_kind=project",
     );
@@ -221,6 +222,9 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
       `permission_signals=${protectedReport.diagnostics.permissionSignals.join(",")}`,
     );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "protected_branch_governance_status=guarded",
+    );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Workspace kind: project",
     );
@@ -229,6 +233,9 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       `Permission signals: ${protectedReport.diagnostics.permissionSignals.join(", ")}`,
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Protected branch governance status: guarded",
     );
 
     const validationThinState = buildAgenticExecutionState({
@@ -277,11 +284,18 @@ describe("agentic quality gate", () => {
       "Capture an observed validation command before allowing another retry on project work.",
     );
     expect(validationThinReport.diagnostics.validationCommands.length).toBeGreaterThan(0);
+    expect(validationThinReport.validationReadinessStatus).toBe("observed");
     expect(formatAgenticQualityGateReport(validationThinReport, "summary")).toContain(
       `validation_commands=${validationThinReport.diagnostics.validationCommands.join(",")}`,
     );
+    expect(formatAgenticQualityGateReport(validationThinReport, "summary")).toContain(
+      "validation_readiness_status=observed",
+    );
     expect(formatAgenticQualityGateReport(validationThinReport, "markdown")).toContain(
       `Validation commands: ${validationThinReport.diagnostics.validationCommands.join(" | ")}`,
+    );
+    expect(formatAgenticQualityGateReport(validationThinReport, "markdown")).toContain(
+      "Validation readiness status: observed",
     );
   });
 

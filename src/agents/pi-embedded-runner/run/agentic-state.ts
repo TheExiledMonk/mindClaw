@@ -415,6 +415,8 @@ export type AgenticQualityGateReport = {
   clarificationTrendPolicyAlignment: "aligned" | "drift";
   clarificationTrendPolicyStatus: "none" | "observe_only" | "blocking";
   crossLayerTrendPolicyStatus: "consistent" | "divergent";
+  protectedBranchGovernanceStatus: "unknown" | "guarded";
+  validationReadinessStatus: "unknown" | "observed";
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -685,6 +687,22 @@ function deriveSoakEnvironmentBoundaryStatus(
     (scenario) => scenario.id === "environment_guarded_retry_lifecycle",
   );
   return environmentGuardedRetryLifecycle?.passed ? "bounded_and_guarded" : "unknown";
+}
+
+function deriveQualityProtectedBranchGovernanceStatus(
+  diagnostics: AgenticExecutionObservabilityReport,
+): AgenticQualityGateReport["protectedBranchGovernanceStatus"] {
+  return diagnostics.permissionSignals.length > 0 &&
+    diagnostics.branchConventions.length > 0 &&
+    diagnostics.autonomyMode === "approval_required"
+    ? "guarded"
+    : "unknown";
+}
+
+function deriveQualityValidationReadinessStatus(
+  diagnostics: AgenticExecutionObservabilityReport,
+): AgenticQualityGateReport["validationReadinessStatus"] {
+  return diagnostics.validationCommands.length > 0 ? "observed" : "unknown";
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -7759,6 +7777,8 @@ export function runAgenticQualityGate(params?: {
   const crossLayerTrendPolicyStatus = deriveCrossLayerTrendPolicyStatus(
     clarificationTrendPolicyAlignment,
   );
+  const protectedBranchGovernanceStatus = deriveQualityProtectedBranchGovernanceStatus(diagnostics);
+  const validationReadinessStatus = deriveQualityValidationReadinessStatus(diagnostics);
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7857,6 +7877,8 @@ export function runAgenticQualityGate(params?: {
     clarificationTrendPolicyAlignment,
     clarificationTrendPolicyStatus,
     crossLayerTrendPolicyStatus,
+    protectedBranchGovernanceStatus,
+    validationReadinessStatus,
     acceptance,
     soak,
     diagnostics,
@@ -7901,6 +7923,8 @@ export function formatAgenticQualityGateReport(
       `validation_commands=${report.diagnostics.validationCommands.length > 0 ? report.diagnostics.validationCommands.join(",") : "none"}`,
       `branch_conventions=${report.diagnostics.branchConventions.length > 0 ? report.diagnostics.branchConventions.join(",") : "none"}`,
       `permission_signals=${report.diagnostics.permissionSignals.length > 0 ? report.diagnostics.permissionSignals.join(",") : "none"}`,
+      `protected_branch_governance_status=${report.protectedBranchGovernanceStatus}`,
+      `validation_readiness_status=${report.validationReadinessStatus}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
       `clarification_profile=${report.clarificationProfile}`,
@@ -7948,6 +7972,8 @@ export function formatAgenticQualityGateReport(
     `- Validation commands: ${report.diagnostics.validationCommands.length > 0 ? report.diagnostics.validationCommands.join(" | ") : "none"}`,
     `- Branch conventions: ${report.diagnostics.branchConventions.length > 0 ? report.diagnostics.branchConventions.join(", ") : "none"}`,
     `- Permission signals: ${report.diagnostics.permissionSignals.length > 0 ? report.diagnostics.permissionSignals.join(", ") : "none"}`,
+    `- Protected branch governance status: ${report.protectedBranchGovernanceStatus}`,
+    `- Validation readiness status: ${report.validationReadinessStatus}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
     `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,

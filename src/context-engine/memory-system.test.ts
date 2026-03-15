@@ -1471,8 +1471,10 @@ describe("memory system store", () => {
     expect(compiled.review.contradictoryMemoryIds.length).toBeGreaterThan(0);
     expect(compiled.review.supersededConceptIds.length).toBeGreaterThan(0);
     expect(compiled.review.contradictoryConceptIds.length).toBeGreaterThan(0);
+    expect(compiled.review.contestedRevisionConceptIds.length).toBeGreaterThan(0);
+    expect(compiled.review.revisedConceptIds.length).toBeGreaterThan(0);
     expect(compiled.workingMemory.carryForwardSummary).toContain("Contradictions need resolution");
-    expect(compiled.workingMemory.carryForwardSummary).toContain("Superseded memories to retire");
+    expect(compiled.workingMemory.carryForwardSummary).toContain("Concepts with contested");
   });
 });
 

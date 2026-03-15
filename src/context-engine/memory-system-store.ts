@@ -222,6 +222,8 @@ export type MemoryReviewResult = {
   contradictoryConceptIds: string[];
   supersededMemoryIds: string[];
   supersededConceptIds: string[];
+  contestedRevisionConceptIds: string[];
+  revisedConceptIds: string[];
   permanentEligibleIds: string[];
   permanentEligibleConceptIds: string[];
   permanentDeferredIds: string[];
@@ -2066,10 +2068,15 @@ function reviewMemoryState(params: {
   workingMemory: WorkingMemorySnapshot;
   longTermMemory: LongTermMemoryEntry[];
   pendingSignificance: PendingMemoryEntry[];
+  revisions?: PersistedMemoryRevision[];
 }): MemoryReviewResult {
+  const longTermMemory = reviseReviewInputsFromHistory({
+    entries: params.longTermMemory,
+    revisions: params.revisions ?? [],
+  });
   const conceptIdsFor = (entries: LongTermMemoryEntry[]) =>
     uniqueIds(entries.map((entry) => getEntryConceptId(entry))).slice(0, MAX_WORKING_ITEMS);
-  const archivedMemoryIds = params.longTermMemory
+  const archivedMemoryIds = longTermMemory
     .filter(
       (entry) =>
         ((entry.activeStatus === "superseded" && entry.compressionState === "latent") ||
@@ -2077,47 +2084,59 @@ function reviewMemoryState(params: {
         entry.accessCount === 0,
     )
     .map((entry) => entry.id);
-  const staleMemoryIds = params.longTermMemory
+  const staleMemoryIds = longTermMemory
     .filter((entry) => entry.activeStatus === "stale" || entry.compressionState === "latent")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
   const reviewedPendingIds = params.pendingSignificance
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
-  const contradictoryMemoryIds = params.longTermMemory
+  const contradictoryMemoryIds = longTermMemory
     .filter((entry) => entry.contradictionCount > 0)
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
   const contradictoryConceptIds = conceptIdsFor(
-    params.longTermMemory.filter((entry) => entry.contradictionCount > 0),
+    longTermMemory.filter((entry) => entry.contradictionCount > 0),
   );
-  const supersededMemoryIds = params.longTermMemory
+  const supersededMemoryIds = longTermMemory
     .filter((entry) => entry.activeStatus === "superseded")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
   const supersededConceptIds = conceptIdsFor(
-    params.longTermMemory.filter((entry) => entry.activeStatus === "superseded"),
+    longTermMemory.filter((entry) => entry.activeStatus === "superseded"),
   );
-  const permanentEligibleIds = params.longTermMemory
+  const contestedRevisionConceptIds = uniqueIds(
+    (params.revisions ?? [])
+      .filter((revision) => revision.adjudicationStatus === "contested")
+      .map((revision) => revision.conceptId),
+  ).slice(0, MAX_WORKING_ITEMS);
+  const revisedConceptIds = uniqueIds(
+    (params.revisions ?? [])
+      .filter(
+        (revision) => revision.revisionKind !== "new" && revision.revisionKind !== "reasserted",
+      )
+      .map((revision) => revision.conceptId),
+  ).slice(0, MAX_WORKING_ITEMS);
+  const permanentEligibleIds = longTermMemory
     .filter((entry) => entry.permanenceStatus === "eligible")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
   const permanentEligibleConceptIds = conceptIdsFor(
-    params.longTermMemory.filter((entry) => entry.permanenceStatus === "eligible"),
+    longTermMemory.filter((entry) => entry.permanenceStatus === "eligible"),
   );
-  const permanentDeferredIds = params.longTermMemory
+  const permanentDeferredIds = longTermMemory
     .filter((entry) => entry.permanenceStatus === "deferred")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
   const permanentDeferredConceptIds = conceptIdsFor(
-    params.longTermMemory.filter((entry) => entry.permanenceStatus === "deferred"),
+    longTermMemory.filter((entry) => entry.permanenceStatus === "deferred"),
   );
-  const permanentBlockedIds = params.longTermMemory
+  const permanentBlockedIds = longTermMemory
     .filter((entry) => entry.permanenceStatus === "blocked")
     .map((entry) => entry.id)
     .slice(0, MAX_WORKING_ITEMS);
   const permanentBlockedConceptIds = conceptIdsFor(
-    params.longTermMemory.filter((entry) => entry.permanenceStatus === "blocked"),
+    longTermMemory.filter((entry) => entry.permanenceStatus === "blocked"),
   );
   const carryForwardSummary = clipText(
     [
@@ -2127,6 +2146,9 @@ function reviewMemoryState(params: {
       params.pendingSignificance[0] ? `Pending review: ${params.pendingSignificance[0].text}` : "",
       contradictoryMemoryIds[0]
         ? `Contradictions need resolution: ${contradictoryMemoryIds.length}`
+        : "",
+      contestedRevisionConceptIds[0]
+        ? `Concepts with contested revision history: ${contestedRevisionConceptIds.length}`
         : "",
       supersededMemoryIds[0] ? `Superseded memories to retire: ${supersededMemoryIds.length}` : "",
       permanentDeferredIds[0]
@@ -2150,6 +2172,8 @@ function reviewMemoryState(params: {
     contradictoryConceptIds,
     supersededMemoryIds,
     supersededConceptIds,
+    contestedRevisionConceptIds,
+    revisedConceptIds,
     permanentEligibleIds,
     permanentEligibleConceptIds,
     permanentDeferredIds,
@@ -2512,6 +2536,7 @@ export function compileMemoryState(params: {
     workingMemory: nextWorkingMemory,
     longTermMemory: nextLongTerm,
     pendingSignificance: nextPending,
+    revisions: collectPersistedMemoryRevisions(nextLongTerm),
   });
   const reviewedWorkingMemory: WorkingMemorySnapshot = {
     ...nextWorkingMemory,
@@ -3475,6 +3500,7 @@ export function runMemorySleepReview(params: {
     workingMemory: params.snapshot.workingMemory,
     longTermMemory: archivedLongTerm,
     pendingSignificance: params.snapshot.pendingSignificance,
+    revisions: collectPersistedMemoryRevisions(archivedLongTerm),
   });
   const workingMemory: WorkingMemorySnapshot = {
     ...params.snapshot.workingMemory,
@@ -3789,6 +3815,53 @@ type PersistedMemoryRevision = {
   updatedAt: number;
 };
 
+function reviseReviewInputsFromHistory(params: {
+  entries: LongTermMemoryEntry[];
+  revisions: PersistedMemoryRevision[];
+}): LongTermMemoryEntry[] {
+  const revisionsByConcept = new Map<string, PersistedMemoryRevision[]>();
+  for (const revision of params.revisions) {
+    const bucket = revisionsByConcept.get(revision.conceptId) ?? [];
+    bucket.push(revision);
+    revisionsByConcept.set(revision.conceptId, bucket);
+  }
+  return params.entries.map((entry) => {
+    const conceptId = getEntryConceptId(entry);
+    const history = revisionsByConcept.get(conceptId) ?? [];
+    if (history.length === 0) {
+      return entry;
+    }
+    const revisionKinds = new Set(history.map((revision) => revision.revisionKind));
+    const hasContested = history.some((revision) => revision.adjudicationStatus === "contested");
+    const hasSuperseded = history.some((revision) => revision.activeStatus === "superseded");
+    return {
+      ...entry,
+      adjudicationStatus: hasContested
+        ? "contested"
+        : hasSuperseded && entry.activeStatus === "superseded"
+          ? "superseded"
+          : entry.adjudicationStatus,
+      contradictionCount:
+        hasContested && entry.contradictionCount === 0 ? 1 : entry.contradictionCount,
+      revisionCount: Math.max(entry.revisionCount, history.length - 1),
+      lastRevisionKind: history[0]?.revisionKind ?? entry.lastRevisionKind,
+      permanenceStatus:
+        hasContested && entry.permanenceStatus !== "blocked" ? "blocked" : entry.permanenceStatus,
+      permanenceReasons:
+        hasContested &&
+        !entry.permanenceReasons.includes(
+          "concept revision history includes contested adjudication",
+        )
+          ? [...entry.permanenceReasons, "concept revision history includes contested adjudication"]
+          : entry.permanenceReasons,
+      conceptAliases:
+        revisionKinds.has("updated") || revisionKinds.has("narrowed")
+          ? uniqueStrings([...entry.conceptAliases, ...history.map((revision) => revision.summary)])
+          : entry.conceptAliases,
+    };
+  });
+}
+
 function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): PersistedMemoryConcept[] {
   const byConcept = new Map<string, PersistedMemoryConcept>();
   for (const entry of entries) {
@@ -3849,6 +3922,15 @@ function buildPersistedMemoryRevisions(params: {
   });
 }
 
+function collectPersistedMemoryRevisions(
+  entries: LongTermMemoryEntry[],
+): PersistedMemoryRevision[] {
+  return buildPersistedMemoryRevisions({
+    sessionId: "review",
+    entries,
+  });
+}
+
 export async function loadMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
@@ -3900,6 +3982,7 @@ export async function loadMemoryStoreSnapshot(params: {
           "SELECT concept_id, json FROM memory_revisions WHERE session_id = ? ORDER BY updated_at DESC",
         )
         .all(params.sessionId) as Array<{ concept_id: string; json: string }>;
+      const revisions = revisionRows.map((row) => JSON.parse(row.json) as PersistedMemoryRevision);
       const pendingRows = db
         .prepare("SELECT json FROM pending_memory WHERE session_id = ? ORDER BY updated_at DESC")
         .all(params.sessionId) as Array<{ json: string }>;
@@ -3928,9 +4011,9 @@ export async function loadMemoryStoreSnapshot(params: {
       for (const row of conceptRows) {
         const concept = JSON.parse(row.json) as PersistedMemoryConcept;
         const revisionKinds = new Set(
-          revisionRows
-            .filter((revision) => revision.concept_id === row.id)
-            .map((revision) => (JSON.parse(revision.json) as PersistedMemoryRevision).revisionKind),
+          revisions
+            .filter((revision) => revision.conceptId === row.id)
+            .map((revision) => revision.revisionKind),
         );
         concept.aliases = uniqueStrings([
           ...(aliasesByConcept.get(row.id) ?? []),
@@ -4066,6 +4149,7 @@ export async function persistMemoryStoreSnapshot(params: {
       db.prepare("DELETE FROM long_term_memory WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_concepts WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_concept_aliases WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_revisions WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM pending_memory WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM permanent_nodes WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_graph_nodes WHERE session_id = ?").run(params.sessionId);

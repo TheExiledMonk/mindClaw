@@ -277,6 +277,8 @@ export class MemorySystemContextEngine implements ContextEngine {
       contradictoryConceptIds: reviewed.review.contradictoryConceptIds,
       supersededMemoryIds: reviewed.review.supersededMemoryIds,
       supersededConceptIds: reviewed.review.supersededConceptIds,
+      contestedRevisionConceptIds: reviewed.review.contestedRevisionConceptIds,
+      revisedConceptIds: reviewed.review.revisedConceptIds,
       permanentEligibleIds: reviewed.review.permanentEligibleIds,
       permanentEligibleConceptIds: reviewed.review.permanentEligibleConceptIds,
       permanentDeferredIds: reviewed.review.permanentDeferredIds,

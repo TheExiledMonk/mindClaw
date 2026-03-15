@@ -52,6 +52,8 @@ export type ReviewResult = {
   contradictoryConceptIds?: string[];
   supersededMemoryIds?: string[];
   supersededConceptIds?: string[];
+  contestedRevisionConceptIds?: string[];
+  revisedConceptIds?: string[];
   permanentEligibleIds?: string[];
   permanentEligibleConceptIds?: string[];
   permanentDeferredIds?: string[];

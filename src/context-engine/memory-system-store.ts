@@ -1953,6 +1953,133 @@ function collectArtifactAnchoredMemories(params: {
   };
 }
 
+function artifactTraversalConfig(taskMode: MemoryTaskMode): {
+  allowedTypes: Set<MemoryRelationType>;
+  maxHops: number;
+  maxItems: number;
+} {
+  switch (taskMode) {
+    case "coding":
+      return {
+        allowedTypes: new Set<MemoryRelationType>([
+          "derived_from",
+          "confirmed_by",
+          "relevant_to",
+          "superseded_by",
+        ]),
+        maxHops: 2,
+        maxItems: MAX_PACKET_ITEMS,
+      };
+    case "debugging":
+      return {
+        allowedTypes: new Set<MemoryRelationType>([
+          "confirmed_by",
+          "contradicts",
+          "superseded_by",
+          "derived_from",
+        ]),
+        maxHops: 2,
+        maxItems: MAX_PACKET_ITEMS,
+      };
+    case "planning":
+      return {
+        allowedTypes: new Set<MemoryRelationType>(["relevant_to", "superseded_by", "derived_from"]),
+        maxHops: 2,
+        maxItems: MAX_PACKET_ITEMS,
+      };
+    case "support":
+      return {
+        allowedTypes: new Set<MemoryRelationType>(["confirmed_by", "contradicts", "relevant_to"]),
+        maxHops: 2,
+        maxItems: MAX_PACKET_ITEMS,
+      };
+    default:
+      return {
+        allowedTypes: new Set<MemoryRelationType>([
+          "derived_from",
+          "confirmed_by",
+          "relevant_to",
+          "superseded_by",
+          "contradicts",
+        ]),
+        maxHops: 2,
+        maxItems: MAX_PACKET_ITEMS,
+      };
+  }
+}
+
+function collectArtifactTraversalExpansion(params: {
+  selectedArtifactRefs: string[];
+  taskMode: MemoryTaskMode;
+  longTermMemory: LongTermMemoryEntry[];
+  graph?: MemoryGraphSnapshot;
+  excludeIds?: string[];
+}): Array<{ entry: LongTermMemoryEntry; via: MemoryRelationType }> {
+  if (params.selectedArtifactRefs.length === 0 || !params.graph) {
+    return [];
+  }
+
+  const byId = new Map(params.longTermMemory.map((entry) => [entry.id, entry]));
+  const outgoing = new Map<string, MemoryGraphEdge[]>();
+  for (const edge of params.graph.edges) {
+    const current = outgoing.get(edge.from) ?? [];
+    current.push(edge);
+    outgoing.set(edge.from, current);
+  }
+
+  const config = artifactTraversalConfig(params.taskMode);
+  const queue = params.selectedArtifactRefs.map((ref) => ({
+    nodeId: `artifact:${ref}`,
+    depth: 0,
+  }));
+  const visitedNodes = new Set(queue.map((item) => item.nodeId));
+  const seenMemoryIds = new Set(params.excludeIds ?? []);
+  const collected: Array<{
+    entry: LongTermMemoryEntry;
+    depth: number;
+    via: MemoryRelationType;
+    weight: number;
+  }> = [];
+
+  while (queue.length > 0 && collected.length < config.maxItems) {
+    const current = queue.shift();
+    if (!current) {
+      break;
+    }
+    const nextEdges = (outgoing.get(current.nodeId) ?? [])
+      .filter((edge) => config.allowedTypes.has(edge.type) && edge.weight >= 0.5)
+      .toSorted((a, b) => b.weight - a.weight);
+
+    for (const edge of nextEdges) {
+      const entry = byId.get(edge.to);
+      if (entry && entry.activeStatus !== "superseded" && !seenMemoryIds.has(entry.id)) {
+        seenMemoryIds.add(entry.id);
+        collected.push({
+          entry,
+          depth: current.depth + 1,
+          via: edge.type,
+          weight: edge.weight,
+        });
+        if (collected.length >= config.maxItems) {
+          break;
+        }
+      }
+
+      if (current.depth + 1 >= config.maxHops || visitedNodes.has(edge.to)) {
+        continue;
+      }
+      visitedNodes.add(edge.to);
+      queue.push({ nodeId: edge.to, depth: current.depth + 1 });
+    }
+  }
+
+  return collected
+    .toSorted(
+      (a, b) => a.depth - b.depth || b.weight - a.weight || b.entry.confidence - a.entry.confidence,
+    )
+    .map((item) => ({ entry: item.entry, via: item.via }));
+}
+
 function expandRelatedMemories(
   selected: LongTermMemoryEntry[],
   allEntries: LongTermMemoryEntry[],
@@ -2175,6 +2302,27 @@ export function retrieveMemoryContextPacket(
     accessedLongTermIds.push(...anchoredEntries.map((item) => item.id));
     sections.push(
       `Artifact-anchored constraints, patterns, and outcomes:\n- ${artifactAnchorLines.join("\n- ")}`,
+    );
+  }
+  const artifactTraversal = collectArtifactTraversalExpansion({
+    selectedArtifactRefs: scopeContext.artifactRefs,
+    taskMode,
+    longTermMemory: snapshot.longTermMemory,
+    graph: snapshot.graph,
+    excludeIds: [...accessedLongTermIds],
+  });
+  if (artifactTraversal.length > 0) {
+    retrievalItems.push(
+      ...artifactTraversal.map((item) => ({
+        kind: "long-term" as const,
+        text: `[${item.entry.category}] ${item.entry.text}`,
+        reason: `artifact traversal via ${item.via}`,
+        memoryId: item.entry.id,
+      })),
+    );
+    accessedLongTermIds.push(...artifactTraversal.map((item) => item.entry.id));
+    sections.push(
+      `Artifact traversal expansion:\n- ${artifactTraversal.map((item) => `[${item.entry.category}] ${item.entry.text}`).join("\n- ")}`,
     );
   }
   const relatedExpansion = expandRelatedMemories(

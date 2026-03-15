@@ -658,6 +658,165 @@ describe("memory system store", () => {
     expect(packet.accessedLongTermIds).toContain("ltm-outcome");
   });
 
+  it("expands from active artifacts into adjacent fixes and supersessions", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "artifact-traversal-a",
+          messages: [
+            userMessage(
+              "Debug src/context-engine/memory-system.ts and check the latest fix that replaced the old workaround.",
+            ),
+          ],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-anchor",
+            category: "decision",
+            text: "Use src/context-engine/memory-system.ts as the canonical integration path.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.94,
+          }),
+          longTermEntry({
+            id: "ltm-fix",
+            category: "episode",
+            text: "The latest fix in src/context-engine/memory-system.ts restored carry-forward output after regression.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.9,
+            relations: [
+              {
+                sourceMemoryId: "ltm-fix",
+                type: "superseded_by",
+                targetMemoryId: "ltm-old-workaround",
+                weight: 0.91,
+              },
+            ],
+          }),
+          longTermEntry({
+            id: "ltm-old-workaround",
+            category: "strategy",
+            text: "Old workaround for memory-system carry-forward behavior before the permanent fix.",
+            strength: 0.62,
+          }),
+          longTermEntry({
+            id: "ltm-direct-a",
+            category: "fact",
+            text: "Debug review should preserve the latest regression trace for memory-system output.",
+            strength: 0.91,
+          }),
+          longTermEntry({
+            id: "ltm-direct-b",
+            category: "decision",
+            text: "Check the latest fix before changing the canonical integration path.",
+            strength: 0.89,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: {
+          nodes: [
+            {
+              id: "ltm-anchor",
+              kind: "memory",
+              category: "decision",
+              summary: "Canonical integration path.",
+              confidence: 0.95,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-fix",
+              kind: "memory",
+              category: "episode",
+              summary: "Latest fix restored carry-forward output.",
+              confidence: 0.9,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-old-workaround",
+              kind: "memory",
+              category: "strategy",
+              summary: "Old workaround before permanent fix.",
+              confidence: 0.82,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-direct-a",
+              kind: "memory",
+              category: "fact",
+              summary: "Preserve latest regression trace.",
+              confidence: 0.91,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-direct-b",
+              kind: "memory",
+              category: "decision",
+              summary: "Check latest fix before changing path.",
+              confidence: 0.89,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "artifact:src/context-engine/memory-system.ts",
+              kind: "artifact",
+              category: "entity",
+              summary: "src/context-engine/memory-system.ts",
+              artifactRef: "src/context-engine/memory-system.ts",
+              confidence: 0.95,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+          ],
+          edges: [
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-anchor",
+              type: "relevant_to",
+              weight: 0.9,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-fix",
+              type: "confirmed_by",
+              weight: 0.92,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "ltm-fix",
+              to: "ltm-old-workaround",
+              type: "superseded_by",
+              weight: 0.91,
+              updatedAt: Date.now(),
+            },
+          ],
+          updatedAt: Date.now(),
+        },
+        permanentMemory: permanentRoot(),
+      },
+      {
+        messages: [
+          userMessage(
+            "Debug src/context-engine/memory-system.ts and inspect the fix that replaced the old workaround.",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("Artifact traversal expansion");
+    expect(packet.text).toContain("Old workaround for memory-system carry-forward behavior");
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason === "artifact traversal via superseded_by" &&
+          item.memoryId === "ltm-old-workaround",
+      ),
+    ).toBe(true);
+  });
+
   it("captures structured runtime scope during compilation", () => {
     const compiled = compileMemoryState({
       sessionId: "runtime-a",

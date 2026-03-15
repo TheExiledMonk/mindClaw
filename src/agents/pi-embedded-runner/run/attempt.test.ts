@@ -1318,12 +1318,17 @@ describe("buildAfterTurnRuntimeContext", () => {
       autonomyMode: "continue",
       riskLevel: "low",
     });
+    expect(runtimeContext.orchestrationState).toMatchObject({
+      primarySkill: "typescript-build-fix",
+      skillChain: expect.arrayContaining(["typescript-build-fix"]),
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       availableSkills: expect.arrayContaining(["typescript-build-fix"]),
       toolChain: expect.arrayContaining(["exec"]),
       outcome: "verified",
       retryClass: "same_path_retry",
       autonomyMode: "continue",
+      primarySkill: "typescript-build-fix",
     });
   });
 
@@ -1378,12 +1383,18 @@ describe("buildAfterTurnRuntimeContext", () => {
       autonomyMode: "fallback",
       riskLevel: "medium",
     });
+    expect(runtimeContext.orchestrationState).toMatchObject({
+      primarySkill: "memory-diagnostics",
+      fallbackSkills: expect.arrayContaining(["acceptance-report"]),
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       nearMissCandidate: true,
       retryClass: "skill_fallback",
       suggestedSkill: "acceptance-report",
       shouldEscalate: false,
       autonomyMode: "fallback",
+      primarySkill: "memory-diagnostics",
+      fallbackSkills: expect.arrayContaining(["acceptance-report"]),
     });
   });
 

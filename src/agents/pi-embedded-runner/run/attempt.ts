@@ -1337,6 +1337,12 @@ export function buildAfterTurnRuntimeContext(params: {
   const availableSkillNames = uniqueStrings(
     params.attempt.skillsSnapshot?.skills.map((skill) => skill.name) ?? [],
   );
+  const availableSkillInfo =
+    params.attempt.skillsSnapshot?.skills.map((skill) => ({
+      name: skill.name,
+      primaryEnv: skill.primaryEnv,
+      requiredEnv: skill.requiredEnv,
+    })) ?? [];
   const extractArtifactRefs = (text: string): string[] =>
     text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
   const extractToolSignalSummary = (message: AgentMessage): string | undefined => {
@@ -1494,6 +1500,7 @@ export function buildAfterTurnRuntimeContext(params: {
     retrySignals,
     promptErrorSummary,
     availableSkills: availableSkillNames,
+    availableSkillInfo,
     likelySkills: availableSkillNames.filter((skill) =>
       matchesSkillAgainstText(
         skill,
@@ -1507,6 +1514,7 @@ export function buildAfterTurnRuntimeContext(params: {
     verificationState: agenticState.verificationState,
     plannerState: agenticState.plannerState,
     governanceState: agenticState.governanceState,
+    orchestrationState: agenticState.orchestrationState,
     toolSignals,
     diffSignals,
   });
@@ -1540,6 +1548,7 @@ export function buildAfterTurnRuntimeContext(params: {
     verificationState: agenticState.verificationState,
     plannerState: agenticState.plannerState,
     governanceState: agenticState.governanceState,
+    orchestrationState: agenticState.orchestrationState,
     proceduralExecution,
   };
 }
@@ -2388,6 +2397,12 @@ export async function runEmbeddedAttempt(
             return buildAgenticExecutionState({
               messages: activeSession.messages,
               availableSkills,
+              availableSkillInfo:
+                params.skillsSnapshot?.skills.map((skill) => ({
+                  name: skill.name,
+                  primaryEnv: skill.primaryEnv,
+                  requiredEnv: skill.requiredEnv,
+                })) ?? [],
               likelySkills: availableSkills.filter((skill) =>
                 matchesSkillAgainstText(skill, promptCorpus),
               ),

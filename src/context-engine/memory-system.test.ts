@@ -2353,6 +2353,10 @@ describe("MemorySystemContextEngine", () => {
           autonomyMode: "fallback",
           riskLevel: "medium",
           governanceReasons: ["planner:unknown"],
+          primarySkill: "memory-diagnostics",
+          fallbackSkills: ["acceptance-report"],
+          skillChain: ["memory-diagnostics", "acceptance-report"],
+          capabilityGaps: [],
           nextImprovement:
             "Consider parameterizing memory-diagnostics so it can cover acceptance reporting without duplication.",
         },
@@ -2389,6 +2393,7 @@ describe("MemorySystemContextEngine", () => {
         (item) =>
           item.text.includes("Procedural workflow") &&
           item.text.includes("memory-diagnostics") &&
+          item.text.includes("primary skill memory-diagnostics") &&
           item.text.includes("suggested fallback acceptance-report") &&
           item.reason.includes("source=direct_observation"),
       ),

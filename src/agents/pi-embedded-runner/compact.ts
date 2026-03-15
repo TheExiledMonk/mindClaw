@@ -194,6 +194,14 @@ export type CompactEmbeddedPiSessionParams = {
     destructiveActionDetected: boolean;
     reasons: string[];
   };
+  orchestrationState?: {
+    version: 1;
+    primarySkill?: string;
+    fallbackSkills: string[];
+    skillChain: string[];
+    capabilityGaps: string[];
+    rationale?: string;
+  };
   proceduralExecution?: ProceduralExecutionRecord;
 };
 

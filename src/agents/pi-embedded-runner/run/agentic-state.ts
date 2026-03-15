@@ -82,6 +82,7 @@ export type AgenticExecutionState = {
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
   governanceState: AgenticGovernanceState;
+  orchestrationState: AgenticOrchestrationState;
 };
 
 export type AgenticGovernanceState = {
@@ -92,6 +93,15 @@ export type AgenticGovernanceState = {
   secretPromptDetected: boolean;
   destructiveActionDetected: boolean;
   reasons: string[];
+};
+
+export type AgenticOrchestrationState = {
+  version: 1;
+  primarySkill?: string;
+  fallbackSkills: string[];
+  skillChain: string[];
+  capabilityGaps: string[];
+  rationale?: string;
 };
 
 export type ProceduralExecutionRecord = {
@@ -113,6 +123,10 @@ export type ProceduralExecutionRecord = {
   autonomyMode: AgenticAutonomyMode;
   riskLevel: AgenticRiskLevel;
   governanceReasons: string[];
+  primarySkill?: string;
+  fallbackSkills: string[];
+  skillChain: string[];
+  capabilityGaps: string[];
   nextImprovement?: string;
 };
 
@@ -141,6 +155,12 @@ type RetrySignal = {
   attempt?: number;
   maxAttempts?: number;
   summary: string;
+};
+
+type SkillInfo = {
+  name: string;
+  primaryEnv?: string;
+  requiredEnv?: string[];
 };
 
 function extractMessageText(message: AgentMessage): string {
@@ -545,6 +565,54 @@ function buildGovernanceState(params: {
   };
 }
 
+function buildOrchestrationState(params: {
+  taskMode: AgenticTaskMode;
+  availableSkills?: SkillInfo[];
+  likelySkills?: string[];
+  alternativeSkills?: string[];
+  toolSignals?: ToolSignal[];
+}): AgenticOrchestrationState {
+  const availableSkills = params.availableSkills ?? [];
+  const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
+  const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
+  const toolNames = new Set((params.toolSignals ?? []).map((signal) => signal.toolName));
+  const primarySkill = likelySkills[0] ?? availableSkills[0]?.name;
+  const fallbackSkills = alternativeSkills.filter((skill) => skill !== primarySkill).slice(0, 4);
+  const skillChain = uniqueCompact(
+    [primarySkill, ...fallbackSkills].filter((value): value is string => Boolean(value)),
+    4,
+  );
+  const capabilityGaps = uniqueCompact(
+    [
+      availableSkills.length === 0 ? "no_available_skills" : undefined,
+      !primarySkill ? "no_primary_skill" : undefined,
+      params.taskMode === "coding" || params.taskMode === "debugging"
+        ? !toolNames.has("exec")
+          ? "missing_validation_execution"
+          : undefined
+        : undefined,
+      params.taskMode === "operations" && !toolNames.has("exec")
+        ? "missing_operational_execution"
+        : undefined,
+      fallbackSkills.length === 0 && availableSkills.length > 1 ? "no_ranked_fallback" : undefined,
+    ],
+    5,
+  );
+  const rationale = primarySkill
+    ? `Prefer ${primarySkill}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}.`
+    : availableSkills.length > 0
+      ? "Available skills exist, but none match the current objective strongly."
+      : "No matching skills are currently available for this objective.";
+  return {
+    version: 1,
+    primarySkill,
+    fallbackSkills,
+    skillChain,
+    capabilityGaps,
+    rationale,
+  };
+}
+
 export function buildAgenticExecutionState(params: {
   messages: AgentMessage[];
   activeArtifacts?: string[];
@@ -556,6 +624,7 @@ export function buildAgenticExecutionState(params: {
   promptErrorSummary?: string;
   availableSkills?: string[];
   likelySkills?: string[];
+  availableSkillInfo?: SkillInfo[];
 }): AgenticExecutionState {
   const texts = params.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
@@ -646,12 +715,20 @@ export function buildAgenticExecutionState(params: {
     verificationState,
     plannerState,
   });
+  const orchestrationState = buildOrchestrationState({
+    taskMode: taskState.taskMode,
+    availableSkills: params.availableSkillInfo,
+    likelySkills: params.likelySkills,
+    alternativeSkills: plannerState.alternativeSkills,
+    toolSignals: params.toolSignals,
+  });
 
   return {
     taskState,
     verificationState,
     plannerState,
     governanceState,
+    orchestrationState,
   };
 }
 
@@ -677,6 +754,17 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.governanceState.reasons.length > 0
       ? `Governance reasons: ${state.governanceState.reasons.join(", ")}`
       : undefined;
+  const orchestrationGuidance = state.orchestrationState.primarySkill
+    ? `Primary skill: ${state.orchestrationState.primarySkill}`
+    : undefined;
+  const fallbackChainGuidance =
+    state.orchestrationState.fallbackSkills.length > 0
+      ? `Fallback chain: ${state.orchestrationState.fallbackSkills.join(" -> ")}`
+      : undefined;
+  const capabilityGapGuidance =
+    state.orchestrationState.capabilityGaps.length > 0
+      ? `Capability gaps: ${state.orchestrationState.capabilityGaps.join(", ")}`
+      : undefined;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -696,6 +784,9 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     escalationGuidance,
     governanceGuidance,
     governanceReasons,
+    orchestrationGuidance,
+    fallbackChainGuidance,
+    capabilityGapGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
     fallbackSkillGuidance,
     antiRepeatGuidance,
@@ -710,6 +801,7 @@ export function buildProceduralExecutionRecord(params: {
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
   governanceState: AgenticGovernanceState;
+  orchestrationState: AgenticOrchestrationState;
   toolSignals?: ToolSignal[];
   diffSignals?: DiffSignal[];
 }): ProceduralExecutionRecord {
@@ -740,6 +832,21 @@ export function buildProceduralExecutionRecord(params: {
     (changedArtifacts.length > 1 || toolChain.length > 1);
 
   let nextImprovement: string | undefined;
+  const resolvedPrimarySkill =
+    params.orchestrationState.primarySkill ?? likelySkills[0] ?? availableSkills[0];
+  const resolvedFallbackSkills =
+    params.orchestrationState.fallbackSkills.length > 0
+      ? params.orchestrationState.fallbackSkills
+      : alternativeSkills.filter((skill) => skill !== resolvedPrimarySkill);
+  const resolvedSkillChain =
+    params.orchestrationState.skillChain.length > 0
+      ? params.orchestrationState.skillChain
+      : uniqueCompact(
+          [resolvedPrimarySkill, ...resolvedFallbackSkills].filter((value): value is string =>
+            Boolean(value),
+          ),
+          4,
+        );
   if (nearMissCandidate && alternativeSkills.length > 0) {
     nextImprovement = `Capture why the primary path fell short and compare it with alternative skills such as ${alternativeSkills.slice(0, 3).join(", ")}.`;
   } else if (params.plannerState.shouldEscalate) {
@@ -778,6 +885,10 @@ export function buildProceduralExecutionRecord(params: {
     autonomyMode: params.governanceState.autonomyMode,
     riskLevel: params.governanceState.riskLevel,
     governanceReasons: params.governanceState.reasons,
+    primarySkill: resolvedPrimarySkill,
+    fallbackSkills: resolvedFallbackSkills,
+    skillChain: resolvedSkillChain,
+    capabilityGaps: params.orchestrationState.capabilityGaps,
     nextImprovement,
   };
 }

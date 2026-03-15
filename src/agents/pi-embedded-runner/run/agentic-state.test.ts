@@ -51,6 +51,7 @@ describe("agentic-state", () => {
     expect(state.verificationState.outcome).toBe("verified");
     expect(state.plannerState.status).toBe("complete");
     expect(state.governanceState.autonomyMode).toBe("continue");
+    expect(state.orchestrationState.primarySkill).toBeUndefined();
     expect(buildAgenticSystemPromptAddition(state)).toContain("## Execution State");
   });
 
@@ -137,10 +138,15 @@ describe("agentic-state", () => {
     expect(state.plannerState.retryClass).toBe("skill_fallback");
     expect(state.plannerState.suggestedSkill).toBe("acceptance-report");
     expect(state.governanceState.autonomyMode).toBe("fallback");
+    expect(state.orchestrationState.primarySkill).toBe("memory-diagnostics");
+    expect(state.orchestrationState.fallbackSkills).toEqual(
+      expect.arrayContaining(["acceptance-report", "release-checks"]),
+    );
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Fallback skills to consider: acceptance-report, release-checks",
     );
     expect(buildAgenticSystemPromptAddition(state)).toContain("Autonomy mode: fallback");
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Primary skill: memory-diagnostics");
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {
@@ -195,6 +201,25 @@ describe("agentic-state", () => {
     );
   });
 
+  it("builds orchestration gaps when no skills or execution path are available", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Implement the deployment workflow and verify it.")],
+      availableSkillInfo: [],
+      availableSkills: [],
+      likelySkills: [],
+      toolSignals: [],
+    });
+
+    expect(state.orchestrationState.capabilityGaps).toEqual(
+      expect.arrayContaining([
+        "no_available_skills",
+        "no_primary_skill",
+        "missing_validation_execution",
+      ]),
+    );
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Capability gaps:");
+  });
+
   it("builds procedural execution records for skill and workflow learning", () => {
     const state = buildAgenticExecutionState({
       messages: [
@@ -240,6 +265,7 @@ describe("agentic-state", () => {
       verificationState: state.verificationState,
       plannerState: state.plannerState,
       governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
       toolSignals: [
         {
           toolName: "read",
@@ -281,6 +307,7 @@ describe("agentic-state", () => {
     expect(record.retryClass).toBe("same_path_retry");
     expect(record.shouldEscalate).toBe(false);
     expect(record.autonomyMode).toBe("continue");
+    expect(record.skillChain).toEqual(expect.arrayContaining(["memory-diagnostics"]));
   });
 
   it("marks failed procedural workflows as near-miss candidates", () => {
@@ -308,6 +335,7 @@ describe("agentic-state", () => {
       verificationState: state.verificationState,
       plannerState: state.plannerState,
       governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
       toolSignals: [
         {
           toolName: "exec",
@@ -324,6 +352,8 @@ describe("agentic-state", () => {
     expect(record.suggestedSkill).toBe("acceptance-report");
     expect(record.shouldEscalate).toBe(false);
     expect(record.autonomyMode).toBe("fallback");
+    expect(record.primarySkill).toBe("memory-diagnostics");
+    expect(record.fallbackSkills).toEqual(expect.arrayContaining(["acceptance-report"]));
     expect(record.nextImprovement).toContain("alternative skills");
   });
 });

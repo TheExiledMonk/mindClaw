@@ -2823,6 +2823,10 @@ function deriveRuntimeSignalCandidates(params: {
           autonomyMode?: unknown;
           riskLevel?: unknown;
           governanceReasons?: unknown;
+          primarySkill?: unknown;
+          fallbackSkills?: unknown;
+          skillChain?: unknown;
+          capabilityGaps?: unknown;
           nextImprovement?: unknown;
         })
       : undefined;
@@ -2927,11 +2931,41 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const primarySkill =
+      typeof proceduralExecution.primarySkill === "string" &&
+      proceduralExecution.primarySkill.trim().length > 0
+        ? proceduralExecution.primarySkill.trim()
+        : undefined;
+    const fallbackSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.fallbackSkills)
+        ? proceduralExecution.fallbackSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const skillChain = uniqueStrings(
+      Array.isArray(proceduralExecution.skillChain)
+        ? proceduralExecution.skillChain.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const capabilityGaps = uniqueStrings(
+      Array.isArray(proceduralExecution.capabilityGaps)
+        ? proceduralExecution.capabilityGaps.filter(
+            (gap): gap is string => typeof gap === "string" && gap.trim().length > 0,
+          )
+        : [],
+    );
     const proceduralEvidence = uniqueStrings([
       likelySkills.length > 0 ? `skills=${likelySkills.join(",")}` : "",
       alternativeSkills.length > 0 ? `alt_skills=${alternativeSkills.join(",")}` : "",
       toolChain.length > 0 ? `tools=${toolChain.join(",")}` : "",
       changedArtifacts.length > 0 ? `artifacts=${changedArtifacts.join(",")}` : "",
+      primarySkill ? `primary_skill=${primarySkill}` : "",
+      fallbackSkills.length > 0 ? `fallback_skills=${fallbackSkills.join(",")}` : "",
+      skillChain.length > 0 ? `skill_chain=${skillChain.join(",")}` : "",
+      capabilityGaps.length > 0 ? `capability_gaps=${capabilityGaps.join(",")}` : "",
       `retry=${retryClass}`,
       `autonomy=${autonomyMode}`,
       `risk=${riskLevel}`,
@@ -2944,6 +2978,9 @@ function deriveRuntimeSignalCandidates(params: {
       `Procedural workflow for ${taskMode} work`,
       likelySkills.length > 0 ? `uses skill path ${likelySkills.join(", ")}` : "",
       alternativeSkills.length > 0 ? `fallback skills ${alternativeSkills.join(", ")}` : "",
+      primarySkill ? `primary skill ${primarySkill}` : "",
+      fallbackSkills.length > 0 ? `fallback chain ${fallbackSkills.join(" -> ")}` : "",
+      capabilityGaps.length > 0 ? `capability gaps ${capabilityGaps.join(", ")}` : "",
       toolChain.length > 0 ? `tool chain ${toolChain.join(" -> ")}` : "",
       changedArtifacts.length > 0 ? `on ${changedArtifacts.join(", ")}` : "",
       `with outcome ${outcome}`,
@@ -2973,6 +3010,9 @@ function deriveRuntimeSignalCandidates(params: {
         ...(likelySkills.map((skill) => `skill:${skill}`) ?? []),
         ...(toolChain.map((tool) => `tool:${tool}`) ?? []),
         ...(alternativeSkills.map((skill) => `skill:${skill}`) ?? []),
+        ...(fallbackSkills.map((skill) => `skill:${skill}`) ?? []),
+        ...(capabilityGaps.map((gap) => `procedural:capability-gap:${gap}`) ?? []),
+        primarySkill ? `procedural:primary-skill:${primarySkill}` : "",
         suggestedSkill ? `procedural:suggested-skill:${suggestedSkill}` : "",
         shouldEscalate ? `procedural:escalate:${escalationReason ?? "unknown"}` : "",
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",

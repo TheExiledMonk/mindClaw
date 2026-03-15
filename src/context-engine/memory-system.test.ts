@@ -12,6 +12,7 @@ import {
   exportMemoryStoreBundle,
   importMemoryStoreBundle,
   inspectMemoryStoreHealth,
+  inspectMemoryRetrievalObservability,
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
   persistMemoryStoreSnapshot,
@@ -2224,6 +2225,35 @@ describe("MemorySystemContextEngine", () => {
     expect(health.summary).toContain("backend=sqlite-graph");
     expect(health.contestedConceptCount).toBeGreaterThan(0);
     expect(Array.isArray(health.issues)).toBe(true);
+  });
+
+  it("reports explicit compiler stages and retrieval observability", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:compiler-observability",
+      messages: [
+        userMessage(
+          "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+        userMessage(
+          "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-a.",
+        ),
+      ],
+    });
+
+    expect(compiled.compilerStages.some((stage) => stage.stage === "extract")).toBe(true);
+    expect(compiled.compilerStages.some((stage) => stage.stage === "review")).toBe(true);
+
+    const report = inspectMemoryRetrievalObservability(compiled, {
+      messages: [
+        userMessage(
+          "For install profile profile-a, plan the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+
+    expect(report.summary).toContain("task=");
+    expect(report.accessedConceptCount).toBeGreaterThan(0);
+    expect(report.longTermItemCount).toBeGreaterThan(0);
   });
 
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {

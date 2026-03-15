@@ -240,8 +240,26 @@ export type MemoryStoreHealthReport = {
   staleMemoryCount: number;
 };
 
+export type MemoryCompilerStageName =
+  | "extract"
+  | "runtime"
+  | "pending"
+  | "pattern"
+  | "merge"
+  | "review"
+  | "permanent"
+  | "graph";
+
+export type MemoryCompilerStageReport = {
+  stage: MemoryCompilerStageName;
+  note: string;
+  candidateCount: number;
+  conceptCount?: number;
+};
+
 export type MemoryCompileResult = MemoryStoreSnapshot & {
   compilerNotes: string[];
+  compilerStages: MemoryCompilerStageReport[];
   review: MemoryReviewResult;
 };
 
@@ -280,6 +298,21 @@ export type MemoryContextPacket = {
   accessedConceptIds: string[];
   sections: string[];
   retrievalItems: MemoryRetrievalItem[];
+};
+
+export type MemoryRetrievalObservabilityReport = {
+  taskMode: MemoryTaskMode;
+  retrievalItemCount: number;
+  longTermItemCount: number;
+  permanentItemCount: number;
+  contradictionItemCount: number;
+  downgradedItemCount: number;
+  contestedItemCount: number;
+  scopedAlternativeItemCount: number;
+  artifactAnchoredItemCount: number;
+  accessedConceptCount: number;
+  topReasons: string[];
+  summary: string;
 };
 
 type MemoryStorePaths = {
@@ -668,10 +701,13 @@ const CANONICAL_PHRASE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bold workaround\b/g, "legacy-workaround"],
   [/\bshould be used\b/g, "use"],
   [/\bbe used\b/g, "use"],
+  [/\bneed to use\b/g, "use"],
   [/\bneeds to use\b/g, "use"],
   [/\bhas to use\b/g, "use"],
   [/\bmust use\b/g, "use"],
   [/\bshould use\b/g, "use"],
+  [/\bcontinue using\b/g, "use"],
+  [/\bcontinue with\b/g, "use"],
   [/\bis required\b/g, "required"],
   [/\bdo not use\b/g, "avoid use"],
   [/\bmust not use\b/g, "avoid use"],
@@ -838,15 +874,20 @@ function createProvenanceRecord(
 }
 
 function inferOntologyKind(category: MemoryCategory, text: string): MemoryOntologyKind {
+  const normalizedText = normalizeConceptPhraseText(text);
   if (
     category === "decision" ||
-    /\b(must|required|always|never|constraint|preserve|keep|use|used|preferred)\b/i.test(text)
+    /\b(must|required|always|never|constraint|preserve|keep|use|used|preferred)\b/i.test(
+      normalizedText,
+    )
   ) {
     return "constraint";
   }
   if (
     category === "episode" ||
-    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(text)
+    /\b(fixed|resolved|preserved|restored|regression|outcome|result|workaround)\b/i.test(
+      normalizedText,
+    )
   ) {
     return "outcome";
   }
@@ -1082,6 +1123,14 @@ function shouldIncludeScopedEntry(params: {
     return false;
   }
   if (
+    hasExplicitScopeContext(params.scopeContext) &&
+    countExplicitScopeMatches(params.entry, params.scopeContext) === 0 &&
+    (params.entry.versionScope || params.entry.installProfileScope || params.entry.customerScope) &&
+    params.taskMode !== "debugging"
+  ) {
+    return false;
+  }
+  if (
     adjudication?.resolutionKind === "scoped_alternative" &&
     hasExplicitScopeContext(params.scopeContext) &&
     countExplicitScopeMatches(params.entry, params.scopeContext) === 0 &&
@@ -1178,6 +1227,14 @@ function findConceptMatch(
   let bestScore = 0;
   const incomingCanonicalTokens = new Set(tokenize(incoming.canonicalText || incoming.text));
   const incomingSignature = new Set(buildCanonicalTokenSignature(incoming.text));
+  const incomingEntities = buildMemoryEntitySignature({
+    text: incoming.text,
+    versionScope: incoming.versionScope,
+    installProfileScope: incoming.installProfileScope,
+    customerScope: incoming.customerScope,
+    environmentTags: incoming.environmentTags,
+    artifactRefs: incoming.artifactRefs,
+  });
   for (const candidate of entries) {
     if (
       candidate.conceptKey &&
@@ -1226,6 +1283,17 @@ function findConceptMatch(
     ).length;
     const signatureCoverage =
       incomingSignature.size > 0 ? signatureOverlap / incomingSignature.size : 0;
+    const entityOverlap = countEntitySignatureOverlap(
+      buildMemoryEntitySignature({
+        text: candidate.text,
+        versionScope: candidate.versionScope,
+        installProfileScope: candidate.installProfileScope,
+        customerScope: candidate.customerScope,
+        environmentTags: candidate.environmentTags,
+        artifactRefs: candidate.artifactRefs,
+      }),
+      incomingEntities,
+    );
     const aliasOverlap = Math.max(
       0,
       ...(candidate.conceptAliases ?? []).map((alias) =>
@@ -1272,6 +1340,7 @@ function findConceptMatch(
       canonicalOverlap * 2 +
       signatureOverlap * 2 +
       aliasOverlap +
+      entityOverlap +
       artifactOverlap * 3 +
       scopeOverlap * 2 +
       runtimeTagOverlap * 2;
@@ -1557,6 +1626,103 @@ function extractArtifactRefs(text: string): string[] {
   const matches = text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
   const pathLike = text.match(/\b(?:src|docs|config|packages|apps)\/[\w./-]+\b/g) ?? [];
   return uniqueStrings([...matches, ...pathLike]).slice(0, MAX_WORKING_ITEMS);
+}
+
+type MemoryEntitySignature = {
+  versions: string[];
+  installProfiles: string[];
+  customers: string[];
+  environments: string[];
+  artifacts: string[];
+  artifactBasenames: string[];
+};
+
+function buildMemoryEntitySignature(params: {
+  text?: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  environmentTags?: string[];
+  artifactRefs?: string[];
+}): MemoryEntitySignature {
+  const text = params.text ?? "";
+  const artifactRefs = uniqueStrings([
+    ...(params.artifactRefs ?? []),
+    ...extractArtifactRefs(text),
+  ]);
+  const artifactBasenames = uniqueStrings(
+    artifactRefs
+      .map((ref) => path.basename(ref))
+      .flatMap((basename) => {
+        const extension = path.extname(basename);
+        const withoutExtension =
+          extension.length > 0 ? basename.slice(0, -extension.length) : basename;
+        return uniqueStrings([basename, withoutExtension]);
+      }),
+  );
+  return {
+    versions: uniqueStrings([params.versionScope ?? "", extractVersionScope(text) ?? ""]),
+    installProfiles: uniqueStrings([
+      params.installProfileScope ?? "",
+      extractInstallProfileScope(text) ?? "",
+    ]),
+    customers: uniqueStrings([params.customerScope ?? "", extractCustomerScope(text) ?? ""]),
+    environments: uniqueStrings([
+      ...(params.environmentTags ?? []),
+      ...extractEnvironmentTags(text),
+    ]),
+    artifacts: artifactRefs,
+    artifactBasenames,
+  };
+}
+
+function countEntitySignatureOverlap(
+  left: MemoryEntitySignature,
+  right: MemoryEntitySignature,
+): number {
+  const overlap = (a: string[], b: string[]): number => a.filter((item) => b.includes(item)).length;
+  return (
+    overlap(left.versions, right.versions) * 3 +
+    overlap(left.installProfiles, right.installProfiles) * 2 +
+    overlap(left.customers, right.customers) * 2 +
+    overlap(left.environments, right.environments) +
+    overlap(left.artifacts, right.artifacts) * 3 +
+    overlap(left.artifactBasenames, right.artifactBasenames)
+  );
+}
+
+function formatScopeContextSummary(scopeContext?: MemoryScopeContext): string | undefined {
+  if (!scopeContext) {
+    return undefined;
+  }
+  const parts = [
+    scopeContext.versionScope ? `version=${scopeContext.versionScope}` : "",
+    scopeContext.installProfileScope ? `profile=${scopeContext.installProfileScope}` : "",
+    scopeContext.customerScope ? `customer=${scopeContext.customerScope}` : "",
+    scopeContext.environmentTags[0]
+      ? `env=${scopeContext.environmentTags.slice(0, 2).join(",")}`
+      : "",
+    scopeContext.artifactRefs[0]
+      ? `artifact=${scopeContext.artifactRefs.slice(0, 2).join(",")}`
+      : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+function formatEntryScopeSummary(
+  entry: Pick<
+    LongTermMemoryEntry,
+    "versionScope" | "installProfileScope" | "customerScope" | "artifactRefs" | "environmentTags"
+  >,
+): string | undefined {
+  const parts = [
+    entry.versionScope ? `version=${entry.versionScope}` : "",
+    entry.installProfileScope ? `profile=${entry.installProfileScope}` : "",
+    entry.customerScope ? `customer=${entry.customerScope}` : "",
+    entry.environmentTags[0] ? `env=${entry.environmentTags.slice(0, 2).join(",")}` : "",
+    entry.artifactRefs[0] ? `artifact=${entry.artifactRefs.slice(0, 2).join(",")}` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 type MemoryScopeContext = {
@@ -3572,6 +3738,73 @@ export function compileMemoryState(params: {
   const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
 
   const compilerNotes: string[] = [];
+  const compilerStages: MemoryCompilerStageReport[] = [];
+  const recordStage = (
+    stage: MemoryCompilerStageName,
+    note: string,
+    candidateCount: number,
+    conceptCount?: number,
+  ): void => {
+    compilerStages.push({ stage, note, candidateCount, conceptCount });
+  };
+  recordStage(
+    "extract",
+    "extracted candidate durable and pending memories from conversation content",
+    candidates.durable.length + candidates.pending.length,
+    new Set(candidates.durable.map((entry) => getEntryConceptId(entry))).size,
+  );
+  recordStage(
+    "runtime",
+    "captured runtime-derived observations and workspace signals",
+    runtimeSignalCandidates.length,
+    new Set(runtimeSignalCandidates.map((entry) => getEntryConceptId(entry))).size,
+  );
+  recordStage(
+    "pending",
+    "reviewed pending-significance memories for recurrence-based promotion",
+    promotedPending.durable.length + promotedPending.remaining.length,
+    new Set(promotedPending.durable.map((entry) => getEntryConceptId(entry))).size,
+  );
+  recordStage(
+    "pattern",
+    "synthesized generalized pattern memories from related durable observations",
+    patternCandidates.length,
+    new Set(patternCandidates.map((entry) => getEntryConceptId(entry))).size,
+  );
+  recordStage(
+    "merge",
+    "merged, reactivated, and supersession-reviewed the durable memory set",
+    nextLongTerm.length,
+    new Set(nextLongTerm.map((entry) => getEntryConceptId(entry))).size,
+  );
+  recordStage(
+    "review",
+    "reviewed adjudication, permanence, contradiction, and carry-forward outcomes",
+    review.contradictoryMemoryIds.length +
+      review.supersededMemoryIds.length +
+      review.permanentEligibleIds.length +
+      review.permanentDeferredIds.length +
+      review.permanentBlockedIds.length,
+    new Set([
+      ...review.contradictoryConceptIds,
+      ...review.supersededConceptIds,
+      ...review.permanentEligibleConceptIds,
+      ...review.permanentDeferredConceptIds,
+      ...review.permanentBlockedConceptIds,
+    ]).size,
+  );
+  recordStage(
+    "permanent",
+    "reconciled eligible durable memories into the permanent memory tree",
+    permanentCandidates.length,
+    new Set(permanentCandidates.map((entry) => getEntryConceptId(entry))).size,
+  );
+  recordStage(
+    "graph",
+    "rebuilt the memory graph snapshot for retrieval traversal",
+    nextGraph.nodes.length + nextGraph.edges.length,
+    nextGraph.nodes.filter((node) => node.kind === "memory").length,
+  );
   if (candidates.durable.length > 0) {
     compilerNotes.push(`promoted ${candidates.durable.length} durable memories`);
   }
@@ -3635,6 +3868,7 @@ export function compileMemoryState(params: {
     permanentMemory: nextPermanent,
     graph: nextGraph,
     compilerNotes,
+    compilerStages,
     review,
   };
 }
@@ -4370,10 +4604,11 @@ export function retrieveMemoryContextPacket(
         const adjudication = adjudications.find(
           (entry) => entry.conceptId === getEntryConceptId(item),
         );
+        const itemScopeSummary = formatEntryScopeSummary(item);
         return {
           kind: "long-term" as const,
           text: formatMemoryWithState(item),
-          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${itemScopeSummary ? ` scope=${itemScopeSummary}` : ""}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
           memoryId: item.id,
           conceptId: getEntryConceptId(item),
         };
@@ -4540,14 +4775,9 @@ export function retrieveMemoryContextPacket(
       `Session continuity output:\n- ${clipText(snapshot.workingMemory.carryForwardSummary, 220)}`,
     );
   }
-  const scopeNotes = [
-    scopeContext.versionScope ? `version=${scopeContext.versionScope}` : "",
-    scopeContext.installProfileScope ? `install-profile=${scopeContext.installProfileScope}` : "",
-    scopeContext.customerScope ? `customer=${scopeContext.customerScope}` : "",
-    scopeContext.environmentTags.length > 0 ? `env=${scopeContext.environmentTags.join(",")}` : "",
-  ].filter(Boolean);
-  if (scopeNotes.length > 0) {
-    sections.push(`Scope notes:\n- ${scopeNotes.join("\n- ")}`);
+  const scopeSummary = formatScopeContextSummary(scopeContext);
+  if (scopeSummary) {
+    sections.push(`Scope notes:\n- ${scopeSummary.replace(/\s+/g, "\n- ")}`);
   }
 
   const confidenceNotes = longTerm
@@ -4591,6 +4821,64 @@ export function buildMemoryContextPacket(
   return retrieveMemoryContextPacket(snapshot, params).text;
 }
 
+export function inspectMemoryRetrievalObservability(
+  snapshot: MemoryStoreSnapshot,
+  params?: { messages?: AgentMessage[] },
+): MemoryRetrievalObservabilityReport {
+  const packet = retrieveMemoryContextPacket(snapshot, params);
+  const downgradedItemCount = packet.retrievalItems.filter((item) =>
+    item.reason.includes("downgraded="),
+  ).length;
+  const contestedItemCount = packet.retrievalItems.filter((item) =>
+    item.reason.includes("adjudication=contested"),
+  ).length;
+  const scopedAlternativeItemCount = packet.retrievalItems.filter((item) =>
+    item.reason.includes("adjudication=authoritative:scoped_alternative"),
+  ).length;
+  const artifactAnchoredItemCount = packet.retrievalItems.filter(
+    (item) => item.reason.startsWith("artifact anchor") || item.reason.startsWith("artifact "),
+  ).length;
+  const longTermItemCount = packet.retrievalItems.filter(
+    (item) => item.kind === "long-term",
+  ).length;
+  const permanentItemCount = packet.retrievalItems.filter(
+    (item) => item.kind === "permanent",
+  ).length;
+  const contradictionItemCount = packet.retrievalItems.filter(
+    (item) => item.kind === "contradiction",
+  ).length;
+  const topReasons = packet.retrievalItems.slice(0, 6).map((item) => clipText(item.reason, 120));
+  const summary = clipText(
+    [
+      `task=${packet.taskMode}`,
+      `items=${packet.retrievalItems.length}`,
+      `long-term=${longTermItemCount}`,
+      `permanent=${permanentItemCount}`,
+      `contradictions=${contradictionItemCount}`,
+      `downgraded=${downgradedItemCount}`,
+      `contested=${contestedItemCount}`,
+      `scoped-alternatives=${scopedAlternativeItemCount}`,
+      `artifact-anchors=${artifactAnchoredItemCount}`,
+      `concepts=${packet.accessedConceptIds.length}`,
+    ].join(" | "),
+    320,
+  );
+  return {
+    taskMode: packet.taskMode,
+    retrievalItemCount: packet.retrievalItems.length,
+    longTermItemCount,
+    permanentItemCount,
+    contradictionItemCount,
+    downgradedItemCount,
+    contestedItemCount,
+    scopedAlternativeItemCount,
+    artifactAnchoredItemCount,
+    accessedConceptCount: packet.accessedConceptIds.length,
+    topReasons,
+    summary,
+  };
+}
+
 export function runMemorySleepReview(params: {
   sessionId: string;
   snapshot: MemoryStoreSnapshot;
@@ -4621,6 +4909,24 @@ export function runMemorySleepReview(params: {
     carryForwardSummary: review.carryForwardSummary,
   };
   const graph = buildMemoryGraphSnapshot(archivedLongTerm);
+  const compilerStages: MemoryCompilerStageReport[] = [
+    {
+      stage: "review",
+      note: "performed sleep review over archived and active durable memories",
+      candidateCount:
+        review.archivedMemoryIds.length +
+        review.contradictoryMemoryIds.length +
+        review.supersededMemoryIds.length,
+      conceptCount: new Set([...review.contradictoryConceptIds, ...review.supersededConceptIds])
+        .size,
+    },
+    {
+      stage: "graph",
+      note: "rebuilt the memory graph snapshot after sleep review",
+      candidateCount: graph.nodes.length + graph.edges.length,
+      conceptCount: graph.nodes.filter((node) => node.kind === "memory").length,
+    },
+  ];
   return {
     workingMemory,
     longTermMemory: archivedLongTerm,
@@ -4638,6 +4944,7 @@ export function runMemorySleepReview(params: {
         ? `sleep review flagged ${review.contradictoryMemoryIds.length} contradictory memories`
         : "sleep review found no contradictory memories",
     ],
+    compilerStages,
     review,
   };
 }

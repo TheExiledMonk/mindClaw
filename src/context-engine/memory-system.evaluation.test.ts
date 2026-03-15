@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkingMemorySnapshot,
   compileMemoryState,
+  inspectMemoryRetrievalObservability,
   retrieveMemoryContextPacket,
 } from "./memory-system-store.js";
 
@@ -356,6 +357,86 @@ describe("memory system evaluation scenarios", () => {
         (item) =>
           item.reason.startsWith("stable permanent node tree branch") &&
           item.text.includes("profile-a"),
+      ),
+    ).toBe(false);
+  });
+
+  it("maintains one concept across a longer paraphrase-heavy run without drift", () => {
+    const turns = [
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+      "The permanent path for the memory system in src/context-engine/memory-system.ts should be used.",
+      "We need to use the permanent memory-system path in src/context-engine/memory-system.ts.",
+      "The required path for memory-system integration in src/context-engine/memory-system.ts is the permanent one.",
+      "Use that permanent memory-system path in src/context-engine/memory-system.ts for this rollout.",
+      "The permanent path in src/context-engine/memory-system.ts is the path we should continue with.",
+    ];
+    let compiled = compileMemoryState({
+      sessionId: "eval-long-run-drift",
+      messages: [userMessage(turns[0])],
+    });
+    for (const turn of turns.slice(1)) {
+      compiled = compileMemoryState({
+        sessionId: "eval-long-run-drift",
+        previous: compiled,
+        messages: [userMessage(turn)],
+      });
+    }
+
+    const durablePathMemories = compiled.longTermMemory.filter(
+      (entry) =>
+        entry.artifactRefs.includes("src/context-engine/memory-system.ts") &&
+        entry.ontologyKind === "constraint",
+    );
+    const conceptIds = new Set(durablePathMemories.map((entry) => entry.conceptKey));
+
+    expect(durablePathMemories.length).toBeGreaterThan(0);
+    expect(conceptIds.size).toBe(1);
+    expect(durablePathMemories[0]?.conceptAliases.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("prevents scope bleed across longer alternating profile variants", () => {
+    const turns = [
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a.",
+      "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-b.",
+      "For install profile profile-a, continue using the permanent memory-system path in src/context-engine/memory-system.ts.",
+      "For install profile profile-b, the permanent memory-system path in src/context-engine/memory-system.ts should be used.",
+    ];
+    let compiled = compileMemoryState({
+      sessionId: "eval-long-run-scope-bleed",
+      messages: [userMessage(turns[0])],
+    });
+    for (const turn of turns.slice(1)) {
+      compiled = compileMemoryState({
+        sessionId: "eval-long-run-scope-bleed",
+        previous: compiled,
+        messages: [userMessage(turn)],
+      });
+    }
+
+    const report = inspectMemoryRetrievalObservability(compiled, {
+      messages: [
+        userMessage(
+          "For install profile profile-b, use the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "For install profile profile-b, use the permanent memory-system path in src/context-engine/memory-system.ts.",
+        ),
+      ],
+    });
+
+    expect(report.scopedAlternativeItemCount).toBeGreaterThan(0);
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.includes("profile=profile-b") && item.text.includes("profile-b"),
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) => item.reason.includes("profile=profile-a") && item.text.includes("profile-a"),
       ),
     ).toBe(false);
   });

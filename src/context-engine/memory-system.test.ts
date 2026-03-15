@@ -70,6 +70,7 @@ function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMe
     importanceClass: "useful",
     compressionState: "stable",
     activeStatus: "active",
+    adjudicationStatus: "authoritative",
     trend: "stable",
     accessCount: 0,
     createdAt: now,

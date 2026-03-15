@@ -52,6 +52,7 @@ export type MemorySourceType =
 export type MemoryImportanceClass = "critical" | "useful" | "temporary" | "discardable";
 export type MemoryCompressionState = "active" | "stable" | "compressed" | "latent";
 export type MemoryActiveStatus = "active" | "pending" | "stale" | "superseded" | "archived";
+export type MemoryAdjudicationStatus = "authoritative" | "contested" | "superseded";
 export type MemoryTrend = "rising" | "stable" | "fading";
 export type PermanentNodeType =
   | "root"
@@ -144,6 +145,7 @@ export type LongTermMemoryEntry = {
   importanceClass: MemoryImportanceClass;
   compressionState: MemoryCompressionState;
   activeStatus: MemoryActiveStatus;
+  adjudicationStatus: MemoryAdjudicationStatus;
   trend: MemoryTrend;
   accessCount: number;
   createdAt: number;
@@ -438,6 +440,19 @@ function inferOntologyKind(category: MemoryCategory, text: string): MemoryOntolo
     return "preference";
   }
   return "fact";
+}
+
+function inferAdjudicationStatus(params: {
+  activeStatus: MemoryActiveStatus;
+  contradictionCount: number;
+}): MemoryAdjudicationStatus {
+  if (params.activeStatus === "superseded") {
+    return "superseded";
+  }
+  if (params.contradictionCount > 0 || params.activeStatus === "pending") {
+    return "contested";
+  }
+  return "authoritative";
 }
 
 function buildMemorySemanticKey(params: {
@@ -841,6 +856,7 @@ export function deriveLongTermMemoryCandidates(params: {
       importanceClass: detectImportanceClass(category, normalized),
       compressionState: "active",
       activeStatus: "active",
+      adjudicationStatus: "authoritative",
       trend: "rising",
       accessCount: 0,
       createdAt: Date.now(),
@@ -896,6 +912,7 @@ export function deriveLongTermMemoryCandidates(params: {
       importanceClass: "useful",
       compressionState: "compressed",
       activeStatus: "active",
+      adjudicationStatus: "authoritative",
       trend: "stable",
       accessCount: 0,
       createdAt: Date.now(),
@@ -1055,13 +1072,18 @@ function annotateContradictions(entries: LongTermMemoryEntry[]): LongTermMemoryE
 
   return entries.map((entry) => {
     const contradictionCount = counts.get(entry.id) ?? 0;
+    const activeStatus =
+      contradictionCount > 0 && entry.activeStatus !== "superseded"
+        ? "pending"
+        : entry.activeStatus;
     return {
       ...entry,
       contradictionCount,
-      activeStatus:
-        contradictionCount > 0 && entry.activeStatus !== "superseded"
-          ? "pending"
-          : entry.activeStatus,
+      activeStatus,
+      adjudicationStatus: inferAdjudicationStatus({
+        activeStatus,
+        contradictionCount,
+      }),
       confidence:
         contradictionCount > 0
           ? Math.max(0.35, entry.confidence - contradictionCount * 0.08)
@@ -1096,6 +1118,10 @@ function promotePendingMemories(params: {
     promoted.push({
       ...baseEntry,
       activeStatus: "active",
+      adjudicationStatus: inferAdjudicationStatus({
+        activeStatus: "active",
+        contradictionCount: item.contradictionCount,
+      }),
       importanceClass: item.importanceClass === "temporary" ? "useful" : item.importanceClass,
       strength: Math.min(1, item.strength + 0.08),
       confidence: Math.min(1, item.confidence + 0.06),
@@ -1159,6 +1185,10 @@ function refreshLongTermLifecycle(
       ...entry,
       compressionState,
       activeStatus,
+      adjudicationStatus: inferAdjudicationStatus({
+        activeStatus,
+        contradictionCount: entry.contradictionCount,
+      }),
       strength,
       confidence,
       trend,
@@ -1232,6 +1262,42 @@ function createPermanentRoot(): PermanentMemoryNode {
         children: [],
       },
       {
+        id: "facts",
+        label: "facts",
+        nodeType: "context",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
+      {
+        id: "constraints",
+        label: "constraints",
+        nodeType: "rule",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
+      {
+        id: "outcomes",
+        label: "outcomes",
+        nodeType: "lesson",
+        relationToParent: "contains",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
+      {
         id: "patterns",
         label: "patterns",
         nodeType: "pattern",
@@ -1284,22 +1350,23 @@ function flattenPermanentNodes(root: PermanentMemoryNode): PermanentMemoryNode[]
   return output;
 }
 
-function selectPermanentBranch(category: MemoryCategory): string[] {
-  switch (category) {
+function selectPermanentBranch(
+  entry: Pick<LongTermMemoryEntry, "category" | "ontologyKind">,
+): string[] {
+  switch (entry.ontologyKind) {
     case "preference":
       return ["preferences"];
-    case "decision":
-      return ["projects", "current-bot", "decisions"];
-    case "strategy":
-      return ["patterns", "strategies"];
+    case "constraint":
+      return ["constraints", entry.category === "decision" ? "decisions" : "rules"];
     case "pattern":
-      return ["patterns", "generalized"];
+      return ["patterns", entry.category === "pattern" ? "generalized" : "strategies"];
     case "entity":
       return ["identity"];
-    case "episode":
-      return ["projects", "current-bot", "episodes"];
+    case "outcome":
+      return ["outcomes", entry.category === "episode" ? "episodes" : "lessons"];
+    case "fact":
     default:
-      return ["operating-rules"];
+      return ["facts"];
   }
 }
 
@@ -1396,6 +1463,7 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       importanceClass: "useful",
       compressionState: "stable",
       activeStatus: "active",
+      adjudicationStatus: "authoritative",
       trend: "rising",
       accessCount: 0,
       createdAt: Date.now(),
@@ -1473,6 +1541,7 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
         continue;
       }
       older.activeStatus = "superseded";
+      older.adjudicationStatus = "superseded";
       older.supersededById = newer.id;
       older.trend = "fading";
       older.provenance = mergeProvenance(older.provenance, [
@@ -1485,6 +1554,10 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
       newer.relations = mergeRelations(newer.relations, [
         { sourceMemoryId: newer.id, type: "confirmed_by", targetMemoryId: older.id, weight: 0.62 },
       ]);
+      newer.adjudicationStatus = inferAdjudicationStatus({
+        activeStatus: newer.activeStatus,
+        contradictionCount: newer.contradictionCount,
+      });
       supersededCount += 1;
     }
   }
@@ -1679,7 +1752,7 @@ export function mergePermanentMemoryTree(
     ? (JSON.parse(JSON.stringify(root)) as PermanentMemoryNode)
     : createPermanentRoot();
   for (const candidate of candidates) {
-    const branch = selectPermanentBranch(candidate.category);
+    const branch = selectPermanentBranch(candidate);
     let cursor = nextRoot;
     for (let index = 0; index < branch.length; index += 1) {
       const segment = branch[index];
@@ -2891,6 +2964,12 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
     importanceClass: entry.importanceClass ?? "useful",
     compressionState: entry.compressionState ?? "stable",
     activeStatus: entry.activeStatus ?? "active",
+    adjudicationStatus:
+      entry.adjudicationStatus ??
+      inferAdjudicationStatus({
+        activeStatus: entry.activeStatus ?? "active",
+        contradictionCount: entry.contradictionCount ?? 0,
+      }),
     trend: entry.trend ?? "stable",
     accessCount: entry.accessCount ?? 0,
     createdAt: entry.createdAt ?? entry.updatedAt ?? Date.now(),

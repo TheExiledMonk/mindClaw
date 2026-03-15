@@ -356,6 +356,8 @@ describe("agentic-state", () => {
         "Integrated memory packet",
         "Skill effectiveness guidance:",
         "- skill=memory-diagnostics family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.20 evidence=3",
+        "Skill stability guidance:",
+        "- skill=memory-diagnostics task_mode=general env=node state=stable_reuse",
       ].join("\n"),
     });
 
@@ -387,6 +389,31 @@ describe("agentic-state", () => {
 
     expect(state.orchestrationState.rankedSkills[0]).toBe("acceptance-report");
     expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+  });
+
+  it("keeps recovered-watch primary skills from being promoted to extend-existing", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Improve the diagnostics skill carefully without over-promoting the recovered path.",
+        ),
+      ],
+      availableSkills: ["diagnostics-repair"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [{ name: "diagnostics-repair", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=diagnostics-repair family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.20 evidence=3",
+        "Skill recovery guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node state=recovered_watch",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("diagnostics-repair");
+    expect(state.orchestrationState.consolidationAction).toBe("none");
+    expect(state.orchestrationState.rationale).toContain("recovered path under watch");
   });
 
   it("uses memory-weighted orchestration to choose the fallback skill", () => {

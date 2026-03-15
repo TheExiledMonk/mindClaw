@@ -377,6 +377,7 @@ type ProceduralMemorySkillSignal = {
   weightedSkills: Map<string, number>;
   weightedFamilies: Map<string, number>;
   recoveringSkills: string[];
+  stabilizedSkills: string[];
   workflowChains: string[][];
   multiSkillHint: boolean;
 };
@@ -471,6 +472,7 @@ function extractProceduralMemorySkillSignals(params: {
       weightedSkills,
       weightedFamilies,
       recoveringSkills: [],
+      stabilizedSkills: [],
       workflowChains: workflowHints.chains,
       multiSkillHint: workflowHints.multiSkillHint,
     };
@@ -581,11 +583,44 @@ function extractProceduralMemorySkillSignals(params: {
     }
     weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
   }
+  const stabilityMatch = params.memoryText.match(
+    /Skill stability guidance:\s*((?:\n-\s+[^\n]+)+)/i,
+  );
+  const stabilityLines = stabilityMatch
+    ? stabilityMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
+  const stabilizedSkills = uniqueCompact(
+    stabilityLines.flatMap((line) => {
+      const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+      return skill && availableSkills.includes(skill) ? [skill] : [];
+    }),
+    6,
+  );
+  for (const line of stabilityLines) {
+    const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedTaskMode = line.match(/task_mode=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedEnv = line.match(/env=([a-z0-9._-]+)/i)?.[1]?.trim();
+    if (!skill || !availableSkills.includes(skill)) {
+      continue;
+    }
+    let score = 0.45;
+    if (params.taskMode && scopedTaskMode && scopedTaskMode === params.taskMode) {
+      score += 0.15;
+    }
+    if (params.preferredEnv && scopedEnv && scopedEnv === params.preferredEnv) {
+      score += 0.1;
+    }
+    weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
+  }
   return {
     recommendedSkills,
     weightedSkills,
     weightedFamilies,
     recoveringSkills,
+    stabilizedSkills,
     workflowChains: workflowHints.chains,
     multiSkillHint: workflowHints.multiSkillHint,
   };
@@ -1356,6 +1391,8 @@ function buildOrchestrationState(params: {
   memoryRecommendedSkills?: string[];
   memoryWeightedSkills?: Map<string, number>;
   memoryWeightedFamilies?: Map<string, number>;
+  memoryRecoveringSkills?: string[];
+  memoryStabilizedSkills?: string[];
   memoryWorkflowChains?: string[][];
   memoryMultiSkillHint?: boolean;
   memoryRegressionSignals?: AgenticRegressionMemorySignal;
@@ -1368,6 +1405,8 @@ function buildOrchestrationState(params: {
   const memoryRecommendedSkills = uniqueCompact(params.memoryRecommendedSkills ?? [], 6);
   const memoryWeightedSkills = params.memoryWeightedSkills ?? new Map<string, number>();
   const memoryWeightedFamilies = params.memoryWeightedFamilies ?? new Map<string, number>();
+  const memoryRecoveringSkills = new Set(params.memoryRecoveringSkills ?? []);
+  const memoryStabilizedSkills = new Set(params.memoryStabilizedSkills ?? []);
   const memoryWorkflowChains = params.memoryWorkflowChains ?? [];
   const memoryMultiSkillHint = params.memoryMultiSkillHint === true;
   const memoryRegressionSignals = params.memoryRegressionSignals ?? {
@@ -1600,22 +1639,29 @@ function buildOrchestrationState(params: {
   const overlapFamilies = overlapSignals.families.filter((family) =>
     memoryRegressionSignals.consolidationPreferredFamilies.includes(family),
   );
+  const recoveringPrimaryFamily =
+    primarySkill && memoryRecoveringSkills.has(primarySkill)
+      ? inferSkillFamily(primarySkill)
+      : undefined;
   const strongPrimaryFamily =
-    primarySkill && effectiveFamilies.includes(inferSkillFamily(primarySkill))
+    primarySkill &&
+    effectiveFamilies.includes(inferSkillFamily(primarySkill)) &&
+    (memoryStabilizedSkills.has(primarySkill) || !memoryRecoveringSkills.has(primarySkill))
       ? inferSkillFamily(primarySkill)
       : undefined;
   const consolidationAction: AgenticConsolidationAction =
     overlapSignals.overlappingSkills.length >= 3 || overlapFamilies.length > 0
       ? "generalize_existing"
-      : overlapSignals.overlappingSkills.length >= 2 ||
-          multiSkillCandidate ||
-          Boolean(strongPrimaryFamily)
+      : (overlapSignals.overlappingSkills.length >= 2 || multiSkillCandidate) &&
+          !recoveringPrimaryFamily
         ? "extend_existing"
-        : availableSkills.length === 0
-          ? "create_new"
-          : "none";
+        : strongPrimaryFamily
+          ? "extend_existing"
+          : availableSkills.length === 0
+            ? "create_new"
+            : "none";
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -1941,6 +1987,8 @@ export function buildAgenticExecutionState(params: {
     memoryRecommendedSkills: memorySkillSignals.recommendedSkills,
     memoryWeightedSkills: memorySkillSignals.weightedSkills,
     memoryWeightedFamilies: memorySkillSignals.weightedFamilies,
+    memoryRecoveringSkills: memorySkillSignals.recoveringSkills,
+    memoryStabilizedSkills: memorySkillSignals.stabilizedSkills,
     memoryWorkflowChains: memorySkillSignals.workflowChains,
     memoryMultiSkillHint: memorySkillSignals.multiSkillHint,
     memoryRegressionSignals,

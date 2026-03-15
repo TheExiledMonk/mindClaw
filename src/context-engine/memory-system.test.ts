@@ -3612,6 +3612,122 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("state=recovered_watch");
   });
 
+  it("injects skill stability guidance into retrieved memory packets", () => {
+    const firstStableCompiled = compileMemoryState({
+      sessionId: "agent:skill-stability-guidance-packet",
+      messages: [
+        userMessage("Track a diagnostics workflow that has become stable across repeated runs."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "extend_existing",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          suggestedSkill: undefined,
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: [],
+          skillChain: ["diagnostics-repair"],
+          workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+          rankedSkills: ["diagnostics-repair"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "The diagnostics path is stable enough to keep extending.",
+          planSteps: [],
+        },
+      } as never,
+    });
+    const secondStableCompiled = compileMemoryState({
+      sessionId: "agent:skill-stability-guidance-packet",
+      messages: [
+        userMessage("Track a diagnostics workflow that has become stable across repeated runs."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "extend_existing",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          suggestedSkill: undefined,
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: [],
+          skillChain: ["diagnostics-repair"],
+          workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+          rankedSkills: ["diagnostics-repair"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "The diagnostics path remains stable over repeated runs.",
+          planSteps: [],
+        },
+      } as never,
+    });
+    for (const entry of firstStableCompiled.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of secondStableCompiled.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    firstStableCompiled.longTermMemory.push(...secondStableCompiled.longTermMemory);
+
+    const packet = retrieveMemoryContextPacket(firstStableCompiled, {
+      messages: [userMessage("Which diagnostics path is now stable enough to extend?")],
+    });
+
+    expect(packet.text).toContain("Skill stability guidance:");
+    expect(packet.text).toContain("skill=diagnostics-repair");
+    expect(packet.text).toContain("state=stable_reuse");
+  });
+
   it("includes maintenance details when diagnostics runs repair", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-repair-"));
     const sessionId = "agent:diagnostics-repair";

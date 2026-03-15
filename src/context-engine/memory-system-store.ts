@@ -6436,6 +6436,7 @@ export function retrieveMemoryContextPacket(
     const recommendedSkills = recommendProceduralSkillsFromEntries(proceduralGuidance);
     const effectivenessGuidance = deriveSkillEffectivenessGuidance(proceduralGuidance);
     const recoveryGuidance = deriveRecoveringScopedSkills(proceduralGuidance);
+    const stabilityGuidance = deriveStabilizedScopedSkills(proceduralGuidance);
     if (recommendedSkills.length > 0) {
       sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
     }
@@ -6456,6 +6457,17 @@ export function retrieveMemoryContextPacket(
             const [skill, scope] = item.split("@");
             const [taskMode, env] = (scope ?? "").split("/");
             return `skill=${skill} task_mode=${taskMode || "general"} env=${env || "unknown"} state=recovered_watch`;
+          })
+          .join("\n- ")}`,
+      );
+    }
+    if (stabilityGuidance.length > 0) {
+      sections.push(
+        `Skill stability guidance:\n- ${stabilityGuidance
+          .map((item) => {
+            const [skill, scope] = item.split("@");
+            const [taskMode, env] = (scope ?? "").split("/");
+            return `skill=${skill} task_mode=${taskMode || "general"} env=${env || "unknown"} state=stable_reuse`;
           })
           .join("\n- ")}`,
       );

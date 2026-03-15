@@ -3469,11 +3469,80 @@ describe("MemorySystemContextEngine", () => {
 
     expect(packet.text).toContain("Skill family guidance:");
     expect(packet.text).toContain("family=diagnostics");
-    expect(packet.text).toContain("template_candidate=true");
+    expect(packet.text).toContain("merge_candidate=true");
+    expect(packet.text).toContain("merge_skills=memory-diagnostics,diagnostics-repair");
     expect(packet.text).toContain("preferred_fallback=acceptance-report");
     expect(
       packet.retrievalItems.some((item) => item.reason.includes("skill family guidance")),
     ).toBe(true);
+  });
+
+  it("injects merge-ready skill family guidance into retrieved memory packets", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:skill-family-merge-guidance-packet",
+      messages: [
+        userMessage("Merge the overlapping diagnostics siblings into one reusable workflow."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+          likelySkills: ["memory-diagnostics", "diagnostics-report"],
+          alternativeSkills: ["diagnostics-validation"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/memory-diagnostics-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: ["memory-diagnostics", "diagnostics-report"],
+          skillFamilies: ["diagnostics"],
+          mergeCandidate: true,
+          mergeSkills: ["memory-diagnostics", "diagnostics-report"],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "low",
+          governanceReasons: [],
+          primarySkill: "memory-diagnostics",
+          fallbackSkills: ["diagnostics-report"],
+          skillChain: ["memory-diagnostics", "diagnostics-report"],
+          workflowSteps: [
+            { skill: "memory-diagnostics", role: "primary" },
+            { skill: "diagnostics-report", role: "supporting" },
+          ],
+          rankedSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: true,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: false,
+          failureReasons: [],
+          nextImprovement: "Merge overlapping sibling skills into one reusable workflow.",
+          planSteps: [],
+        },
+      } as never,
+    });
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [userMessage("Merge the diagnostics siblings instead of keeping both forks.")],
+    });
+
+    expect(packet.text).toContain("Skill family guidance:");
+    expect(packet.text).toContain("merge_candidate=true");
+    expect(packet.text).toContain("merge_skills=memory-diagnostics,diagnostics-report");
   });
 
   it("injects skill effectiveness guidance into retrieved memory packets", () => {

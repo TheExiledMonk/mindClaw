@@ -353,6 +353,38 @@ describe("agentic-state", () => {
     );
   });
 
+  it("uses merge-ready family guidance to merge overlapping sibling skills instead of only templating them", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Merge the overlapping diagnostics siblings into one reusable workflow instead of keeping both forks.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
+    expect(state.orchestrationState.mergeCandidate).toBe(true);
+    expect(state.orchestrationState.mergeSkills).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
+    );
+    expect(state.orchestrationState.rationale).toContain(
+      "merging overlapping diagnostics siblings",
+    );
+  });
+
   it("uses skill effectiveness guidance from memory to prefer the stronger accumulated skill", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Fix the diagnostics workflow and pick the strongest reusable path.")],
@@ -1077,6 +1109,51 @@ describe("agentic-state", () => {
     expect(record.consolidationAction).toBe("generalize_existing");
     expect(record.templateCandidate).toBe(true);
     expect(record.nextImprovement).toContain("generalize_existing");
+  });
+
+  it("persists merge-guided consolidation separately from template generalization", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Merge the diagnostics sibling workflows into one reusable path.")],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "diagnostics-report", primaryEnv: "node" },
+          { name: "diagnostics-validation", primaryEnv: "node" },
+        ],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [],
+      diffSignals: [],
+    });
+
+    expect(record.consolidationAction).toBe("generalize_existing");
+    expect(record.mergeCandidate).toBe(true);
+    expect(record.mergeSkills).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
+    );
+    expect(record.templateCandidate).toBe(false);
+    expect(record.nextImprovement).toContain("Merge overlapping sibling skills");
   });
 
   it("marks failed procedural workflows as near-miss candidates", () => {

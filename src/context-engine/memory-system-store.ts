@@ -806,14 +806,32 @@ function deriveSkillFamilyGuidanceLine(entry: LongTermMemoryEntry): string | und
       .find((tag) => tag.startsWith("procedural:primary-skill:"))
       ?.replace("procedural:primary-skill:", "")
       .trim() || "";
+  const mergeCandidate =
+    (entry.environmentTags ?? []).includes("procedural:merge-candidate") ||
+    (entry.environmentTags ?? []).filter((tag) => tag.startsWith("procedural:overlap-skill:"))
+      .length >= 2;
   const templateCandidate =
-    (entry.environmentTags ?? []).includes("procedural:template-candidate") ||
-    consolidation === "generalize_existing";
+    ((entry.environmentTags ?? []).includes("procedural:template-candidate") ||
+      consolidation === "generalize_existing") &&
+    !mergeCandidate;
+  const mergeSkills = (entry.environmentTags ?? [])
+    .filter((tag) => tag.startsWith("procedural:merge-skill:"))
+    .map((tag) => tag.replace("procedural:merge-skill:", "").trim())
+    .filter(Boolean);
+  const overlapSkills = (entry.environmentTags ?? [])
+    .filter((tag) => tag.startsWith("procedural:overlap-skill:"))
+    .map((tag) => tag.replace("procedural:overlap-skill:", "").trim())
+    .filter(Boolean);
+  const resolvedMergeSkills = uniqueStrings(
+    mergeSkills.length > 0 ? mergeSkills : overlapSkills,
+  ).slice(0, 4);
   return [
     `family=${family}`,
     `trend=${trend}`,
     consolidation !== "none" ? `consolidation=${consolidation}` : "",
     templateCandidate ? "template_candidate=true" : "",
+    mergeCandidate ? "merge_candidate=true" : "",
+    resolvedMergeSkills.length > 0 ? `merge_skills=${resolvedMergeSkills.join(",")}` : "",
     preferredFallback ? `preferred_fallback=${preferredFallback}` : "",
     primarySkill ? `primary=${primarySkill}` : "",
   ]
@@ -3560,6 +3578,8 @@ function deriveRuntimeSignalCandidates(params: {
           promotedSkills?: unknown;
           stabilityState?: unknown;
           stabilitySkills?: unknown;
+          mergeCandidate?: unknown;
+          mergeSkills?: unknown;
           prerequisiteWarnings?: unknown;
           capabilityGaps?: unknown;
           hasViableFallback?: unknown;
@@ -3781,6 +3801,14 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const mergeCandidate = proceduralExecution.mergeCandidate === true;
+    const mergeSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.mergeSkills)
+        ? proceduralExecution.mergeSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
     const prerequisiteWarnings = uniqueStrings(
       Array.isArray(proceduralExecution.prerequisiteWarnings)
         ? proceduralExecution.prerequisiteWarnings.filter(
@@ -3875,6 +3903,8 @@ function deriveRuntimeSignalCandidates(params: {
       failureReasons.length > 0 ? `failure_reasons=${failureReasons.join(",")}` : "",
       stabilityState !== "neutral" ? `stability_state=${stabilityState}` : "",
       stabilitySkills.length > 0 ? `stability_skills=${stabilitySkills.join(",")}` : "",
+      mergeCandidate ? "merge_candidate=true" : "",
+      mergeSkills.length > 0 ? `merge_skills=${mergeSkills.join(",")}` : "",
       nextImprovement ?? "",
       consolidationAction !== "none" ? `consolidation_action=${consolidationAction}` : "",
       overlappingSkills.length > 0 ? `overlap_skills=${overlappingSkills.join(",")}` : "",
@@ -3918,6 +3948,8 @@ function deriveRuntimeSignalCandidates(params: {
       shouldEscalate ? `requires escalation ${escalationReason ?? "unknown"}` : "",
       stabilityState !== "neutral" ? `stability state ${stabilityState}` : "",
       stabilitySkills.length > 0 ? `stability skills ${stabilitySkills.join(", ")}` : "",
+      mergeCandidate ? "merge candidate true" : "",
+      mergeSkills.length > 0 ? `merge skills ${mergeSkills.join(", ")}` : "",
       nextImprovement ? `Next improvement: ${nextImprovement}` : "",
     ]
       .filter(Boolean)
@@ -3949,6 +3981,8 @@ function deriveRuntimeSignalCandidates(params: {
         ...(promotedSkills.map((skill) => `procedural:promoted-skill:${skill}`) ?? []),
         stabilityState !== "neutral" ? `procedural:stability:${stabilityState}` : "",
         ...(stabilitySkills.map((skill) => `procedural:stability-skill:${skill}`) ?? []),
+        mergeCandidate ? "procedural:merge-candidate" : "",
+        ...(mergeSkills.map((skill) => `procedural:merge-skill:${skill}`) ?? []),
         ...(prerequisiteWarnings.map((warning) => `procedural:prereq:${warning}`) ?? []),
         ...(capabilityGaps.map((gap) => `procedural:capability-gap:${gap}`) ?? []),
         hasViableFallback ? "procedural:viable-fallback" : "procedural:no-viable-fallback",

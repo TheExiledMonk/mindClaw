@@ -138,6 +138,8 @@ export type AgenticOrchestrationState = {
   chainedWorkflow: boolean;
   skillFamilies: string[];
   overlappingSkills: string[];
+  mergeCandidate: boolean;
+  mergeSkills: string[];
   stabilityState: "neutral" | "recovered_watch" | "stable_reuse";
   stabilitySkills: string[];
   consolidationAction: AgenticConsolidationAction;
@@ -178,6 +180,8 @@ export type ProceduralExecutionRecord = {
   consolidationAction: AgenticConsolidationAction;
   overlappingSkills: string[];
   skillFamilies: string[];
+  mergeCandidate: boolean;
+  mergeSkills: string[];
   nearMissCandidate: boolean;
   retryClass: AgenticRetryClass;
   suggestedSkill?: string;
@@ -227,6 +231,8 @@ export type AgenticExecutionObservabilityReport = {
   stabilitySkills: string[];
   consolidationAction: AgenticConsolidationAction;
   overlappingSkills: string[];
+  mergeCandidate: boolean;
+  mergeSkills: string[];
   capabilityGaps: string[];
   failurePattern: AgenticFailureLearningState["failurePattern"];
   hasViableFallback: boolean;
@@ -403,6 +409,7 @@ type AgenticRegressionMemorySignal = {
   regressingSkillFamilies: string[];
   consolidationPreferredFamilies: string[];
   templatePreferredFamilies: string[];
+  mergePreferredFamilies: string[];
   preferredFallbackSkills: string[];
 };
 
@@ -684,6 +691,7 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
       regressingSkillFamilies: [],
       consolidationPreferredFamilies: [],
       templatePreferredFamilies: [],
+      mergePreferredFamilies: [],
       preferredFallbackSkills: [],
     };
   }
@@ -738,6 +746,14 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     }),
     6,
   );
+  const mergePreferredFamilies = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const mergeCandidate = line.match(/merge_candidate=(true|false)/i)?.[1]?.trim();
+      return family && mergeCandidate === "true" ? [family] : [];
+    }),
+    6,
+  );
   const preferredFallbackSkills = uniqueCompact(
     familyLines.flatMap((line) => {
       const fallback = line.match(/preferred_fallback=([a-z0-9_.-]+)/i)?.[1]?.trim();
@@ -757,6 +773,7 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     regressingSkillFamilies,
     consolidationPreferredFamilies,
     templatePreferredFamilies,
+    mergePreferredFamilies,
     preferredFallbackSkills,
   };
 }
@@ -1477,6 +1494,7 @@ function buildOrchestrationState(params: {
     regressingSkillFamilies: [],
     consolidationPreferredFamilies: [],
     templatePreferredFamilies: [],
+    mergePreferredFamilies: [],
     preferredFallbackSkills: [],
   };
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
@@ -1706,8 +1724,15 @@ function buildOrchestrationState(params: {
     6,
   );
   const primarySkillFamily = primarySkill ? inferSkillFamily(primarySkill) : undefined;
+  const familyGuidedMerge =
+    primarySkillFamily &&
+    memoryRegressionSignals.mergePreferredFamilies.includes(primarySkillFamily) &&
+    overlapSignals.overlappingSkills.length >= 2
+      ? primarySkillFamily
+      : undefined;
   const familyGuidedGeneralization =
     primarySkillFamily &&
+    !familyGuidedMerge &&
     (memoryRegressionSignals.templatePreferredFamilies.includes(primarySkillFamily) ||
       (memoryRegressionSignals.consolidationPreferredFamilies.includes(primarySkillFamily) &&
         (effectiveFamilies.includes(primarySkillFamily) ||
@@ -1715,6 +1740,14 @@ function buildOrchestrationState(params: {
           memoryStabilizedSkills.has(primarySkill ?? ""))))
       ? primarySkillFamily
       : undefined;
+  const mergeSkills = familyGuidedMerge
+    ? uniqueCompact(
+        overlapSignals.overlappingSkills.filter(
+          (skill) => inferSkillFamily(skill) === familyGuidedMerge,
+        ),
+        6,
+      )
+    : [];
   const stabilitySkills = uniqueCompact(
     [
       ...availableSkills
@@ -1758,7 +1791,7 @@ function buildOrchestrationState(params: {
               ? "create_new"
               : "none";
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${familyGuidedGeneralization ? ` with template-ready ${familyGuidedGeneralization} family guidance` : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${familyGuidedMerge ? ` while merging overlapping ${familyGuidedMerge} siblings ${mergeSkills.join(", ")}` : ""}${familyGuidedGeneralization ? ` with template-ready ${familyGuidedGeneralization} family guidance` : ""}${overlapFamilies.length > 0 && !familyGuidedMerge ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -1786,6 +1819,8 @@ function buildOrchestrationState(params: {
     chainedWorkflow,
     skillFamilies: orchestrationFamilies,
     overlappingSkills: overlapSignals.overlappingSkills,
+    mergeCandidate: Boolean(familyGuidedMerge),
+    mergeSkills,
     stabilityState,
     stabilitySkills,
     consolidationAction,
@@ -2290,7 +2325,8 @@ export function buildProceduralExecutionRecord(params: {
     params.verificationState.outcome !== "blocked" &&
     (changedArtifacts.length > 1 ||
       toolChain.length > 1 ||
-      params.orchestrationState.consolidationAction === "generalize_existing");
+      (params.orchestrationState.consolidationAction === "generalize_existing" &&
+        !params.orchestrationState.mergeCandidate));
 
   let nextImprovement: string | undefined;
   const resolvedPrimarySkill =
@@ -2306,6 +2342,8 @@ export function buildProceduralExecutionRecord(params: {
         );
   const skillFamilies = params.orchestrationState.skillFamilies;
   const consolidationAction = params.orchestrationState.consolidationAction;
+  const mergeCandidate = params.orchestrationState.mergeCandidate;
+  const mergeSkills = params.orchestrationState.mergeSkills;
   const resolvedFallbackSkills =
     params.orchestrationState.fallbackSkills.length > 0
       ? params.orchestrationState.fallbackSkills
@@ -2357,6 +2395,8 @@ export function buildProceduralExecutionRecord(params: {
     nextImprovement = `Promote the durable workflow path for reuse: ${resolvedPromotedSkills.join(", ")}.`;
   } else if (resolvedStabilityState === "stable_reuse") {
     nextImprovement = "Extend the stable workflow family rather than creating a new fork.";
+  } else if (mergeCandidate && mergeSkills.length > 0) {
+    nextImprovement = `Merge overlapping sibling skills into one reusable workflow: ${mergeSkills.join(", ")}.`;
   } else if (consolidationCandidate) {
     nextImprovement =
       "Consider consolidating overlapping skills into a more generic reusable workflow.";
@@ -2387,6 +2427,8 @@ export function buildProceduralExecutionRecord(params: {
     consolidationAction,
     overlappingSkills,
     skillFamilies,
+    mergeCandidate,
+    mergeSkills,
     nearMissCandidate,
     retryClass: params.plannerState.retryClass,
     suggestedSkill: params.plannerState.suggestedSkill,
@@ -2441,6 +2483,9 @@ export function inspectAgenticExecutionObservability(
       state.orchestrationState.consolidationAction !== "none"
         ? `Prefer ${state.orchestrationState.consolidationAction} for overlapping skills${state.orchestrationState.overlappingSkills.length > 0 ? `: ${state.orchestrationState.overlappingSkills.join(", ")}` : ""}.`
         : undefined,
+      state.orchestrationState.mergeCandidate && state.orchestrationState.mergeSkills.length > 0
+        ? `Merge overlapping sibling skills: ${state.orchestrationState.mergeSkills.join(", ")}`
+        : undefined,
       state.orchestrationState.stabilityState === "stable_reuse" &&
       state.orchestrationState.stabilitySkills.length > 0
         ? `Stable reusable skills can be extended: ${state.orchestrationState.stabilitySkills.join(", ")}`
@@ -2485,6 +2530,8 @@ export function inspectAgenticExecutionObservability(
     stabilitySkills: state.orchestrationState.stabilitySkills,
     consolidationAction: state.orchestrationState.consolidationAction,
     overlappingSkills: state.orchestrationState.overlappingSkills,
+    mergeCandidate: state.orchestrationState.mergeCandidate,
+    mergeSkills: state.orchestrationState.mergeSkills,
     capabilityGaps: state.orchestrationState.capabilityGaps,
     failurePattern: state.failureLearningState.failurePattern,
     hasViableFallback: state.orchestrationState.hasViableFallback,
@@ -2525,6 +2572,9 @@ export function formatAgenticExecutionObservabilityReport(
         ? `workflow=${report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(">")}`
         : "workflow=none",
       `consolidation=${report.consolidationAction}`,
+      report.mergeCandidate
+        ? `merge_skills=${report.mergeSkills.length > 0 ? report.mergeSkills.join(">") : "candidate"}`
+        : "merge_skills=none",
       `goal=${report.goalSatisfaction}`,
       report.recommendations.length > 0
         ? `recommendations=${report.recommendations.join(" | ")}`
@@ -2553,6 +2603,8 @@ export function formatAgenticExecutionObservabilityReport(
     `- Workflow chain: ${report.workflowSteps.length > 0 ? report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ") : "none"}`,
     `- Consolidation action: ${report.consolidationAction}`,
     `- Overlapping skills: ${report.overlappingSkills.length > 0 ? report.overlappingSkills.join(", ") : "none"}`,
+    `- Merge candidate: ${report.mergeCandidate ? "yes" : "no"}`,
+    `- Merge skills: ${report.mergeSkills.length > 0 ? report.mergeSkills.join(", ") : "none"}`,
     `- Goal satisfaction: ${report.goalSatisfaction}`,
     `- Unresolved criteria: ${report.unresolvedCriteria.length > 0 ? report.unresolvedCriteria.join(" | ") : "none"}`,
     `- Failure pattern: ${report.failurePattern}`,

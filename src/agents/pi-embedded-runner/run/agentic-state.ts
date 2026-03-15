@@ -276,7 +276,10 @@ export type AgenticAcceptanceReport = {
   summary: string;
 };
 
-export type AgenticSoakScenarioId = "retry_replan_recover_complete" | "handoff_resume_completion";
+export type AgenticSoakScenarioId =
+  | "retry_replan_recover_complete"
+  | "handoff_resume_completion"
+  | "effectiveness_drift_recovery";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -3466,6 +3469,128 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
             `${phase.label}:${phase.pendingHandoffSteps}:${phase.outcome}:${phase.goalSatisfaction}`,
         )
         .join("|"),
+    });
+  }
+
+  {
+    const driftState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Keep the diagnostics workflow healthy and avoid promoting weakening scoped paths.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["acceptance-report", "diagnostics-repair"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "diagnostics-repair", primaryEnv: "node" },
+      ],
+    });
+    const driftGate = runAgenticQualityGate({
+      failOnWeakeningSkills: true,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        weakeningSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
+    const recoveredState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Keep the diagnostics workflow healthy and avoid promoting weakening scoped paths.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["acceptance-report", "diagnostics-repair"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "diagnostics-repair", primaryEnv: "node" },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 2,
+          summary: "Recovered after moving back to the stronger scoped workflow.",
+        },
+      ],
+    });
+    const recoveredGate = runAgenticQualityGate({
+      failOnWeakeningSkills: true,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "stable",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        weakeningSkills: [],
+      },
+    });
+    const phases = [
+      buildSoakPhaseResult({
+        label: "effectiveness_drift",
+        state: driftState,
+        passed:
+          !driftGate.passed &&
+          driftGate.failReasons.includes("weakening_scoped_skills") &&
+          driftGate.weakeningSkills.length > 0,
+        details: `quality_gate=${driftGate.summary}`,
+      }),
+      buildSoakPhaseResult({
+        label: "effectiveness_recovery",
+        state: recoveredState,
+        passed:
+          recoveredGate.passed &&
+          recoveredGate.effectivenessPassed &&
+          recoveredGate.weakeningSkills.length === 0,
+        details: `quality_gate=${recoveredGate.summary}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "effectiveness_drift_recovery",
+      passed,
+      summary: passed
+        ? "Scoped effectiveness drift can fail the gate and then recover after the stronger path is restored."
+        : "Scoped effectiveness drift/recovery did not propagate through the long-run gate lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });
   }
 

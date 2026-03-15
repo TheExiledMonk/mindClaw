@@ -2354,7 +2354,7 @@ describe("MemorySystemContextEngine", () => {
     expect(report.health.summary).toContain("backend=sqlite-graph");
     expect(report.health.sourceTypeCounts.user_stated).toBeGreaterThanOrEqual(0);
     expect(report.retrieval?.summary).toContain("task=");
-    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(12);
+    expect(report.acceptance?.scenarioCount).toBeGreaterThanOrEqual(13);
     expect(report.failedAcceptanceScenarios).toEqual([]);
     expect(report.maintenance).toBeUndefined();
     expect(report.recommendations.length).toBeGreaterThan(0);

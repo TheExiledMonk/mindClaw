@@ -247,6 +247,118 @@ describe("memory system evaluation scenarios", () => {
     ).toBe(false);
   });
 
+  it("stays stable through a longer project lifecycle without scope bleed or concept explosion", () => {
+    const turns = [
+      {
+        text: "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a on branch feature/memory-v1.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v1",
+          },
+        },
+      },
+      {
+        text: "Summary says the old workaround is still in use in src/context-engine/memory-system.ts for install profile profile-a.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v1",
+          },
+        },
+      },
+      {
+        text: "I observed directly that the permanent memory-system path in src/context-engine/memory-system.ts is working for install profile profile-a.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v1",
+          },
+        },
+      },
+      {
+        text: "Continue using the permanent path in memory-system.ts for install profile profile-b on branch feature/memory-v2.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v2",
+          },
+        },
+      },
+      {
+        text: "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-b.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "feature/memory-v2",
+          },
+        },
+      },
+      {
+        text: "For install profile profile-a on release/memory-v3, keep using the permanent memory-system path in src/context-engine/memory-system.ts.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "release/memory-v3",
+          },
+        },
+      },
+      {
+        text: "I observed directly that install profile profile-b on release/memory-v3 no longer needs the old workaround in src/context-engine/memory-system.ts.",
+        runtimeContext: {
+          workspaceState: {
+            gitBranch: "release/memory-v3",
+          },
+        },
+      },
+    ] as const;
+
+    let compiled = compileMemoryState({
+      sessionId: "eval-project-long-run",
+      messages: [userMessage(turns[0].text)],
+      runtimeContext: turns[0].runtimeContext as never,
+    });
+    for (const turn of turns.slice(1)) {
+      compiled = compileMemoryState({
+        sessionId: "eval-project-long-run",
+        previous: compiled,
+        messages: [userMessage(turn.text)],
+        runtimeContext: turn.runtimeContext as never,
+      });
+    }
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "For install profile profile-b on release/memory-v3, what should we use in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+
+    const constraintConceptCount = new Set(
+      compiled.longTermMemory
+        .filter(
+          (entry) =>
+            entry.ontologyKind === "constraint" &&
+            entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+        )
+        .map((entry) => entry.conceptKey),
+    ).size;
+
+    expect(constraintConceptCount).toBeLessThanOrEqual(4);
+    expect(compiled.review.contestedRevisionConceptIds.length).toBeLessThanOrEqual(3);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.includes("profile=profile-b") &&
+          item.reason.includes("release/memory-v3") &&
+          item.text.includes("profile-b"),
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason.includes("profile=profile-a") &&
+          item.reason.includes("release/memory-v3") &&
+          item.text.includes("profile-a"),
+      ),
+    ).toBe(false);
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",

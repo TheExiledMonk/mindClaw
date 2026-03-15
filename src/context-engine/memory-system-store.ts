@@ -342,7 +342,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "runtime_lifecycle"
     | "permanence_invalidation"
     | "store_recovery"
-    | "mixed_lifecycle_soak";
+    | "mixed_lifecycle_soak"
+    | "project_lifecycle_long_run";
   passed: boolean;
   summary: string;
   details: string[];
@@ -6183,6 +6184,219 @@ export async function runMemoryAcceptanceSuite(params: {
       soakCompiled.review.contestedRevisionConceptIds.length <= 2,
     summary: `soak constraints=${soakConstraintConceptCount} profile-b-visible=${soakProfileBVisible} profile-a-leaked=${soakProfileALeaked} contested=${soakCompiled.review.contestedRevisionConceptIds.length}`,
     details: soakPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
+  const longRunTurns = [
+    {
+      text: "Use the permanent memory-system path in src/context-engine/memory-system.ts for install profile profile-a on branch feature/memory-v1.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v1",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+      },
+    },
+    {
+      text: "Summary says the old workaround is still in use in src/context-engine/memory-system.ts for install profile profile-a.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v1",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+      },
+    },
+    {
+      text: "I observed directly that the permanent memory-system path in src/context-engine/memory-system.ts is working for install profile profile-a.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v1",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+        checkpointSignals: [
+          {
+            kind: "completion",
+            summary: "Validated the permanent path rollout for profile-a.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+    {
+      text: "Continue using the permanent path in memory-system.ts for install profile profile-b on branch feature/memory-v2.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+        retrySignals: [
+          {
+            phase: "prompt",
+            outcome: "recovered",
+            summary: "Recovered while moving to profile-b rollout.",
+            attempt: 2,
+            maxAttempts: 3,
+          },
+        ],
+      },
+    },
+    {
+      text: "Do not use the old workaround in src/context-engine/memory-system.ts for install profile profile-b.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+      },
+    },
+    {
+      text: "Hand off the permanent memory-system rollout status for install profile profile-b.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+        checkpointSignals: [
+          {
+            kind: "handoff",
+            summary: "Hand off the profile-b permanent rollout state.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+    {
+      text: "For install profile profile-a on release/memory-v3, keep using the permanent memory-system path in src/context-engine/memory-system.ts.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+      },
+    },
+    {
+      text: "I observed directly that install profile profile-a on release/memory-v3 still uses the permanent memory-system path in src/context-engine/memory-system.ts.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+      },
+    },
+    {
+      text: "Runtime prompt assembly failed while reviewing the permanent memory-system rollout for install profile profile-a.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+        checkpointSignals: [
+          {
+            kind: "failure",
+            summary: "Prompt assembly failed while reviewing rollout state.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+    {
+      text: "For install profile profile-b on release/memory-v3, continue using the permanent memory-system path in src/context-engine/memory-system.ts.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+      },
+    },
+    {
+      text: "I observed directly that install profile profile-b on release/memory-v3 no longer needs the old workaround in src/context-engine/memory-system.ts.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/project-lifecycle.jsonl",
+        },
+        checkpointSignals: [
+          {
+            kind: "completion",
+            summary: "Completed the release/memory-v3 rollout review.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+  ] as const;
+  let longRunCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:project-long-run`,
+    messages: [userMessageForSuite(longRunTurns[0].text)],
+    runtimeContext: longRunTurns[0].runtimeContext as never,
+  });
+  for (const turn of longRunTurns.slice(1)) {
+    longRunCompiled = compileMemoryState({
+      sessionId: `${sessionIdPrefix}:project-long-run`,
+      previous: longRunCompiled,
+      messages: [userMessageForSuite(turn.text)],
+      runtimeContext: turn.runtimeContext as never,
+    });
+  }
+  const longRunPacket = retrieveMemoryContextPacket(longRunCompiled, {
+    messages: [
+      userMessageForSuite(
+        "For install profile profile-b on release/memory-v3, what should we use in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const longRunConstraintConceptCount = new Set(
+    longRunCompiled.longTermMemory
+      .filter(
+        (entry) =>
+          entry.ontologyKind === "constraint" &&
+          entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+      )
+      .map((entry) => entry.conceptKey),
+  ).size;
+  const longRunProfileBVisible = longRunPacket.retrievalItems.some(
+    (item) =>
+      item.reason.includes("profile=profile-b") &&
+      item.reason.includes("release/memory-v3") &&
+      item.text.includes("profile-b"),
+  );
+  const longRunProfileALeak = longRunPacket.retrievalItems.some(
+    (item) =>
+      item.reason.includes("profile=profile-a") &&
+      item.reason.includes("release/memory-v3") &&
+      item.text.includes("profile-a"),
+  );
+  const longRunRuntimeSignalsCaptured = longRunCompiled.longTermMemory.filter((entry) =>
+    (entry.environmentTags ?? []).some((tag) =>
+      ["runtime:checkpoint", "runtime:retry", "runtime:branch-transition"].includes(tag),
+    ),
+  ).length;
+  const longRunPermanentArtifacts = flattenPermanentNodes(longRunCompiled.permanentMemory).filter(
+    (node) => node.summary?.includes("src/context-engine/memory-system.ts"),
+  ).length;
+  scenarios.push({
+    scenario: "project_lifecycle_long_run",
+    passed:
+      longRunConstraintConceptCount <= 4 &&
+      longRunProfileBVisible &&
+      !longRunProfileALeak &&
+      longRunCompiled.review.contestedRevisionConceptIds.length <= 3 &&
+      longRunRuntimeSignalsCaptured >= 4 &&
+      longRunPermanentArtifacts > 0,
+    summary: `long-run constraints=${longRunConstraintConceptCount} profile-b-visible=${longRunProfileBVisible} profile-a-leaked=${longRunProfileALeak} runtime-signals=${longRunRuntimeSignalsCaptured}`,
+    details: longRunPacket.retrievalItems.map(
       (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
     ),
   });

@@ -221,6 +221,37 @@ describe("agentic-state", () => {
     );
   });
 
+  it("lets verified procedural memory outweigh a weak near-miss path", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Keep the diagnostics workflow moving and reuse the strongest reporting workflow.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: fallback chain acceptance-report: with outcome failed: failure pattern near_miss: suggested fallback acceptance-report",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.orchestrationState.rankedSkills).toEqual([
+      "acceptance-report",
+      "memory-diagnostics",
+    ]);
+  });
+
   it("escalates environment mismatches instead of recommending normal retries", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],

@@ -204,6 +204,11 @@ type WorkspaceState = {
   transcriptExists?: boolean;
 };
 
+type ProceduralMemorySkillSignal = {
+  recommendedSkills: string[];
+  weightedSkills: Map<string, number>;
+};
+
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   if (!memoryText) {
     return [];
@@ -219,6 +224,69 @@ function extractRecommendedProceduralSkills(memoryText?: string): string[] {
       .filter(Boolean),
     6,
   );
+}
+
+function extractProceduralMemorySkillSignals(params: {
+  memoryText?: string;
+  availableSkills?: string[];
+}): ProceduralMemorySkillSignal {
+  const recommendedSkills = extractRecommendedProceduralSkills(params.memoryText);
+  const weightedSkills = new Map<string, number>();
+  for (const skill of recommendedSkills) {
+    weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + 2.5);
+  }
+  if (!params.memoryText || !params.availableSkills || params.availableSkills.length === 0) {
+    return { recommendedSkills, weightedSkills };
+  }
+  const guidanceMatch = params.memoryText.match(/Procedural guidance:\s*((?:\n-\s+[^\n]+)+)/i);
+  if (!guidanceMatch) {
+    return { recommendedSkills, weightedSkills };
+  }
+  const guidanceLines = guidanceMatch[1]
+    .split("\n")
+    .map((line) => line.replace(/^\s*-\s+/, "").trim())
+    .filter(Boolean);
+  for (const line of guidanceLines) {
+    const normalizedLine = line.toLowerCase();
+    const outcomeBoost = normalizedLine.includes("with outcome verified")
+      ? 1.5
+      : normalizedLine.includes("with outcome partial")
+        ? 0.75
+        : normalizedLine.includes("with outcome failed") ||
+            normalizedLine.includes("with outcome blocked")
+          ? -0.5
+          : 0;
+    const failureBoost = normalizedLine.includes("failure pattern clean_success")
+      ? 1
+      : normalizedLine.includes("failure pattern near_miss")
+        ? -0.25
+        : normalizedLine.includes("failure pattern blocked_path") ||
+            normalizedLine.includes("failure pattern hard_failure")
+          ? -0.75
+          : 0;
+    for (const skill of params.availableSkills) {
+      const normalizedSkill = skill.toLowerCase();
+      if (!normalizedLine.includes(normalizedSkill)) {
+        continue;
+      }
+      let score = weightedSkills.get(skill) ?? 0;
+      if (normalizedLine.includes(`primary skill ${normalizedSkill}`)) {
+        score += 1.5;
+      }
+      if (normalizedLine.includes(`suggested fallback ${normalizedSkill}`)) {
+        score += 1.25;
+      }
+      if (normalizedLine.includes(`fallback chain ${normalizedSkill}`)) {
+        score += 0.75;
+      }
+      if (normalizedLine.includes(`uses skill path ${normalizedSkill}`)) {
+        score += 1;
+      }
+      score += outcomeBoost + failureBoost;
+      weightedSkills.set(skill, score);
+    }
+  }
+  return { recommendedSkills, weightedSkills };
 }
 
 function extractMessageText(message: AgentMessage): string {
@@ -674,6 +742,7 @@ function buildOrchestrationState(params: {
   availableSkills?: SkillInfo[];
   likelySkills?: string[];
   memoryRecommendedSkills?: string[];
+  memoryWeightedSkills?: Map<string, number>;
   alternativeSkills?: string[];
   toolSignals?: ToolSignal[];
   plannerState?: AgenticPlannerState;
@@ -681,6 +750,7 @@ function buildOrchestrationState(params: {
   const availableSkills = params.availableSkills ?? [];
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
   const memoryRecommendedSkills = uniqueCompact(params.memoryRecommendedSkills ?? [], 6);
+  const memoryWeightedSkills = params.memoryWeightedSkills ?? new Map<string, number>();
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const toolNames = new Set((params.toolSignals ?? []).map((signal) => signal.toolName));
   const preferredEnv = inferPreferredSkillEnvironment(params.objectiveText ?? "", params.taskMode);
@@ -701,6 +771,10 @@ function buildOrchestrationState(params: {
       if (memoryRecommendedSkills.includes(skill.name)) {
         score += 3.5;
         reasons.push("memory-recommended");
+      }
+      if (memoryWeightedSkills.has(skill.name)) {
+        score += memoryWeightedSkills.get(skill.name) ?? 0;
+        reasons.push("memory-quality");
       }
       if (alternativeSkills.includes(skill.name)) {
         score += 1.5;
@@ -990,19 +1064,21 @@ export function buildAgenticExecutionState(params: {
     verificationState,
     plannerState,
   });
-  const memoryRecommendedSkills = extractRecommendedProceduralSkills(
-    params.memorySystemPromptAddition,
-  );
   const availableSkillInfo =
     params.availableSkillInfo && params.availableSkillInfo.length > 0
       ? params.availableSkillInfo
       : (params.availableSkills ?? []).map((skill) => ({ name: skill }));
+  const memorySkillSignals = extractProceduralMemorySkillSignals({
+    memoryText: params.memorySystemPromptAddition,
+    availableSkills: availableSkillInfo.map((skill) => skill.name),
+  });
   const orchestrationState = buildOrchestrationState({
     taskMode: taskState.taskMode,
     objectiveText: taskState.objective,
     availableSkills: availableSkillInfo,
     likelySkills: params.likelySkills,
-    memoryRecommendedSkills,
+    memoryRecommendedSkills: memorySkillSignals.recommendedSkills,
+    memoryWeightedSkills: memorySkillSignals.weightedSkills,
     alternativeSkills: plannerState.alternativeSkills,
     toolSignals: params.toolSignals,
     plannerState,
@@ -1034,7 +1110,7 @@ export function extractAgenticMemoryRecommendations(memoryText?: string): {
   recommendedSkills: string[];
 } {
   return {
-    recommendedSkills: extractRecommendedProceduralSkills(memoryText),
+    recommendedSkills: extractProceduralMemorySkillSignals({ memoryText }).recommendedSkills,
   };
 }
 

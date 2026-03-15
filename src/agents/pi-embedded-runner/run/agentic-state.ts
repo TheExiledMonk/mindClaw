@@ -231,6 +231,7 @@ export type AgenticExecutionObservabilityReport = {
   summary: string;
   progressSummary: string;
   clarificationSummary?: string;
+  clarificationReason?: string;
   retryClass: AgenticRetryClass;
   autonomyMode: AgenticAutonomyMode;
   riskLevel: AgenticRiskLevel;
@@ -346,7 +347,8 @@ export type AgenticSoakScenarioId =
   | "guarded_handoff_boundary"
   | "concise_progress_resume_boundary"
   | "clarification_resume_boundary"
-  | "rich_clarification_resume_boundary";
+  | "rich_clarification_resume_boundary"
+  | "memory_backed_clarification_reporting_boundary";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -488,6 +490,13 @@ function buildClarificationResumeCondition(reason?: string): string {
       : reason === "missing_information:external_input"
         ? "Provide the missing external input before resuming."
         : "Capture an observed validation command or missing prerequisite before resuming.";
+}
+
+function buildClarificationRecommendation(reason?: string, summary?: string): string | undefined {
+  if (reason && reason !== "missing_information:file_or_input") {
+    return buildClarificationNextAction(reason);
+  }
+  return summary;
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -3211,10 +3220,15 @@ export function inspectAgenticExecutionObservability(
     4,
   ).join(" ");
   const clarificationSummary = extractClarificationSummary(state);
+  const clarificationReason =
+    state.plannerState.retryClass === "clarify"
+      ? pickSpecificClarificationFailureReason(state.failureLearningState.failureReasons)
+      : undefined;
   return {
     summary,
     progressSummary,
     clarificationSummary,
+    clarificationReason,
     retryClass: state.plannerState.retryClass,
     autonomyMode: state.governanceState.autonomyMode,
     riskLevel: state.governanceState.riskLevel,
@@ -6939,6 +6953,73 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     });
   }
 
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the deployment task once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:environment_variable trend=watch",
+      ].join("\n"),
+    });
+    const diagnostics = inspectAgenticExecutionObservability(state);
+    const gate = runAgenticQualityGate({
+      diagnosticsOverride: diagnostics,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+    const phases = [
+      buildSoakPhaseResult({
+        label: "memory_backed_clarification_diagnostics",
+        state,
+        passed:
+          diagnostics.clarificationReason === "missing_information:environment_variable" &&
+          gate.recommendations.includes(
+            "Configure the missing environment variable before retrying.",
+          ) &&
+          gate.recommendations.includes("Need clarification on: prerequisite for deployment."),
+        details: `reason=${diagnostics.clarificationReason ?? "none"} recommendations=${gate.recommendations.join("|")}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "memory_backed_clarification_reporting_boundary",
+      passed,
+      summary: passed
+        ? "Memory-backed clarification history shapes release-facing guidance even when the current blocker text is generic."
+        : "Memory-backed clarification history did not stay visible in release-facing reporting.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
   const failedScenarioIds = scenarios
     .filter((scenario) => !scenario.passed)
     .map((scenario) => scenario.id);
@@ -7055,7 +7136,15 @@ export function runAgenticQualityGate(params?: {
       diagnostics.autonomyMode === "approval_required"
         ? "Protected-branch or high-risk mutation work requires approval before continuing."
         : undefined,
-      diagnostics.retryClass === "clarify" && diagnostics.clarificationSummary
+      diagnostics.retryClass === "clarify"
+        ? buildClarificationRecommendation(
+            diagnostics.clarificationReason,
+            diagnostics.clarificationSummary,
+          )
+        : undefined,
+      diagnostics.retryClass === "clarify" &&
+      diagnostics.clarificationReason &&
+      diagnostics.clarificationReason !== "missing_information:file_or_input"
         ? diagnostics.clarificationSummary
         : undefined,
       diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"

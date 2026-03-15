@@ -115,6 +115,17 @@ describe("agentic soak suite", () => {
       "operator approval for production deployment",
     );
     expect(richClarificationLifecycle?.phases[3]?.details).toContain("clarification=none");
+
+    const memoryBackedClarificationLifecycle = report.scenarios.find(
+      (scenario) => scenario.id === "memory_backed_clarification_reporting_boundary",
+    );
+    expect(memoryBackedClarificationLifecycle?.phases[0]?.passed).toBe(true);
+    expect(memoryBackedClarificationLifecycle?.phases[0]?.details).toContain(
+      "missing_information:environment_variable",
+    );
+    expect(memoryBackedClarificationLifecycle?.phases[0]?.details).toContain(
+      "Configure the missing environment variable before retrying.",
+    );
   });
 
   it("formats the soak report in summary and markdown forms", () => {

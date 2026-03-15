@@ -307,6 +307,60 @@ describe("agentic quality gate", () => {
     );
   });
 
+  it("uses memory-backed clarification subtype guidance in the quality gate", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the deployment task once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:environment_variable trend=watch",
+      ].join("\n"),
+    });
+
+    const clarificationReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(clarificationReport.recommendations).toContain(
+      "Configure the missing environment variable before retrying.",
+    );
+    expect(clarificationReport.recommendations).toContain(
+      "Need clarification on: prerequisite for deployment.",
+    );
+    expect(formatAgenticQualityGateReport(clarificationReport, "summary")).toContain(
+      "Configure the missing environment variable before retrying.",
+    );
+  });
+
   it("surfaces template-ready and merge-ready consolidation recommendations in the quality gate", () => {
     const templateDiagnostics = inspectAgenticExecutionObservability({
       taskState: {

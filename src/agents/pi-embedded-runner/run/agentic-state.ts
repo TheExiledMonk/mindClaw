@@ -381,6 +381,7 @@ export type AgenticSoakReport = {
   scenarios: AgenticSoakScenarioResult[];
   clarificationProfileCounts?: string[];
   dominantClarificationProfile?: AgenticQualityGateReport["clarificationProfile"];
+  clarificationTrendSignals?: string[];
   summary: string;
 };
 
@@ -563,6 +564,34 @@ function summarizeClarificationProfiles(
     counts: entries.map(([profile, count]) => `${profile}:${count}`),
     dominantProfile: topProfiles.length === 1 ? topProfiles[0][0] : "mixed",
   };
+}
+
+function summarizeClarificationProfileTrends(
+  profiles: AgenticQualityGateReport["clarificationProfile"][],
+): string[] {
+  const normalizedProfiles = profiles.filter(
+    (profile) => profile !== "none" && profile !== "mixed",
+  );
+  if (normalizedProfiles.length < 2) {
+    return [];
+  }
+  const midpoint = Math.max(1, Math.floor(normalizedProfiles.length / 2));
+  const earlyProfiles = normalizedProfiles.slice(0, midpoint);
+  const lateProfiles = normalizedProfiles.slice(midpoint);
+  const trackableProfiles: Array<
+    Exclude<AgenticQualityGateReport["clarificationProfile"], "none" | "mixed">
+  > = ["environment_variable", "approval", "external_input"];
+  const trendSignals: string[] = [];
+  for (const profile of trackableProfiles) {
+    const earlyCount = earlyProfiles.filter((candidate) => candidate === profile).length;
+    const lateCount = lateProfiles.filter((candidate) => candidate === profile).length;
+    if (earlyCount === 0 && lateCount === 0) {
+      continue;
+    }
+    const trend = lateCount > earlyCount ? "rising" : lateCount < earlyCount ? "falling" : "steady";
+    trendSignals.push(`${profile}:${trend}(${earlyCount}->${lateCount})`);
+  }
+  return trendSignals;
 }
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -7298,9 +7327,11 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     .filter((scenario) => !scenario.passed)
     .map((scenario) => scenario.id);
   const passedScenarios = scenarios.length - failedScenarioIds.length;
-  const clarificationSummary = summarizeClarificationProfiles(
-    scenarios.flatMap((scenario) => scenario.phases.map((phase) => phase.clarificationProfile)),
+  const clarificationProfiles = scenarios.flatMap((scenario) =>
+    scenario.phases.map((phase) => phase.clarificationProfile),
   );
+  const clarificationSummary = summarizeClarificationProfiles(clarificationProfiles);
+  const clarificationTrendSignals = summarizeClarificationProfileTrends(clarificationProfiles);
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7309,6 +7340,7 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
     scenarios,
     clarificationProfileCounts: clarificationSummary.counts,
     dominantClarificationProfile: clarificationSummary.dominantProfile,
+    clarificationTrendSignals,
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7322,10 +7354,12 @@ export function formatAgenticSoakReport(
   }
   if (format === "summary") {
     const clarificationProfileCounts = report.clarificationProfileCounts ?? [];
+    const clarificationTrendSignals = report.clarificationTrendSignals ?? [];
     const lines = [
       report.summary,
       `clarification_profile=${report.dominantClarificationProfile ?? "none"}`,
       `clarification_mix=${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(",") : "none"}`,
+      `clarification_trends=${clarificationTrendSignals.length > 0 ? clarificationTrendSignals.join(",") : "none"}`,
       ...report.scenarios.map(
         (scenario) =>
           `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
@@ -7336,12 +7370,14 @@ export function formatAgenticSoakReport(
     return `${lines.join("\n")}\n`;
   }
   const clarificationProfileCounts = report.clarificationProfileCounts ?? [];
+  const clarificationTrendSignals = report.clarificationTrendSignals ?? [];
   const lines = [
     "# Agentic Soak Report",
     "",
     `Summary: ${report.summary}`,
     `Dominant clarification profile: ${report.dominantClarificationProfile ?? "none"}`,
     `Clarification mix: ${clarificationProfileCounts.length > 0 ? clarificationProfileCounts.join(", ") : "none"}`,
+    `Clarification trends: ${clarificationTrendSignals.length > 0 ? clarificationTrendSignals.join(", ") : "none"}`,
     "",
     ...report.scenarios.flatMap((scenario) => [
       `## ${scenario.id}`,

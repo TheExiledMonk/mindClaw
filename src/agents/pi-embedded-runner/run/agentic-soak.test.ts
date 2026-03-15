@@ -11,6 +11,9 @@ describe("agentic soak suite", () => {
     expect(report.clarificationProfileCounts).toContain("environment_variable:2");
     expect(report.clarificationProfileCounts).toContain("approval:2");
     expect(report.clarificationProfileCounts).toContain("external_input:1");
+    expect(report.clarificationTrendSignals).toContain("environment_variable:steady(1->1)");
+    expect(report.clarificationTrendSignals).toContain("approval:steady(1->1)");
+    expect(report.clarificationTrendSignals).toContain("external_input:rising(0->1)");
 
     const retryLifecycle = report.scenarios.find(
       (scenario) => scenario.id === "retry_replan_recover_complete",
@@ -151,10 +154,12 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain("agentic soak");
     expect(formatAgenticSoakReport(report, "summary")).toContain("clarification_profile=mixed");
     expect(formatAgenticSoakReport(report, "summary")).toContain("clarification_mix=");
+    expect(formatAgenticSoakReport(report, "summary")).toContain("clarification_trends=");
     expect(formatAgenticSoakReport(report, "markdown")).toContain("# Agentic Soak Report");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Dominant clarification profile: mixed",
     );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain("Clarification trends:");
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "## retry_replan_recover_complete",
     );

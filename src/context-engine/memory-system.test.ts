@@ -291,6 +291,68 @@ describe("memory system store", () => {
     expect(compiled.compilerNotes).toContain("captured 1 runtime signal memories");
   });
 
+  it("captures runtime checkpoint, diff, and branch transition memories", () => {
+    const compiled = compileMemoryState({
+      sessionId: "session-runtime-events",
+      previous: {
+        workingMemory: {
+          ...buildWorkingMemorySnapshot({
+            sessionId: "session-runtime-events",
+            messages: [],
+          }),
+          lastWorkspaceBranch: "feature/memory-v1",
+        },
+        longTermMemory: [],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      messages: [userMessage("Continue the runtime integration work.")],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+        diffSignals: [
+          {
+            artifactRef: "src/context-engine/memory-system-store.ts",
+            changeKind: "modified",
+            summary:
+              "Updated src/context-engine/memory-system-store.ts to ingest runtime checkpoint signals.",
+          },
+        ],
+        checkpointSignals: [
+          {
+            kind: "completion",
+            summary:
+              "The memory-runtime integration checkpoint is completed for src/context-engine/memory-system-store.ts.",
+            artifactRefs: ["src/context-engine/memory-system-store.ts"],
+          },
+        ],
+      },
+    });
+
+    expect(compiled.workingMemory.lastWorkspaceBranch).toBe("feature/memory-v2");
+    expect(
+      compiled.longTermMemory.some((entry) =>
+        entry.text.includes(
+          "Workspace git branch changed from feature/memory-v1 to feature/memory-v2",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      compiled.longTermMemory.some((entry) =>
+        entry.text.includes(
+          "Artifact src/context-engine/memory-system-store.ts was modified during runtime",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      compiled.longTermMemory.some((entry) =>
+        entry.text.includes("Runtime completion checkpoint recorded"),
+      ),
+    ).toBe(true);
+  });
+
   it("gates permanent-memory promotion through explicit permanence policy", () => {
     const compiled = compileMemoryState({
       sessionId: "permanence-policy-a",

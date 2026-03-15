@@ -158,6 +158,16 @@ export type CompactEmbeddedPiSessionParams = {
     summary: string;
     artifactRefs?: string[];
   }>;
+  diffSignals?: Array<{
+    artifactRef: string;
+    changeKind: "modified" | "created" | "deleted";
+    summary: string;
+  }>;
+  checkpointSignals?: Array<{
+    kind: "completion" | "handoff" | "failure";
+    summary: string;
+    artifactRefs?: string[];
+  }>;
   promptErrorSummary?: string;
 };
 

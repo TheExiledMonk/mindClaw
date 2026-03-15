@@ -127,6 +127,7 @@ export type WorkingMemorySnapshot = {
   updatedAt: number;
   rollingSummary: string;
   carryForwardSummary?: string;
+  lastWorkspaceBranch?: string;
   activeFacts: string[];
   activeGoals: string[];
   openLoops: string[];
@@ -1022,9 +1023,32 @@ function findConceptMatch(
         computeOverlapScore(alias, incomingCanonicalTokens),
       ),
     );
+    const candidateRuntimeTags = (candidate.environmentTags ?? []).filter((tag) =>
+      /^(runtime:|checkpoint:|diff:)/.test(tag),
+    );
+    const incomingRuntimeTags = (incoming.environmentTags ?? []).filter((tag) =>
+      /^(runtime:|checkpoint:|diff:)/.test(tag),
+    );
+    const runtimeTagOverlap = candidateRuntimeTags.filter((tag) =>
+      incomingRuntimeTags.includes(tag),
+    ).length;
     const artifactOverlap = (candidate.artifactRefs ?? []).filter((ref) =>
       (incoming.artifactRefs ?? []).includes(ref),
     ).length;
+    if (
+      candidateRuntimeTags.length > 0 &&
+      incomingRuntimeTags.length > 0 &&
+      runtimeTagOverlap === 0
+    ) {
+      continue;
+    }
+    if (
+      artifactOverlap === 0 &&
+      Boolean((candidate.artifactRefs ?? []).length) !==
+        Boolean((incoming.artifactRefs ?? []).length)
+    ) {
+      continue;
+    }
     const scopeOverlap =
       Number(candidate.versionScope === incoming.versionScope && Boolean(candidate.versionScope)) +
       Number(
@@ -1035,7 +1059,12 @@ function findConceptMatch(
         candidate.customerScope === incoming.customerScope && Boolean(candidate.customerScope),
       );
     const score =
-      overlap + canonicalOverlap * 2 + aliasOverlap + artifactOverlap * 3 + scopeOverlap * 2;
+      overlap +
+      canonicalOverlap * 2 +
+      aliasOverlap +
+      artifactOverlap * 3 +
+      scopeOverlap * 2 +
+      runtimeTagOverlap * 2;
     if (
       score >= 6 &&
       (score > bestScore ||
@@ -1131,6 +1160,7 @@ export function buildWorkingMemorySnapshot(params: {
   messages: AgentMessage[];
   previous?: WorkingMemorySnapshot;
   compactionSummary?: string;
+  runtimeContext?: ContextEngineRuntimeContext;
 }): WorkingMemorySnapshot {
   const lines = gatherRelevantLines(params.messages);
   const recentEvents = dedupeTexts(lines.slice(-MAX_WORKING_ITEMS).toReversed()).toReversed();
@@ -1173,6 +1203,14 @@ export function buildWorkingMemorySnapshot(params: {
     updatedAt: Date.now(),
     rollingSummary,
     carryForwardSummary: params.previous?.carryForwardSummary,
+    lastWorkspaceBranch:
+      params.runtimeContext &&
+      typeof params.runtimeContext.workspaceState === "object" &&
+      params.runtimeContext.workspaceState &&
+      typeof (params.runtimeContext.workspaceState as { gitBranch?: unknown }).gitBranch ===
+        "string"
+        ? ((params.runtimeContext.workspaceState as { gitBranch?: string }).gitBranch ?? undefined)
+        : params.previous?.lastWorkspaceBranch,
     activeFacts,
     activeGoals,
     openLoops,
@@ -1549,6 +1587,7 @@ export function deriveLongTermMemoryCandidates(params: {
 function deriveRuntimeSignalCandidates(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   scopeContext?: Partial<MemoryScopeContext>;
+  previousWorkingMemory?: WorkingMemorySnapshot;
 }): LongTermMemoryEntry[] {
   const runtime = params.runtimeContext;
   if (!runtime || typeof runtime !== "object") {
@@ -1557,6 +1596,83 @@ function deriveRuntimeSignalCandidates(params: {
 
   const toolSignals = Array.isArray(runtime.toolSignals) ? runtime.toolSignals : [];
   const candidates: LongTermMemoryEntry[] = [];
+  const pushRuntimeCandidate = (input: {
+    category: MemoryCategory;
+    text: string;
+    evidence: string[];
+    environmentTags?: string[];
+    artifactRefs?: string[];
+    confidence: number;
+    strength: number;
+    importanceClass: LongTermMemoryEntry["importanceClass"];
+    trend: LongTermMemoryEntry["trend"];
+  }) => {
+    const scope = mergeScopeContexts(buildMemoryScopeContext(input.text), {
+      ...params.scopeContext,
+      artifactRefs: uniqueStrings([
+        ...(params.scopeContext?.artifactRefs ?? []),
+        ...(input.artifactRefs ?? []),
+      ]),
+      environmentTags: uniqueStrings([
+        ...(params.scopeContext?.environmentTags ?? []),
+        ...(input.environmentTags ?? []),
+      ]),
+    });
+    const ontologyKind = inferOntologyKind(input.category, input.text);
+    const semanticKey = buildMemorySemanticKey({
+      category: input.category,
+      text: input.text,
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      artifactRefs: scope.artifactRefs,
+    });
+    const now = Date.now();
+    candidates.push({
+      id: buildStableMemoryId("ltm", semanticKey),
+      semanticKey,
+      conceptKey: buildMemoryConceptKey({
+        category: input.category,
+        ontologyKind,
+        text: input.text,
+        versionScope: scope.versionScope,
+        installProfileScope: scope.installProfileScope,
+        customerScope: scope.customerScope,
+        artifactRefs: scope.artifactRefs,
+      }),
+      canonicalText: canonicalizeComparable(input.text),
+      conceptAliases: [input.text, ...input.evidence].filter(Boolean),
+      ontologyKind,
+      category: input.category,
+      text: input.text,
+      strength: input.strength,
+      evidence: input.evidence,
+      provenance: [createProvenanceRecord("derived", input.evidence[0] ?? input.text)],
+      sourceType: "direct_observation",
+      confidence: input.confidence,
+      importanceClass: input.importanceClass,
+      compressionState: "stable",
+      activeStatus: "active",
+      adjudicationStatus: "authoritative",
+      revisionCount: 0,
+      lastRevisionKind: "new",
+      permanenceStatus: "deferred",
+      permanenceReasons: [],
+      trend: input.trend,
+      accessCount: 0,
+      createdAt: now,
+      lastConfirmedAt: now,
+      contradictionCount: 0,
+      relatedMemoryIds: [],
+      relations: [],
+      versionScope: scope.versionScope,
+      installProfileScope: scope.installProfileScope,
+      customerScope: scope.customerScope,
+      environmentTags: scope.environmentTags,
+      artifactRefs: scope.artifactRefs,
+      updatedAt: now,
+    });
+  };
 
   for (const signal of toolSignals) {
     if (!signal || typeof signal !== "object") {
@@ -1587,75 +1703,118 @@ function deriveRuntimeSignalCandidates(params: {
       continue;
     }
 
-    const category: MemoryCategory =
-      status === "error" || toolName === "write" || toolName === "exec" ? "episode" : "fact";
-    const text =
-      status === "error"
-        ? `Tool ${toolName} failed during runtime: ${summary}`
-        : `Tool ${toolName} observed during runtime: ${summary}`;
-    const scope = mergeScopeContexts(buildMemoryScopeContext(text), {
-      ...params.scopeContext,
-      artifactRefs: uniqueStrings([...(params.scopeContext?.artifactRefs ?? []), ...artifactRefs]),
-      environmentTags: uniqueStrings([
-        ...(params.scopeContext?.environmentTags ?? []),
-        `tool:${toolName}`,
-        `tool-status:${status}`,
-      ]),
-    });
-    const ontologyKind = inferOntologyKind(category, text);
-    const semanticKey = buildMemorySemanticKey({
-      category,
-      text,
-      versionScope: scope.versionScope,
-      installProfileScope: scope.installProfileScope,
-      customerScope: scope.customerScope,
-      artifactRefs: scope.artifactRefs,
-    });
-    const now = Date.now();
-
-    candidates.push({
-      id: buildStableMemoryId("ltm", semanticKey),
-      semanticKey,
-      conceptKey: buildMemoryConceptKey({
-        category,
-        ontologyKind,
-        text,
-        versionScope: scope.versionScope,
-        installProfileScope: scope.installProfileScope,
-        customerScope: scope.customerScope,
-        artifactRefs: scope.artifactRefs,
-      }),
-      canonicalText: canonicalizeComparable(text),
-      conceptAliases: [text, summary, toolName],
-      ontologyKind,
-      category,
-      text,
-      strength: status === "error" ? 0.92 : 0.76,
+    pushRuntimeCandidate({
+      category:
+        status === "error" || toolName === "write" || toolName === "exec" ? "episode" : "fact",
+      text:
+        status === "error"
+          ? `Tool ${toolName} failed during runtime: ${summary}`
+          : `Tool ${toolName} observed during runtime: ${summary}`,
       evidence: [summary],
-      provenance: [createProvenanceRecord("derived", `runtime ${status}: ${summary}`)],
-      sourceType: "direct_observation",
+      artifactRefs,
+      environmentTags: [`tool:${toolName}`, `tool-status:${status}`],
       confidence: status === "error" ? 0.9 : 0.72,
+      strength: status === "error" ? 0.92 : 0.76,
       importanceClass: status === "error" ? "critical" : "useful",
-      compressionState: "stable",
-      activeStatus: "active",
-      adjudicationStatus: "authoritative",
-      revisionCount: 0,
-      lastRevisionKind: "new",
-      permanenceStatus: "deferred",
-      permanenceReasons: [],
       trend: status === "error" ? "rising" : "stable",
-      accessCount: 0,
-      createdAt: now,
-      lastConfirmedAt: now,
-      contradictionCount: 0,
-      relatedMemoryIds: [],
-      relations: [],
-      versionScope: scope.versionScope,
-      installProfileScope: scope.installProfileScope,
-      customerScope: scope.customerScope,
-      environmentTags: scope.environmentTags,
-      artifactRefs: scope.artifactRefs,
-      updatedAt: now,
+    });
+  }
+
+  const diffSignals = Array.isArray(runtime.diffSignals) ? runtime.diffSignals : [];
+  for (const signal of diffSignals) {
+    if (!signal || typeof signal !== "object") {
+      continue;
+    }
+    const artifactRef =
+      typeof signal.artifactRef === "string" && signal.artifactRef.trim().length > 0
+        ? signal.artifactRef.trim()
+        : undefined;
+    const changeKind =
+      signal.changeKind === "created" ||
+      signal.changeKind === "deleted" ||
+      signal.changeKind === "modified"
+        ? signal.changeKind
+        : undefined;
+    const summary =
+      typeof signal.summary === "string" && signal.summary.trim().length > 0
+        ? signal.summary.trim()
+        : undefined;
+    if (!artifactRef || !changeKind || !summary) {
+      continue;
+    }
+    pushRuntimeCandidate({
+      category: "episode",
+      text: `Artifact ${artifactRef} was ${changeKind} during runtime: ${summary}`,
+      evidence: [summary],
+      artifactRefs: [artifactRef],
+      environmentTags: ["runtime:artifact-diff", `diff:${changeKind}`],
+      confidence: 0.88,
+      strength: 0.84,
+      importanceClass: "useful",
+      trend: "rising",
+    });
+  }
+
+  const checkpointSignals = Array.isArray(runtime.checkpointSignals)
+    ? runtime.checkpointSignals
+    : [];
+  for (const signal of checkpointSignals) {
+    if (!signal || typeof signal !== "object") {
+      continue;
+    }
+    const kind =
+      signal.kind === "completion" || signal.kind === "handoff" || signal.kind === "failure"
+        ? signal.kind
+        : undefined;
+    const summary =
+      typeof signal.summary === "string" && signal.summary.trim().length > 0
+        ? signal.summary.trim()
+        : undefined;
+    const artifactRefs = uniqueStrings(
+      Array.isArray(signal.artifactRefs)
+        ? signal.artifactRefs.filter(
+            (ref: unknown): ref is string => typeof ref === "string" && ref.trim().length > 0,
+          )
+        : [],
+    );
+    if (!kind || !summary) {
+      continue;
+    }
+    pushRuntimeCandidate({
+      category: "episode",
+      text:
+        kind === "handoff"
+          ? `Runtime handoff checkpoint recorded: ${summary}`
+          : kind === "failure"
+            ? `Runtime failure checkpoint recorded: ${summary}`
+            : `Runtime completion checkpoint recorded: ${summary}`,
+      evidence: [summary],
+      artifactRefs,
+      environmentTags: ["runtime:checkpoint", `checkpoint:${kind}`],
+      confidence: kind === "failure" ? 0.93 : 0.86,
+      strength: kind === "failure" ? 0.94 : 0.82,
+      importanceClass: kind === "failure" ? "critical" : "useful",
+      trend: "rising",
+    });
+  }
+
+  const currentBranch =
+    runtime.workspaceState &&
+    typeof runtime.workspaceState === "object" &&
+    typeof (runtime.workspaceState as { gitBranch?: unknown }).gitBranch === "string"
+      ? ((runtime.workspaceState as { gitBranch?: string }).gitBranch ?? undefined)
+      : undefined;
+  const previousBranch = params.previousWorkingMemory?.lastWorkspaceBranch;
+  if (currentBranch && previousBranch && currentBranch !== previousBranch) {
+    pushRuntimeCandidate({
+      category: "episode",
+      text: `Workspace git branch changed from ${previousBranch} to ${currentBranch}.`,
+      evidence: [`branch transition ${previousBranch} -> ${currentBranch}`],
+      environmentTags: ["runtime:branch-transition", `git-branch:${currentBranch}`],
+      confidence: 0.94,
+      strength: 0.9,
+      importanceClass: "useful",
+      trend: "rising",
     });
   }
 
@@ -1664,70 +1823,15 @@ function deriveRuntimeSignalCandidates(params: {
       ? runtime.promptErrorSummary.trim()
       : undefined;
   if (promptErrorSummary) {
-    const text = `Prompt construction failed during runtime: ${promptErrorSummary}`;
-    const scope = mergeScopeContexts(buildMemoryScopeContext(text), {
-      ...params.scopeContext,
-      environmentTags: uniqueStrings([
-        ...(params.scopeContext?.environmentTags ?? []),
-        "runtime:prompt-error",
-      ]),
-    });
-    const ontologyKind = inferOntologyKind("episode", text);
-    const semanticKey = buildMemorySemanticKey({
+    pushRuntimeCandidate({
       category: "episode",
-      text,
-      versionScope: scope.versionScope,
-      installProfileScope: scope.installProfileScope,
-      customerScope: scope.customerScope,
-      artifactRefs: scope.artifactRefs,
-    });
-    const now = Date.now();
-
-    candidates.push({
-      id: buildStableMemoryId("ltm", semanticKey),
-      semanticKey,
-      conceptKey: buildMemoryConceptKey({
-        category: "episode",
-        ontologyKind,
-        text,
-        versionScope: scope.versionScope,
-        installProfileScope: scope.installProfileScope,
-        customerScope: scope.customerScope,
-        artifactRefs: scope.artifactRefs,
-      }),
-      canonicalText: canonicalizeComparable(text),
-      conceptAliases: [text, promptErrorSummary],
-      ontologyKind,
-      category: "episode",
-      text,
-      strength: 0.96,
+      text: `Prompt construction failed during runtime: ${promptErrorSummary}`,
       evidence: [promptErrorSummary],
-      provenance: [
-        createProvenanceRecord("derived", `runtime prompt error: ${promptErrorSummary}`),
-      ],
-      sourceType: "direct_observation",
+      environmentTags: ["runtime:prompt-error"],
       confidence: 0.95,
+      strength: 0.96,
       importanceClass: "critical",
-      compressionState: "stable",
-      activeStatus: "active",
-      adjudicationStatus: "authoritative",
-      revisionCount: 0,
-      lastRevisionKind: "new",
-      permanenceStatus: "deferred",
-      permanenceReasons: [],
       trend: "rising",
-      accessCount: 0,
-      createdAt: now,
-      lastConfirmedAt: now,
-      contradictionCount: 0,
-      relatedMemoryIds: [],
-      relations: [],
-      versionScope: scope.versionScope,
-      installProfileScope: scope.installProfileScope,
-      customerScope: scope.customerScope,
-      environmentTags: scope.environmentTags,
-      artifactRefs: scope.artifactRefs,
-      updatedAt: now,
     });
   }
 
@@ -3132,6 +3236,7 @@ export function compileMemoryState(params: {
     messages: params.messages,
     previous: previous?.workingMemory,
     compactionSummary: params.compactionSummary,
+    runtimeContext: params.runtimeContext,
   });
   const candidates = deriveLongTermMemoryCandidates({
     messages: params.messages,
@@ -3141,6 +3246,7 @@ export function compileMemoryState(params: {
   const runtimeSignalCandidates = deriveRuntimeSignalCandidates({
     runtimeContext: params.runtimeContext,
     scopeContext: runtimeScope,
+    previousWorkingMemory: previous?.workingMemory,
   });
   const mergedPending = mergePendingSignificance(
     previous?.pendingSignificance ?? [],

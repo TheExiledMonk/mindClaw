@@ -1289,15 +1289,15 @@ export function buildAfterTurnRuntimeContext(params: {
   messages?: AgentMessage[];
   promptError?: unknown;
 }): Partial<CompactEmbeddedPiSessionParams> {
-  const extractToolSignalSummary = (message: AgentMessage): string | undefined => {
+  const extractMessageText = (message: AgentMessage): string => {
     const content = (message as { content?: unknown }).content;
     if (typeof content === "string") {
-      return content.trim() || undefined;
+      return content.trim();
     }
     if (!Array.isArray(content)) {
-      return undefined;
+      return "";
     }
-    const parts = content
+    return content
       .flatMap((block) => {
         if (!block || typeof block !== "object") {
           return [];
@@ -1305,8 +1305,13 @@ export function buildAfterTurnRuntimeContext(params: {
         const text = (block as { text?: unknown }).text;
         return typeof text === "string" && text.trim() ? [text.trim()] : [];
       })
-      .filter(Boolean);
-    return parts.join("\n").trim() || undefined;
+      .join("\n")
+      .trim();
+  };
+  const extractArtifactRefs = (text: string): string[] =>
+    text.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
+  const extractToolSignalSummary = (message: AgentMessage): string | undefined => {
+    return extractMessageText(message) || undefined;
   };
   const toolSignals = (params.messages ?? [])
     .filter(
@@ -1323,17 +1328,64 @@ export function buildAfterTurnRuntimeContext(params: {
       if (!summary || typeof message.toolName !== "string" || !message.toolName.trim()) {
         return undefined;
       }
-      const artifactRefs =
-        summary.match(/\b[\w./-]+\.(?:ts|tsx|js|json|jsonl|md|yml|yaml|toml|lock)\b/g) ?? [];
       return {
         toolName: message.toolName.trim(),
         status: message.isError ? ("error" as const) : ("success" as const),
         summary,
-        artifactRefs,
+        artifactRefs: extractArtifactRefs(summary),
       };
     })
     .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal))
     .slice(-6);
+  const diffSignals = toolSignals
+    .flatMap((signal) =>
+      (signal.artifactRefs ?? []).map((artifactRef) => ({
+        artifactRef,
+        changeKind: /\b(create|created|add|added|new file)\b/i.test(signal.summary)
+          ? ("created" as const)
+          : /\b(delete|deleted|remove|removed)\b/i.test(signal.summary)
+            ? ("deleted" as const)
+            : ("modified" as const),
+        summary: signal.summary,
+      })),
+    )
+    .slice(-10);
+  const checkpointSignals: Array<{
+    kind: "completion" | "handoff" | "failure";
+    summary: string;
+    artifactRefs: string[];
+  }> = (params.messages ?? [])
+    .flatMap((message) => {
+      const summary = extractMessageText(message);
+      if (!summary) {
+        return [];
+      }
+      const artifactRefs = extractArtifactRefs(summary);
+      const signals: Array<{
+        kind: "completion" | "handoff" | "failure";
+        summary: string;
+        artifactRefs: string[];
+      }> = [];
+      if (
+        /\b(done|completed|fixed|resolved|finished|obsolete|superseded|replaced|checkpoint)\b/i.test(
+          summary,
+        )
+      ) {
+        signals.push({ kind: "completion", summary, artifactRefs });
+      }
+      if (/\b(handoff|hand off|next person|next agent|handover)\b/i.test(summary)) {
+        signals.push({ kind: "handoff", summary, artifactRefs });
+      }
+      return signals;
+    })
+    .slice(-6);
+  if (params.promptError) {
+    checkpointSignals.push({
+      kind: "failure",
+      summary: describeUnknownError(params.promptError),
+      artifactRefs: [],
+    });
+  }
   const resolveGitBranch = (workspaceDir: string): string | undefined => {
     try {
       const headPath = resolveGitHeadPath(workspaceDir);
@@ -1396,6 +1448,8 @@ export function buildAfterTurnRuntimeContext(params: {
     workspaceTags,
     workspaceState,
     toolSignals,
+    diffSignals,
+    checkpointSignals,
     promptErrorSummary: params.promptError ? describeUnknownError(params.promptError) : undefined,
   };
 }

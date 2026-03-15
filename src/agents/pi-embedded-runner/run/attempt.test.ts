@@ -1244,6 +1244,64 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(runtimeContext.workspaceTags).toContain("git-worktree");
     expect(runtimeContext.activeArtifacts).toContain(path.join("sessions", "main.jsonl"));
   });
+
+  it("emits checkpoint and diff signals for runtime memory ingestion", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      messages: [
+        {
+          role: "assistant",
+          content:
+            "The migration is completed. Handoff to the next agent should continue from src/context-engine/memory-system.ts.",
+          timestamp: Date.now(),
+        } as never,
+        {
+          role: "toolResult",
+          toolName: "write",
+          isError: false,
+          content:
+            "Updated src/context-engine/memory-system.ts and docs/memory-system-completion-roadmap.md.",
+          timestamp: Date.now(),
+        } as never,
+      ],
+      promptError: new Error("prompt budget exceeded"),
+    });
+
+    expect(runtimeContext.diffSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artifactRef: "src/context-engine/memory-system.ts",
+          changeKind: "modified",
+        }),
+      ]),
+    );
+    expect(runtimeContext.checkpointSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "completion" }),
+        expect.objectContaining({ kind: "handoff" }),
+        expect.objectContaining({
+          kind: "failure",
+          summary: expect.stringContaining("prompt budget exceeded"),
+        }),
+      ]),
+    );
+  });
 });
 
 describe("shouldRunContextEngineCheckpointReview", () => {

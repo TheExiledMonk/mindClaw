@@ -3610,6 +3610,175 @@ describe("MemorySystemContextEngine", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("uses repeated near-miss and blocked-path consolidation history to surface durable family trends", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-agentic-failure-consolidation-"),
+    );
+    const sessionId = "agent:agentic-failure-consolidation-trends";
+    const templateNearMiss = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Keep the acceptance workflow reusable instead of spawning another fork."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["acceptance-report"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/acceptance-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "partial",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: true,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: [],
+          skillFamilies: ["verification"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: true,
+          retryClass: "same_path_retry",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "acceptance-report",
+          fallbackSkills: [],
+          skillChain: ["acceptance-report"],
+          workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+          rankedSkills: ["acceptance-report"],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "near_miss",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Parameterize the acceptance workflow instead of creating another fork.",
+        },
+      } as never,
+    });
+    const mergeBlocked = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Merge the overlapping diagnostics siblings instead of keeping parallel forks.",
+        ),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "diagnostics-report"],
+          likelySkills: ["memory-diagnostics", "diagnostics-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/memory-diagnostics-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "partial",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: ["memory-diagnostics", "diagnostics-report"],
+          skillFamilies: ["diagnostics"],
+          mergeCandidate: true,
+          mergeSkills: ["memory-diagnostics", "diagnostics-report"],
+          nearMissCandidate: true,
+          retryClass: "skill_fallback",
+          shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "diagnostics-report",
+          fallbackSkills: ["memory-diagnostics"],
+          skillChain: ["diagnostics-report", "memory-diagnostics"],
+          workflowSteps: [
+            { skill: "diagnostics-report", role: "primary" },
+            { skill: "memory-diagnostics", role: "fallback" },
+          ],
+          rankedSkills: ["diagnostics-report", "memory-diagnostics"],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: true,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "blocked_path",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Merge overlapping diagnostics siblings into one reusable workflow.",
+        },
+      } as never,
+    });
+    const templateBlocked = structuredClone(templateNearMiss);
+    const mergeNearMiss = structuredClone(mergeBlocked);
+    for (const entry of templateNearMiss.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of templateBlocked.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    for (const entry of mergeBlocked.longTermMemory) {
+      entry.updatedAt = 3_000;
+    }
+    for (const entry of mergeNearMiss.longTermMemory) {
+      entry.updatedAt = 4_000;
+    }
+    templateNearMiss.longTermMemory.push(
+      ...templateBlocked.longTermMemory,
+      ...mergeBlocked.longTermMemory,
+      ...mergeNearMiss.longTermMemory,
+    );
+    templateNearMiss.pendingSignificance.push(
+      ...templateBlocked.pendingSignificance,
+      ...mergeBlocked.pendingSignificance,
+      ...mergeNearMiss.pendingSignificance,
+    );
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+      workingMemory: templateNearMiss.workingMemory,
+      longTermMemory: templateNearMiss.longTermMemory,
+      pendingSignificance: templateNearMiss.pendingSignificance,
+      permanentMemory: templateNearMiss.permanentMemory,
+      graph: templateNearMiss.graph,
+    });
+
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+    });
+
+    expect(report.agenticTrends?.templateFamilies).toContain("verification@debugging/node");
+    expect(report.agenticTrends?.mergeFamilies).toContain("diagnostics@debugging/node");
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("injects agentic regression guidance into retrieved memory packets", () => {
     const compiled = compileMemoryState({
       sessionId: "agent:agentic-regression-packet",
@@ -3987,6 +4156,84 @@ describe("MemorySystemContextEngine", () => {
         item.reason.includes("skill family guidance source=memory_trend"),
       ),
     ).toBe(true);
+  });
+
+  it("injects durable family trend guidance from repeated near-miss history into retrieved packets", () => {
+    const sessionId = "agent:durable-failure-family-guidance-packet";
+    const templateFirst = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Keep the acceptance workflow reusable instead of spawning another fork."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["acceptance-report"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/acceptance-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "partial",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: true,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: [],
+          skillFamilies: ["verification"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: true,
+          retryClass: "same_path_retry",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "acceptance-report",
+          fallbackSkills: [],
+          skillChain: ["acceptance-report"],
+          workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+          rankedSkills: ["acceptance-report"],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "near_miss",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Parameterize the acceptance workflow instead of creating another fork.",
+        },
+      } as never,
+    });
+    const templateSecond = structuredClone(templateFirst);
+    for (const entry of templateFirst.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of templateSecond.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    templateFirst.longTermMemory.push(...templateSecond.longTermMemory);
+    templateFirst.pendingSignificance.push(...templateSecond.pendingSignificance);
+
+    const packet = retrieveMemoryContextPacket(templateFirst, {
+      messages: [userMessage("Template the acceptance workflow instead of creating another fork.")],
+    });
+
+    expect(packet.text).toContain("Skill family guidance:");
+    expect(packet.text).toContain("family=verification");
+    expect(packet.text).toContain("template_candidate=true");
+    expect(packet.text).toContain("durable=true");
   });
 
   it("injects skill effectiveness guidance into retrieved memory packets", () => {

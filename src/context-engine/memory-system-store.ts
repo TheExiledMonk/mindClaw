@@ -1161,7 +1161,13 @@ function deriveTemplateScopedFamilies(entries: LongTermMemoryEntry[]): string[] 
       tags
         .find((tag) => tag.startsWith("procedural:outcome:"))
         ?.replace("procedural:outcome:", "") || "unverified";
-    if (outcome !== "verified" && outcome !== "partial") {
+    const failurePattern =
+      tags
+        .find((tag) => tag.startsWith("procedural:failure-pattern:"))
+        ?.replace("procedural:failure-pattern:", "") || "";
+    const reusableNearMiss =
+      outcome === "failed" && (failurePattern === "near_miss" || failurePattern === "blocked_path");
+    if (outcome !== "verified" && outcome !== "partial" && !reusableNearMiss) {
       continue;
     }
     const key = `${family}@${taskMode}/${env}`;
@@ -1210,7 +1216,13 @@ function deriveMergeScopedFamilies(entries: LongTermMemoryEntry[]): string[] {
       tags
         .find((tag) => tag.startsWith("procedural:outcome:"))
         ?.replace("procedural:outcome:", "") || "unverified";
-    if (outcome !== "verified" && outcome !== "partial") {
+    const failurePattern =
+      tags
+        .find((tag) => tag.startsWith("procedural:failure-pattern:"))
+        ?.replace("procedural:failure-pattern:", "") || "";
+    const reusableNearMiss =
+      outcome === "failed" && (failurePattern === "near_miss" || failurePattern === "blocked_path");
+    if (outcome !== "verified" && outcome !== "partial" && !reusableNearMiss) {
       continue;
     }
     const key = `${family}@${taskMode}/${env}`;

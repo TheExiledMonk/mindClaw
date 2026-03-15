@@ -209,6 +209,9 @@ export type CompactEmbeddedPiSessionParams = {
     hasViableFallback: boolean;
     multiSkillCandidate: boolean;
     chainedWorkflow: boolean;
+    skillFamilies: string[];
+    overlappingSkills: string[];
+    consolidationAction: "none" | "extend_existing" | "generalize_existing" | "create_new";
     rationale?: string;
   };
   environmentState?: {

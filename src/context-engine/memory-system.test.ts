@@ -2362,6 +2362,9 @@ describe("MemorySystemContextEngine", () => {
           taskMode: "planning",
           templateCandidate: true,
           consolidationCandidate: false,
+          consolidationAction: "extend_existing",
+          overlappingSkills: ["memory-diagnostics", "acceptance-report"],
+          skillFamilies: ["verification"],
           nearMissCandidate: false,
           retryClass: "skill_fallback",
           suggestedSkill: "acceptance-report",
@@ -2406,6 +2409,9 @@ describe("MemorySystemContextEngine", () => {
           (entry.environmentTags ?? []).includes("procedural:failure-pattern:near_miss") &&
           (entry.environmentTags ?? []).includes("procedural:ranked-skill:1:acceptance-report") &&
           (entry.environmentTags ?? []).includes(
+            "procedural:consolidation-action:extend_existing",
+          ) &&
+          (entry.environmentTags ?? []).includes(
             "procedural:prereq:acceptance-report:missing-env:docker",
           ) &&
           entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
@@ -2423,6 +2429,11 @@ describe("MemorySystemContextEngine", () => {
         (entry.environmentTags ?? []).includes(
           "procedural:workflow-step:2:verification:acceptance-report",
         ),
+      ),
+    ).toBe(true);
+    expect(
+      proceduralEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("procedural:skill-family:verification"),
       ),
     ).toBe(true);
 

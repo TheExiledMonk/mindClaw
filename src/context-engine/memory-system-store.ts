@@ -2949,6 +2949,9 @@ function deriveRuntimeSignalCandidates(params: {
           taskMode?: unknown;
           templateCandidate?: unknown;
           consolidationCandidate?: unknown;
+          consolidationAction?: unknown;
+          overlappingSkills?: unknown;
+          skillFamilies?: unknown;
           nearMissCandidate?: unknown;
           retryClass?: unknown;
           suggestedSkill?: unknown;
@@ -3036,6 +3039,27 @@ function deriveRuntimeSignalCandidates(params: {
       proceduralExecution.nextImprovement.trim().length > 0
         ? proceduralExecution.nextImprovement.trim()
         : undefined;
+    const consolidationAction =
+      proceduralExecution.consolidationAction === "none" ||
+      proceduralExecution.consolidationAction === "extend_existing" ||
+      proceduralExecution.consolidationAction === "generalize_existing" ||
+      proceduralExecution.consolidationAction === "create_new"
+        ? proceduralExecution.consolidationAction
+        : "none";
+    const overlappingSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.overlappingSkills)
+        ? proceduralExecution.overlappingSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const skillFamilies = uniqueStrings(
+      Array.isArray(proceduralExecution.skillFamilies)
+        ? proceduralExecution.skillFamilies.filter(
+            (family): family is string => typeof family === "string" && family.trim().length > 0,
+          )
+        : [],
+    );
     const retryClass =
       proceduralExecution.retryClass === "same_path_retry" ||
       proceduralExecution.retryClass === "skill_fallback" ||
@@ -3227,6 +3251,9 @@ function deriveRuntimeSignalCandidates(params: {
       governanceReasons.length > 0 ? `governance=${governanceReasons.join(",")}` : "",
       failureReasons.length > 0 ? `failure_reasons=${failureReasons.join(",")}` : "",
       nextImprovement ?? "",
+      consolidationAction !== "none" ? `consolidation_action=${consolidationAction}` : "",
+      overlappingSkills.length > 0 ? `overlap_skills=${overlappingSkills.join(",")}` : "",
+      skillFamilies.length > 0 ? `skill_families=${skillFamilies.join(",")}` : "",
     ]).filter(Boolean);
     const proceduralText = [
       `Procedural workflow for ${taskMode} work`,
@@ -3245,6 +3272,9 @@ function deriveRuntimeSignalCandidates(params: {
       !hasViableFallback ? "no viable fallback identified" : "",
       multiSkillCandidate ? "multi-skill orchestration candidate" : "",
       chainedWorkflow ? "chained workflow active" : "",
+      consolidationAction !== "none" ? `consolidation action ${consolidationAction}` : "",
+      overlappingSkills.length > 0 ? `overlapping skills ${overlappingSkills.join(", ")}` : "",
+      skillFamilies.length > 0 ? `skill families ${skillFamilies.join(", ")}` : "",
       `workspace ${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities ${capabilitySignals.join(", ")}` : "",
       preferredValidationTools.length > 0
@@ -3299,6 +3329,11 @@ function deriveRuntimeSignalCandidates(params: {
         shouldEscalate ? `procedural:escalate:${escalationReason ?? "unknown"}` : "",
         multiSkillCandidate ? "procedural:multi-skill-candidate" : "",
         chainedWorkflow ? "procedural:chained-workflow" : "",
+        consolidationAction !== "none"
+          ? `procedural:consolidation-action:${consolidationAction}`
+          : "",
+        ...(overlappingSkills.map((skill) => `procedural:overlap-skill:${skill}`) ?? []),
+        ...(skillFamilies.map((family) => `procedural:skill-family:${family}`) ?? []),
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",
         proceduralExecution.consolidationCandidate === true
           ? "procedural:consolidation-candidate"

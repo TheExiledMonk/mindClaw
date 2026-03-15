@@ -336,6 +336,30 @@ describe("agentic-state", () => {
     );
   });
 
+  it("recommends extending overlapping skills instead of creating a new fork", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Extend the diagnostics reporting skill instead of creating another diagnostics-report variant.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+    });
+
+    expect(state.orchestrationState.consolidationAction).not.toBe("none");
+    expect(state.orchestrationState.overlappingSkills).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
+    );
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Consolidation guidance:");
+  });
+
   it("marks when fallback guidance is still not viable", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Fix the diagnostics workflow and find a viable fallback.")],
@@ -660,6 +684,7 @@ describe("agentic-state", () => {
     expect(record.workflowSteps.length).toBeGreaterThan(0);
     expect(record.rankedSkills).toEqual(expect.arrayContaining(["memory-diagnostics"]));
     expect(record.planSteps.length).toBeGreaterThan(0);
+    expect(record.consolidationAction).toBeDefined();
     expect(record.workspaceKind).toBe("unknown");
     expect(record.failurePattern).toBe("near_miss");
   });
@@ -714,5 +739,39 @@ describe("agentic-state", () => {
     expect(record.rankedSkills[0]).toBe("acceptance-report");
     expect(record.failurePattern).toBe("near_miss");
     expect(record.nextImprovement).toContain("alternative skills");
+  });
+
+  it("persists consolidation recommendations into procedural execution records", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Extend the diagnostics reporting skill instead of creating another diagnostics-report variant.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+    });
+
+    const record = buildProceduralExecutionRecord({
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [],
+      diffSignals: [],
+    });
+
+    expect(record.consolidationAction).not.toBe("none");
+    expect(record.overlappingSkills.length).toBeGreaterThanOrEqual(2);
+    expect(record.skillFamilies.length).toBeGreaterThanOrEqual(1);
   });
 });

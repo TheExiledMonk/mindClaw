@@ -50,6 +50,7 @@ describe("agentic-state", () => {
     expect(state.taskState.taskMode).toBe("debugging");
     expect(state.taskState.objective).toContain("Fix the failing TypeScript build");
     expect(state.taskState.activeArtifacts).toContain("src/context-engine/memory-system.ts");
+    expect(state.taskState.planSteps.every((step) => step.status !== "blocked")).toBe(true);
     expect(state.verificationState.outcome).toBe("verified");
     expect(state.plannerState.status).toBe("complete");
     expect(state.governanceState.autonomyMode).toBe("continue");
@@ -91,6 +92,7 @@ describe("agentic-state", () => {
     expect(state.plannerState.retryClass).toBe("escalate");
     expect(state.plannerState.shouldEscalate).toBe(true);
     expect(state.plannerState.escalationReason).toBe("repeated_failure");
+    expect(state.taskState.planSteps.some((step) => step.status === "blocked")).toBe(true);
     expect(state.governanceState.autonomyMode).toBe("escalate");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Do not repeat the same failing path.",
@@ -362,9 +364,41 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "escalation=yes fallback=missing",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("plan=");
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "## Plan Steps",
+    );
+  });
+
+  it("builds explicit plan steps from user instructions and execution state", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "1. Fix the failing diagnostics workflow\n2. Re-run validation\n3. Prepare the final report",
+        ),
+      ],
+      activeArtifacts: ["src/agents/pi-embedded-runner/run/agentic-state.ts"],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "pnpm exec vitest failed for the diagnostics workflow.",
+          artifactRefs: ["src/agents/pi-embedded-runner/run/agentic-state.ts"],
+        },
+      ],
+    });
+
+    expect(state.taskState.planSteps.length).toBeGreaterThanOrEqual(3);
+    expect(state.taskState.planSteps[0]?.title).toContain("Fix the failing diagnostics workflow");
+    expect(state.taskState.planSteps.some((step) => step.kind === "verification")).toBe(true);
+    expect(state.taskState.planSteps.find((step) => step.kind === "verification")?.status).toBe(
+      "blocked",
+    );
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Plan steps:");
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {
@@ -530,6 +564,7 @@ describe("agentic-state", () => {
     expect(record.autonomyMode).toBe("continue");
     expect(record.skillChain).toEqual(expect.arrayContaining(["memory-diagnostics"]));
     expect(record.rankedSkills).toEqual(expect.arrayContaining(["memory-diagnostics"]));
+    expect(record.planSteps.length).toBeGreaterThan(0);
     expect(record.workspaceKind).toBe("unknown");
     expect(record.failurePattern).toBe("near_miss");
   });

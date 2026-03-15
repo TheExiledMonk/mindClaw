@@ -42,6 +42,14 @@ export type AgenticFailureClass =
   | "environment_mismatch"
   | "unknown";
 
+export type AgenticPlanStepStatus = "pending" | "in_progress" | "completed" | "blocked";
+
+export type AgenticPlanStep = {
+  title: string;
+  status: AgenticPlanStepStatus;
+  kind: "implementation" | "verification" | "handoff";
+};
+
 export type AgenticTaskState = {
   version: 1;
   objective?: string;
@@ -50,6 +58,7 @@ export type AgenticTaskState = {
   blockers: string[];
   assumptions: string[];
   successCriteria: string[];
+  planSteps: AgenticPlanStep[];
   activeArtifacts: string[];
   currentStrategy?: string;
   confidence: AgenticConfidence;
@@ -137,6 +146,7 @@ export type ProceduralExecutionRecord = {
   changedArtifacts: string[];
   outcome: AgenticVerificationOutcome;
   taskMode: AgenticTaskMode;
+  planSteps: AgenticPlanStep[];
   templateCandidate: boolean;
   consolidationCandidate: boolean;
   nearMissCandidate: boolean;
@@ -177,6 +187,7 @@ export type AgenticExecutionObservabilityReport = {
   failurePattern: AgenticFailureLearningState["failurePattern"];
   hasViableFallback: boolean;
   escalationRequired: boolean;
+  planSteps: AgenticPlanStep[];
   recommendations: string[];
 };
 
@@ -186,7 +197,9 @@ export type AgenticAcceptanceScenarioId =
   | "missing_fallback_escalation"
   | "environment_prerequisite_guard"
   | "observability_escalation_alignment"
-  | "fallback_guidance_alignment";
+  | "fallback_guidance_alignment"
+  | "plan_step_completion_alignment"
+  | "plan_step_blocking_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -392,6 +405,116 @@ function extractListCandidates(text: string): string[] {
     .map((part) => part.trim())
     .filter((part) => part.length >= 18)
     .slice(0, 4);
+}
+
+function buildPlanSteps(params: {
+  objective?: string;
+  subtasks: string[];
+  successCriteria: string[];
+  activeArtifacts: string[];
+  blockers: string[];
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+  checkpointSignals?: CheckpointSignal[];
+}): AgenticPlanStep[] {
+  const checkpointSignals = params.checkpointSignals ?? [];
+  const implementationSeeds = uniqueCompact(
+    [
+      ...params.subtasks.map((item) => truncate(item, 100)),
+      params.activeArtifacts[0]
+        ? `Update ${truncate(params.activeArtifacts[0], 80)}`
+        : params.objective
+          ? truncate(params.objective, 100)
+          : undefined,
+    ],
+    2,
+  );
+  const implementationSteps: AgenticPlanStep[] = implementationSeeds.map((title, index) => {
+    let status: AgenticPlanStepStatus = index === 0 ? "in_progress" : "pending";
+    if (params.plannerState.status === "complete") {
+      status = "completed";
+    } else if (
+      index === 0 &&
+      params.blockers.length > 0 &&
+      params.verificationState.outcome !== "verified"
+    ) {
+      status = params.activeArtifacts.length > 0 ? "completed" : "blocked";
+    } else if (
+      index === 0 &&
+      (params.verificationState.outcome === "failed" ||
+        params.verificationState.outcome === "blocked") &&
+      params.activeArtifacts.length > 0
+    ) {
+      status = "completed";
+    } else if (index > 0) {
+      status = "pending";
+    }
+    return { title, status, kind: "implementation" };
+  });
+
+  const verificationTitle =
+    params.successCriteria[0] !== undefined
+      ? `Verify: ${truncate(params.successCriteria[0], 90)}`
+      : "Verify the latest change with available checks.";
+  let verificationStatus: AgenticPlanStepStatus = "pending";
+  if (
+    params.plannerState.status === "complete" ||
+    params.verificationState.outcome === "verified"
+  ) {
+    verificationStatus = "completed";
+  } else if (
+    params.verificationState.outcome === "failed" ||
+    params.verificationState.outcome === "blocked"
+  ) {
+    verificationStatus = "blocked";
+  } else if (
+    params.verificationState.checksRun.length > 0 ||
+    params.verificationState.outcome === "partial"
+  ) {
+    verificationStatus = "in_progress";
+  }
+
+  const handoffObserved = checkpointSignals.some((signal) => signal.kind === "handoff");
+  let handoffStatus: AgenticPlanStepStatus = "pending";
+  if (handoffObserved) {
+    handoffStatus = "completed";
+  } else if (params.plannerState.status === "complete") {
+    handoffStatus = "in_progress";
+  }
+
+  return uniquePlanSteps(
+    [
+      ...implementationSteps,
+      {
+        title: verificationTitle,
+        status: verificationStatus,
+        kind: "verification",
+      },
+      {
+        title: "Prepare final handoff or concise completion summary.",
+        status: handoffStatus,
+        kind: "handoff",
+      },
+    ],
+    5,
+  );
+}
+
+function uniquePlanSteps(steps: AgenticPlanStep[], limit = 5): AgenticPlanStep[] {
+  const seen = new Set<string>();
+  const result: AgenticPlanStep[] = [];
+  for (const step of steps) {
+    const normalized = step.title.replace(/\s+/g, " ").trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(step);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
 }
 
 function inferTaskMode(text: string): AgenticTaskMode {
@@ -1146,28 +1269,13 @@ export function buildAgenticExecutionState(params: {
     retrySignals: params.retrySignals,
     promptErrorSummary: params.promptErrorSummary,
   });
-  const taskState: AgenticTaskState = {
-    version: 1,
-    objective: latestUserSummary,
-    taskMode: inferTaskMode(corpus),
-    subtasks: uniqueCompact(
-      extractListCandidates(latestUserSummary ?? "").map((item) => truncate(item, 120)),
-      4,
-    ),
-    blockers,
-    assumptions,
-    successCriteria:
-      successCriteria.length > 0 ? successCriteria : latestUserSummary ? [latestUserSummary] : [],
-    activeArtifacts,
-    currentStrategy: summarizeStrategy({
-      toolSignals: params.toolSignals,
-      diffSignals: params.diffSignals,
-    }),
-    confidence:
-      blockers.length > 0 ? "low" : verificationState.outcome === "verified" ? "high" : "medium",
-  };
+  const taskMode = inferTaskMode(corpus);
+  const subtasks = uniqueCompact(
+    extractListCandidates(latestUserSummary ?? "").map((item) => truncate(item, 120)),
+    4,
+  );
   const plannerState = buildPlannerState({
-    objective: taskState.objective,
+    objective: latestUserSummary,
     blockers,
     verificationState,
     checkpointSignals: params.checkpointSignals,
@@ -1176,6 +1284,34 @@ export function buildAgenticExecutionState(params: {
     availableSkills: params.availableSkills,
     likelySkills: params.likelySkills,
   });
+  const taskState: AgenticTaskState = {
+    version: 1,
+    objective: latestUserSummary,
+    taskMode,
+    subtasks,
+    blockers,
+    assumptions,
+    successCriteria:
+      successCriteria.length > 0 ? successCriteria : latestUserSummary ? [latestUserSummary] : [],
+    planSteps: buildPlanSteps({
+      objective: latestUserSummary,
+      subtasks,
+      successCriteria:
+        successCriteria.length > 0 ? successCriteria : latestUserSummary ? [latestUserSummary] : [],
+      activeArtifacts,
+      blockers,
+      verificationState,
+      plannerState,
+      checkpointSignals: params.checkpointSignals,
+    }),
+    activeArtifacts,
+    currentStrategy: summarizeStrategy({
+      toolSignals: params.toolSignals,
+      diffSignals: params.diffSignals,
+    }),
+    confidence:
+      blockers.length > 0 ? "low" : verificationState.outcome === "verified" ? "high" : "medium",
+  };
   const availableSkillInfo =
     params.availableSkillInfo && params.availableSkillInfo.length > 0
       ? params.availableSkillInfo
@@ -1287,6 +1423,11 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
     `Task mode: ${state.taskState.taskMode}`,
+    state.taskState.planSteps.length > 0
+      ? `Plan steps: ${state.taskState.planSteps
+          .map((step) => `[${step.status}] ${step.title}`)
+          .join(" | ")}`
+      : undefined,
     state.taskState.activeArtifacts.length > 0
       ? `Active artifacts: ${state.taskState.activeArtifacts.slice(0, 3).join(", ")}`
       : undefined,
@@ -1409,6 +1550,7 @@ export function buildProceduralExecutionRecord(params: {
     changedArtifacts,
     outcome: params.verificationState.outcome,
     taskMode: params.taskState.taskMode,
+    planSteps: params.taskState.planSteps,
     templateCandidate,
     consolidationCandidate,
     nearMissCandidate,
@@ -1484,6 +1626,7 @@ export function inspectAgenticExecutionObservability(
     failurePattern: state.failureLearningState.failurePattern,
     hasViableFallback: state.orchestrationState.hasViableFallback,
     escalationRequired: state.plannerState.shouldEscalate,
+    planSteps: state.taskState.planSteps,
     recommendations,
   };
 }
@@ -1503,6 +1646,9 @@ export function formatAgenticExecutionObservabilityReport(
       report.recommendations.length > 0
         ? `recommendations=${report.recommendations.join(" | ")}`
         : "recommendations=none",
+      report.planSteps.length > 0
+        ? `plan=${report.planSteps.map((step) => `${step.status}:${step.title}`).join(" | ")}`
+        : "plan=none",
     ];
     return `${lines.join("\n")}\n`;
   }
@@ -1520,6 +1666,11 @@ export function formatAgenticExecutionObservabilityReport(
     `- Viable fallback: ${report.hasViableFallback ? "yes" : "no"}`,
     `- Escalation required: ${report.escalationRequired ? "yes" : "no"}`,
     `- Capability gaps: ${report.capabilityGaps.length > 0 ? report.capabilityGaps.join(", ") : "none"}`,
+    "",
+    "## Plan Steps",
+    ...(report.planSteps.length > 0
+      ? report.planSteps.map((step) => `- [${step.status}] ${step.title} (${step.kind})`)
+      : ["- none"]),
     "",
     "## Recommendations",
     ...(report.recommendations.length > 0
@@ -1765,6 +1916,88 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Observability report preserves memory-guided fallback ordering."
         : "Observability report lost alignment with memory-guided fallback ordering.",
       details: `retry=${report.retryClass} suggested=${report.suggestedSkill ?? "none"} ranked=${report.rankedSkills.join(">")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "1. Fix the failing typecheck in src/context-engine/memory-system.ts\n2. Run typecheck validation\n3. Prepare the final handoff summary",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/context-engine/memory-system.ts"],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pnpm exec tsc -p tsconfig.json --noEmit and the typecheck passed.",
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary: "Typecheck fix completed successfully.",
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+        },
+      ],
+    });
+    const passed =
+      state.taskState.planSteps.length >= 3 &&
+      state.taskState.planSteps.every((step) =>
+        step.kind === "handoff" ? step.status === "in_progress" : step.status === "completed",
+      );
+    scenarios.push({
+      id: "plan_step_completion_alignment",
+      passed,
+      summary: passed
+        ? "Completion checkpoints advance explicit plan steps into completed state."
+        : "Explicit plan steps did not reflect completion-state progress.",
+      details: state.taskState.planSteps
+        .map((step) => `${step.kind}:${step.status}:${step.title}`)
+        .join("|"),
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "1. Fix the failing diagnostics workflow\n2. Re-run validation\n3. Prepare the final report",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/agents/pi-embedded-runner/run/agentic-state.ts"],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "pnpm exec vitest failed for the diagnostics workflow.",
+          artifactRefs: ["src/agents/pi-embedded-runner/run/agentic-state.ts"],
+        },
+      ],
+    });
+    const verificationStep = state.taskState.planSteps.find((step) => step.kind === "verification");
+    const passed =
+      verificationStep?.status === "blocked" &&
+      state.taskState.planSteps.some(
+        (step) => step.kind === "implementation" && step.status === "completed",
+      );
+    scenarios.push({
+      id: "plan_step_blocking_alignment",
+      passed,
+      summary: passed
+        ? "Verification failures block the plan without erasing implementation progress."
+        : "Plan steps did not capture blocked verification state correctly.",
+      details: state.taskState.planSteps
+        .map((step) => `${step.kind}:${step.status}:${step.title}`)
+        .join("|"),
     });
   }
 

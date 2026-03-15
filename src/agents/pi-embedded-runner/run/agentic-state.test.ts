@@ -368,6 +368,31 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.consolidationAction).toBe("extend_existing");
   });
 
+  it("uses explicit promotion guidance to mark a durable skill as extend-existing ready", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Extend the diagnostics workflow that memory says is promotion-ready instead of creating another fork.",
+        ),
+      ],
+      availableSkills: ["diagnostics-repair"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [{ name: "diagnostics-repair", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill stability guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node state=stable_reuse",
+        "Skill promotion guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node action=promote_extend_existing",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.promotedSkills).toContain("diagnostics-repair");
+    expect(state.orchestrationState.consolidationAction).toBe("extend_existing");
+    expect(state.orchestrationState.rationale).toContain("promotion-ready reuse guidance");
+  });
+
   it("treats recovered scoped skills as watch-only compared with a stronger stable sibling", () => {
     const state = buildAgenticExecutionState({
       messages: [
@@ -670,8 +695,42 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "stability_state=stable_reuse",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "promoted_skills=none",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "Stability state: stable_reuse",
+    );
+  });
+
+  it("surfaces promotion-ready skills in the observability report", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Extend the diagnostics workflow that memory says is promotion-ready instead of creating another fork.",
+        ),
+      ],
+      availableSkills: ["diagnostics-repair"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [{ name: "diagnostics-repair", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill stability guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node state=stable_reuse",
+        "Skill promotion guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node action=promote_extend_existing",
+      ].join("\n"),
+    });
+
+    const report = inspectAgenticExecutionObservability(state);
+    expect(report.promotedSkills).toContain("diagnostics-repair");
+    expect(report.recommendations).toContain("Promotion-ready scoped skills: diagnostics-repair");
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "promoted_skills=diagnostics-repair",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Promoted skills: diagnostics-repair",
     );
   });
 

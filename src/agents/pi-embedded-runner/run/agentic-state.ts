@@ -130,6 +130,7 @@ export type AgenticOrchestrationState = {
   rankedSkills: string[];
   effectiveSkills: string[];
   effectiveFamilies: string[];
+  promotedSkills: string[];
   prerequisiteWarnings: string[];
   capabilityGaps: string[];
   hasViableFallback: boolean;
@@ -192,6 +193,7 @@ export type ProceduralExecutionRecord = {
   rankedSkills: string[];
   effectiveSkills: string[];
   effectiveFamilies: string[];
+  promotedSkills: string[];
   stabilityState: "neutral" | "recovered_watch" | "stable_reuse";
   stabilitySkills: string[];
   prerequisiteWarnings: string[];
@@ -220,6 +222,7 @@ export type AgenticExecutionObservabilityReport = {
   rankedSkills: string[];
   effectiveSkills: string[];
   effectiveFamilies: string[];
+  promotedSkills: string[];
   stabilityState: AgenticOrchestrationState["stabilityState"];
   stabilitySkills: string[];
   consolidationAction: AgenticConsolidationAction;
@@ -267,6 +270,7 @@ export type AgenticAcceptanceScenarioId =
   | "weakening_skills_quality_gate"
   | "stable_reuse_observability_alignment"
   | "stable_reuse_promotion_alignment"
+  | "promotion_guidance_memory_alignment"
   | "recovering_skills_guidance_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
@@ -387,6 +391,7 @@ type ProceduralMemorySkillSignal = {
   weightedFamilies: Map<string, number>;
   recoveringSkills: string[];
   stabilizedSkills: string[];
+  promotedSkills: string[];
   workflowChains: string[][];
   multiSkillHint: boolean;
 };
@@ -482,6 +487,7 @@ function extractProceduralMemorySkillSignals(params: {
       weightedFamilies,
       recoveringSkills: [],
       stabilizedSkills: [],
+      promotedSkills: [],
       workflowChains: workflowHints.chains,
       multiSkillHint: workflowHints.multiSkillHint,
     };
@@ -624,12 +630,45 @@ function extractProceduralMemorySkillSignals(params: {
     }
     weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
   }
+  const promotionMatch = params.memoryText.match(
+    /Skill promotion guidance:\s*((?:\n-\s+[^\n]+)+)/i,
+  );
+  const promotionLines = promotionMatch
+    ? promotionMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
+  const promotedSkills = uniqueCompact(
+    promotionLines.flatMap((line) => {
+      const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+      return skill && availableSkills.includes(skill) ? [skill] : [];
+    }),
+    6,
+  );
+  for (const line of promotionLines) {
+    const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedTaskMode = line.match(/task_mode=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedEnv = line.match(/env=([a-z0-9._-]+)/i)?.[1]?.trim();
+    if (!skill || !availableSkills.includes(skill)) {
+      continue;
+    }
+    let score = 0.6;
+    if (params.taskMode && scopedTaskMode && scopedTaskMode === params.taskMode) {
+      score += 0.2;
+    }
+    if (params.preferredEnv && scopedEnv && scopedEnv === params.preferredEnv) {
+      score += 0.1;
+    }
+    weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
+  }
   return {
     recommendedSkills,
     weightedSkills,
     weightedFamilies,
     recoveringSkills,
     stabilizedSkills,
+    promotedSkills,
     workflowChains: workflowHints.chains,
     multiSkillHint: workflowHints.multiSkillHint,
   };
@@ -1402,6 +1441,7 @@ function buildOrchestrationState(params: {
   memoryWeightedFamilies?: Map<string, number>;
   memoryRecoveringSkills?: string[];
   memoryStabilizedSkills?: string[];
+  memoryPromotedSkills?: string[];
   memoryWorkflowChains?: string[][];
   memoryMultiSkillHint?: boolean;
   memoryRegressionSignals?: AgenticRegressionMemorySignal;
@@ -1416,6 +1456,7 @@ function buildOrchestrationState(params: {
   const memoryWeightedFamilies = params.memoryWeightedFamilies ?? new Map<string, number>();
   const memoryRecoveringSkills = new Set(params.memoryRecoveringSkills ?? []);
   const memoryStabilizedSkills = new Set(params.memoryStabilizedSkills ?? []);
+  const memoryPromotedSkills = new Set(params.memoryPromotedSkills ?? []);
   const memoryWorkflowChains = params.memoryWorkflowChains ?? [];
   const memoryMultiSkillHint = params.memoryMultiSkillHint === true;
   const memoryRegressionSignals = params.memoryRegressionSignals ?? {
@@ -1659,6 +1700,10 @@ function buildOrchestrationState(params: {
     ],
     6,
   );
+  const promotedSkills = uniqueCompact(
+    availableSkills.map((skill) => skill.name).filter((skill) => memoryPromotedSkills.has(skill)),
+    6,
+  );
   const recoveringPrimaryFamily =
     primarySkill && memoryRecoveringSkills.has(primarySkill)
       ? inferSkillFamily(primarySkill)
@@ -1678,16 +1723,18 @@ function buildOrchestrationState(params: {
   const consolidationAction: AgenticConsolidationAction =
     overlapSignals.overlappingSkills.length >= 3 || overlapFamilies.length > 0
       ? "generalize_existing"
-      : (overlapSignals.overlappingSkills.length >= 2 || multiSkillCandidate) &&
-          !recoveringPrimaryFamily
+      : primarySkill && promotedSkills.includes(primarySkill) && !recoveringPrimaryFamily
         ? "extend_existing"
-        : strongPrimaryFamily
+        : (overlapSignals.overlappingSkills.length >= 2 || multiSkillCandidate) &&
+            !recoveringPrimaryFamily
           ? "extend_existing"
-          : availableSkills.length === 0
-            ? "create_new"
-            : "none";
+          : strongPrimaryFamily
+            ? "extend_existing"
+            : availableSkills.length === 0
+              ? "create_new"
+              : "none";
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -1700,6 +1747,7 @@ function buildOrchestrationState(params: {
     rankedSkills,
     effectiveSkills,
     effectiveFamilies,
+    promotedSkills,
     prerequisiteWarnings,
     capabilityGaps,
     hasViableFallback,
@@ -2017,6 +2065,7 @@ export function buildAgenticExecutionState(params: {
     memoryWeightedFamilies: memorySkillSignals.weightedFamilies,
     memoryRecoveringSkills: memorySkillSignals.recoveringSkills,
     memoryStabilizedSkills: memorySkillSignals.stabilizedSkills,
+    memoryPromotedSkills: memorySkillSignals.promotedSkills,
     memoryWorkflowChains: memorySkillSignals.workflowChains,
     memoryMultiSkillHint: memorySkillSignals.multiSkillHint,
     memoryRegressionSignals,
@@ -2248,6 +2297,7 @@ export function buildProceduralExecutionRecord(params: {
         );
   const resolvedEffectiveSkills = params.orchestrationState.effectiveSkills;
   const resolvedEffectiveFamilies = params.orchestrationState.effectiveFamilies;
+  const resolvedPromotedSkills = params.orchestrationState.promotedSkills;
   const resolvedStabilityState = params.orchestrationState.stabilityState;
   const resolvedStabilitySkills = params.orchestrationState.stabilitySkills;
   const resolvedWorkflowSteps =
@@ -2270,6 +2320,8 @@ export function buildProceduralExecutionRecord(params: {
   } else if (resolvedStabilityState === "recovered_watch") {
     nextImprovement =
       "Keep the recovered workflow under watch until it proves durable across repeated runs.";
+  } else if (resolvedPromotedSkills.length > 0) {
+    nextImprovement = `Promote the durable workflow path for reuse: ${resolvedPromotedSkills.join(", ")}.`;
   } else if (resolvedStabilityState === "stable_reuse") {
     nextImprovement = "Extend the stable workflow family rather than creating a new fork.";
   } else if (consolidationCandidate) {
@@ -2317,6 +2369,7 @@ export function buildProceduralExecutionRecord(params: {
     rankedSkills: resolvedRankedSkills,
     effectiveSkills: resolvedEffectiveSkills,
     effectiveFamilies: resolvedEffectiveFamilies,
+    promotedSkills: resolvedPromotedSkills,
     stabilityState: resolvedStabilityState,
     stabilitySkills: resolvedStabilitySkills,
     prerequisiteWarnings: params.orchestrationState.prerequisiteWarnings,
@@ -2363,6 +2416,9 @@ export function inspectAgenticExecutionObservability(
       state.orchestrationState.stabilitySkills.length > 0
         ? `Recovered skills remain under watch: ${state.orchestrationState.stabilitySkills.join(", ")}`
         : undefined,
+      state.orchestrationState.promotedSkills.length > 0
+        ? `Promotion-ready scoped skills: ${state.orchestrationState.promotedSkills.join(", ")}`
+        : undefined,
       state.failureLearningState.learnFromFailure
         ? `Retain this failure pattern for learning: ${state.failureLearningState.failurePattern}`
         : undefined,
@@ -2391,6 +2447,7 @@ export function inspectAgenticExecutionObservability(
     rankedSkills: state.orchestrationState.rankedSkills,
     effectiveSkills: state.orchestrationState.effectiveSkills,
     effectiveFamilies: state.orchestrationState.effectiveFamilies,
+    promotedSkills: state.orchestrationState.promotedSkills,
     stabilityState: state.orchestrationState.stabilityState,
     stabilitySkills: state.orchestrationState.stabilitySkills,
     consolidationAction: state.orchestrationState.consolidationAction,
@@ -2424,6 +2481,9 @@ export function formatAgenticExecutionObservabilityReport(
       report.effectiveFamilies.length > 0
         ? `effective_families=${report.effectiveFamilies.join(">")}`
         : "effective_families=none",
+      report.promotedSkills.length > 0
+        ? `promoted_skills=${report.promotedSkills.join(">")}`
+        : "promoted_skills=none",
       `stability_state=${report.stabilityState}`,
       report.stabilitySkills.length > 0
         ? `stability_skills=${report.stabilitySkills.join(">")}`
@@ -2454,6 +2514,7 @@ export function formatAgenticExecutionObservabilityReport(
     `- Ranked skills: ${report.rankedSkills.length > 0 ? report.rankedSkills.join(" > ") : "none"}`,
     `- Effective skills: ${report.effectiveSkills.length > 0 ? report.effectiveSkills.join(" > ") : "none"}`,
     `- Effective families: ${report.effectiveFamilies.length > 0 ? report.effectiveFamilies.join(", ") : "none"}`,
+    `- Promoted skills: ${report.promotedSkills.length > 0 ? report.promotedSkills.join(", ") : "none"}`,
     `- Stability state: ${report.stabilityState}`,
     `- Stability skills: ${report.stabilitySkills.length > 0 ? report.stabilitySkills.join(", ") : "none"}`,
     `- Workflow chain: ${report.workflowSteps.length > 0 ? report.workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ") : "none"}`,
@@ -3309,6 +3370,45 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Stable scoped skills trigger explicit promotion guidance once the path is durable."
         : "Stable scoped skills did not trigger the expected promotion guidance.",
       details: `stabilized=${report.stabilizedSkills.join("|")} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Extend the diagnostics workflow that memory says is promotion-ready instead of creating another fork.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      availableSkills: ["diagnostics-repair"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [{ name: "diagnostics-repair", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill stability guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node state=stable_reuse",
+        "Skill promotion guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node action=promote_extend_existing",
+      ].join("\n"),
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const passed =
+      state.orchestrationState.promotedSkills.includes("diagnostics-repair") &&
+      state.orchestrationState.consolidationAction === "extend_existing" &&
+      report.promotedSkills.includes("diagnostics-repair") &&
+      report.recommendations.some((recommendation) =>
+        recommendation.includes("Promotion-ready scoped skills"),
+      );
+    scenarios.push({
+      id: "promotion_guidance_memory_alignment",
+      passed,
+      summary: passed
+        ? "Promotion guidance from memory feeds directly into extend-existing orchestration."
+        : "Promotion guidance did not flow cleanly from retrieval into orchestration.",
+      details: `promoted=${report.promotedSkills.join("|")} consolidation=${state.orchestrationState.consolidationAction}`,
     });
   }
 

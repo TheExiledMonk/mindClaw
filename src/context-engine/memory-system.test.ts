@@ -2383,6 +2383,7 @@ describe("MemorySystemContextEngine", () => {
             { skill: "acceptance-report", role: "verification" },
           ],
           rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          promotedSkills: ["memory-diagnostics"],
           stabilityState: "stable_reuse",
           stabilitySkills: ["memory-diagnostics"],
           prerequisiteWarnings: ["acceptance-report:missing-env:docker"],
@@ -2450,6 +2451,11 @@ describe("MemorySystemContextEngine", () => {
     expect(
       proceduralEntries.some((entry) =>
         (entry.environmentTags ?? []).includes("procedural:stability-skill:memory-diagnostics"),
+      ),
+    ).toBe(true);
+    expect(
+      proceduralEntries.some((entry) =>
+        (entry.environmentTags ?? []).includes("procedural:promoted-skill:memory-diagnostics"),
       ),
     ).toBe(true);
 
@@ -3684,6 +3690,7 @@ describe("MemorySystemContextEngine", () => {
           skillChain: ["diagnostics-repair"],
           workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
           rankedSkills: ["diagnostics-repair"],
+          promotedSkills: ["diagnostics-repair"],
           prerequisiteWarnings: [],
           capabilityGaps: [],
           multiSkillCandidate: false,
@@ -3733,6 +3740,7 @@ describe("MemorySystemContextEngine", () => {
           skillChain: ["diagnostics-repair"],
           workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
           rankedSkills: ["diagnostics-repair"],
+          promotedSkills: ["diagnostics-repair"],
           prerequisiteWarnings: [],
           capabilityGaps: [],
           multiSkillCandidate: false,
@@ -3764,6 +3772,8 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("Skill stability guidance:");
     expect(packet.text).toContain("skill=diagnostics-repair");
     expect(packet.text).toContain("state=stable_reuse");
+    expect(packet.text).toContain("Skill promotion guidance:");
+    expect(packet.text).toContain("action=promote_extend_existing");
   });
 
   it("includes maintenance details when diagnostics runs repair", async () => {

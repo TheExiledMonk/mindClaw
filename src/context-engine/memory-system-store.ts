@@ -1044,6 +1044,60 @@ function deriveStabilizedScopedSkills(entries: LongTermMemoryEntry[]): string[] 
     .slice(0, 3);
 }
 
+function derivePromotedScopedSkills(entries: LongTermMemoryEntry[]): string[] {
+  const stabilizedSkills = new Set(deriveStabilizedScopedSkills(entries));
+  const promoted = new Set<string>();
+  for (const entry of entries) {
+    const promotedTags = (entry.environmentTags ?? [])
+      .filter((tag) => tag.startsWith("procedural:promoted-skill:"))
+      .map((tag) => tag.replace("procedural:promoted-skill:", "").trim())
+      .filter(Boolean);
+    for (const skill of promotedTags) {
+      const taskMode =
+        (entry.environmentTags ?? [])
+          .find((tag) => tag.startsWith("task-mode:"))
+          ?.replace("task-mode:", "")
+          .trim() || "general";
+      const env =
+        (entry.environmentTags ?? [])
+          .find((tag) => tag.startsWith("procedural:skill-env:"))
+          ?.replace("procedural:skill-env:", "")
+          .trim() || "unknown";
+      const key = `${skill}@${taskMode}/${env}`;
+      if (stabilizedSkills.has(key)) {
+        promoted.add(key);
+      }
+    }
+    if (
+      (entry.environmentTags ?? []).includes("procedural:stability:stable_reuse") &&
+      ((entry.text ?? "").toLowerCase().includes("promote") ||
+        (entry.environmentTags ?? []).includes("procedural:consolidation-action:extend_existing"))
+    ) {
+      const primarySkillTag = (entry.environmentTags ?? []).find((tag) =>
+        tag.startsWith("procedural:primary-skill:"),
+      );
+      const primarySkill = primarySkillTag?.replace("procedural:primary-skill:", "").trim();
+      const taskMode =
+        (entry.environmentTags ?? [])
+          .find((tag) => tag.startsWith("task-mode:"))
+          ?.replace("task-mode:", "")
+          .trim() || "general";
+      const env =
+        (entry.environmentTags ?? [])
+          .find((tag) => tag.startsWith("procedural:skill-env:"))
+          ?.replace("procedural:skill-env:", "")
+          .trim() || "unknown";
+      if (primarySkill) {
+        const key = `${primarySkill}@${taskMode}/${env}`;
+        if (stabilizedSkills.has(key)) {
+          promoted.add(key);
+        }
+      }
+    }
+  }
+  return [...promoted].slice(0, 3);
+}
+
 function normalizeComparable(text: string): string {
   return text
     .toLowerCase()
@@ -3499,6 +3553,7 @@ function deriveRuntimeSignalCandidates(params: {
           skillChain?: unknown;
           workflowSteps?: unknown;
           rankedSkills?: unknown;
+          promotedSkills?: unknown;
           stabilityState?: unknown;
           stabilitySkills?: unknown;
           prerequisiteWarnings?: unknown;
@@ -3702,6 +3757,13 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const promotedSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.promotedSkills)
+        ? proceduralExecution.promotedSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
     const stabilityState =
       proceduralExecution.stabilityState === "neutral" ||
       proceduralExecution.stabilityState === "recovered_watch" ||
@@ -3786,6 +3848,7 @@ function deriveRuntimeSignalCandidates(params: {
         ? `workflow_steps=${workflowSteps.map((step) => `${step.role}:${step.skill}`).join(",")}`
         : "",
       rankedSkills.length > 0 ? `ranked_skills=${rankedSkills.join(",")}` : "",
+      promotedSkills.length > 0 ? `promoted_skills=${promotedSkills.join(",")}` : "",
       prerequisiteWarnings.length > 0 ? `skill_prereqs=${prerequisiteWarnings.join(",")}` : "",
       capabilityGaps.length > 0 ? `capability_gaps=${capabilityGaps.join(",")}` : "",
       hasViableFallback ? "viable_fallback=true" : "viable_fallback=false",
@@ -3823,6 +3886,7 @@ function deriveRuntimeSignalCandidates(params: {
         ? `workflow chain ${workflowSteps.map((step) => `${step.role}:${step.skill}`).join(" -> ")}`
         : "",
       rankedSkills.length > 0 ? `ranked skills ${rankedSkills.join(" > ")}` : "",
+      promotedSkills.length > 0 ? `promotion-ready skills ${promotedSkills.join(", ")}` : "",
       prerequisiteWarnings.length > 0
         ? `skill prerequisites ${prerequisiteWarnings.join(", ")}`
         : "",
@@ -3878,6 +3942,7 @@ function deriveRuntimeSignalCandidates(params: {
         ) ?? []),
         ...(rankedSkills.map((skill, index) => `procedural:ranked-skill:${index + 1}:${skill}`) ??
           []),
+        ...(promotedSkills.map((skill) => `procedural:promoted-skill:${skill}`) ?? []),
         stabilityState !== "neutral" ? `procedural:stability:${stabilityState}` : "",
         ...(stabilitySkills.map((skill) => `procedural:stability-skill:${skill}`) ?? []),
         ...(prerequisiteWarnings.map((warning) => `procedural:prereq:${warning}`) ?? []),
@@ -6459,6 +6524,7 @@ export function retrieveMemoryContextPacket(
     const effectivenessGuidance = deriveSkillEffectivenessGuidance(proceduralGuidance);
     const recoveryGuidance = deriveRecoveringScopedSkills(proceduralGuidance);
     const stabilityGuidance = deriveStabilizedScopedSkills(proceduralGuidance);
+    const promotionGuidance = derivePromotedScopedSkills(proceduralGuidance);
     if (recommendedSkills.length > 0) {
       sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
     }
@@ -6490,6 +6556,17 @@ export function retrieveMemoryContextPacket(
             const [skill, scope] = item.split("@");
             const [taskMode, env] = (scope ?? "").split("/");
             return `skill=${skill} task_mode=${taskMode || "general"} env=${env || "unknown"} state=stable_reuse`;
+          })
+          .join("\n- ")}`,
+      );
+    }
+    if (promotionGuidance.length > 0) {
+      sections.push(
+        `Skill promotion guidance:\n- ${promotionGuidance
+          .map((item) => {
+            const [skill, scope] = item.split("@");
+            const [taskMode, env] = (scope ?? "").split("/");
+            return `skill=${skill} task_mode=${taskMode || "general"} env=${env || "unknown"} action=promote_extend_existing`;
           })
           .join("\n- ")}`,
       );

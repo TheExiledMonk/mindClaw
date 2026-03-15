@@ -1506,6 +1506,7 @@ export function buildAfterTurnRuntimeContext(params: {
     taskState: agenticState.taskState,
     verificationState: agenticState.verificationState,
     plannerState: agenticState.plannerState,
+    governanceState: agenticState.governanceState,
     toolSignals,
     diffSignals,
   });
@@ -1538,6 +1539,7 @@ export function buildAfterTurnRuntimeContext(params: {
     taskState: agenticState.taskState,
     verificationState: agenticState.verificationState,
     plannerState: agenticState.plannerState,
+    governanceState: agenticState.governanceState,
     proceduralExecution,
   };
 }

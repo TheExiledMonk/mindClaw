@@ -185,6 +185,15 @@ export type CompactEmbeddedPiSessionParams = {
   taskState?: AgenticTaskState;
   verificationState?: AgenticVerificationState;
   plannerState?: AgenticPlannerState;
+  governanceState?: {
+    version: 1;
+    autonomyMode: "continue" | "fallback" | "approval_required" | "escalate";
+    riskLevel: "low" | "medium" | "high";
+    approvalRequired: boolean;
+    secretPromptDetected: boolean;
+    destructiveActionDetected: boolean;
+    reasons: string[];
+  };
   proceduralExecution?: ProceduralExecutionRecord;
 };
 

@@ -11,6 +11,7 @@ export type AgenticTaskMode =
   | "general";
 
 export type AgenticConfidence = "low" | "medium" | "high";
+export type AgenticRiskLevel = "low" | "medium" | "high";
 export type AgenticVerificationOutcome =
   | "unverified"
   | "verified"
@@ -30,6 +31,7 @@ export type AgenticEscalationReason =
   | "missing_information"
   | "low_confidence"
   | "unknown";
+export type AgenticAutonomyMode = "continue" | "fallback" | "approval_required" | "escalate";
 export type AgenticFailureClass =
   | "tool_failure"
   | "verification_failure"
@@ -79,6 +81,17 @@ export type AgenticExecutionState = {
   taskState: AgenticTaskState;
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
+  governanceState: AgenticGovernanceState;
+};
+
+export type AgenticGovernanceState = {
+  version: 1;
+  autonomyMode: AgenticAutonomyMode;
+  riskLevel: AgenticRiskLevel;
+  approvalRequired: boolean;
+  secretPromptDetected: boolean;
+  destructiveActionDetected: boolean;
+  reasons: string[];
 };
 
 export type ProceduralExecutionRecord = {
@@ -97,6 +110,9 @@ export type ProceduralExecutionRecord = {
   suggestedSkill?: string;
   shouldEscalate: boolean;
   escalationReason?: AgenticEscalationReason;
+  autonomyMode: AgenticAutonomyMode;
+  riskLevel: AgenticRiskLevel;
+  governanceReasons: string[];
   nextImprovement?: string;
 };
 
@@ -473,6 +489,62 @@ function buildPlannerState(params: {
   };
 }
 
+function buildGovernanceState(params: {
+  messages: AgentMessage[];
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+}): AgenticGovernanceState {
+  const corpus = params.messages.map((message) => extractMessageText(message)).join("\n");
+  const lowered = corpus.toLowerCase();
+  const secretPromptDetected =
+    /\b(password|api key|token|credential|secret|private key)\b/.test(lowered) &&
+    /\b(give|send|paste|provide|share|reveal|export|show)\b/.test(lowered);
+  const destructiveActionDetected =
+    /\b(rm -rf|git reset --hard|drop database|drop table|delete production|wipe|destroy)\b/.test(
+      lowered,
+    );
+  const reasons = uniqueCompact(
+    [
+      secretPromptDetected ? "secret_exfiltration_request" : undefined,
+      destructiveActionDetected ? "destructive_action_detected" : undefined,
+      params.plannerState.shouldEscalate
+        ? `planner:${params.plannerState.escalationReason ?? "unknown"}`
+        : undefined,
+      params.verificationState.outcome === "blocked" ? "blocked_execution" : undefined,
+    ],
+    5,
+  );
+  const approvalRequired = destructiveActionDetected;
+  const autonomyMode: AgenticAutonomyMode =
+    secretPromptDetected || params.plannerState.shouldEscalate
+      ? "escalate"
+      : approvalRequired
+        ? "approval_required"
+        : params.plannerState.retryClass === "skill_fallback"
+          ? "fallback"
+          : "continue";
+  const riskLevel: AgenticRiskLevel =
+    secretPromptDetected ||
+    destructiveActionDetected ||
+    params.plannerState.escalationReason === "environment_mismatch"
+      ? "high"
+      : params.plannerState.retryClass === "skill_fallback" ||
+          params.verificationState.outcome === "partial" ||
+          params.verificationState.outcome === "failed" ||
+          params.verificationState.outcome === "blocked"
+        ? "medium"
+        : "low";
+  return {
+    version: 1,
+    autonomyMode,
+    riskLevel,
+    approvalRequired,
+    secretPromptDetected,
+    destructiveActionDetected,
+    reasons,
+  };
+}
+
 export function buildAgenticExecutionState(params: {
   messages: AgentMessage[];
   activeArtifacts?: string[];
@@ -569,11 +641,17 @@ export function buildAgenticExecutionState(params: {
     availableSkills: params.availableSkills,
     likelySkills: params.likelySkills,
   });
+  const governanceState = buildGovernanceState({
+    messages: params.messages,
+    verificationState,
+    plannerState,
+  });
 
   return {
     taskState,
     verificationState,
     plannerState,
+    governanceState,
   };
 }
 
@@ -594,6 +672,11 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
   const escalationGuidance = state.plannerState.shouldEscalate
     ? `Escalation required: ${state.plannerState.escalationReason ?? "unknown"}`
     : undefined;
+  const governanceGuidance = `Autonomy mode: ${state.governanceState.autonomyMode} (risk=${state.governanceState.riskLevel})`;
+  const governanceReasons =
+    state.governanceState.reasons.length > 0
+      ? `Governance reasons: ${state.governanceState.reasons.join(", ")}`
+      : undefined;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -611,6 +694,8 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     failureGuidance,
     retryGuidance,
     escalationGuidance,
+    governanceGuidance,
+    governanceReasons,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
     fallbackSkillGuidance,
     antiRepeatGuidance,
@@ -624,6 +709,7 @@ export function buildProceduralExecutionRecord(params: {
   taskState: AgenticTaskState;
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
+  governanceState: AgenticGovernanceState;
   toolSignals?: ToolSignal[];
   diffSignals?: DiffSignal[];
 }): ProceduralExecutionRecord {
@@ -689,6 +775,9 @@ export function buildProceduralExecutionRecord(params: {
     suggestedSkill: params.plannerState.suggestedSkill,
     shouldEscalate: params.plannerState.shouldEscalate,
     escalationReason: params.plannerState.escalationReason,
+    autonomyMode: params.governanceState.autonomyMode,
+    riskLevel: params.governanceState.riskLevel,
+    governanceReasons: params.governanceState.reasons,
     nextImprovement,
   };
 }

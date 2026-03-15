@@ -1314,11 +1314,16 @@ describe("buildAfterTurnRuntimeContext", () => {
       retryClass: "same_path_retry",
       shouldEscalate: false,
     });
+    expect(runtimeContext.governanceState).toMatchObject({
+      autonomyMode: "continue",
+      riskLevel: "low",
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       availableSkills: expect.arrayContaining(["typescript-build-fix"]),
       toolChain: expect.arrayContaining(["exec"]),
       outcome: "verified",
       retryClass: "same_path_retry",
+      autonomyMode: "continue",
     });
   });
 
@@ -1369,11 +1374,16 @@ describe("buildAfterTurnRuntimeContext", () => {
       suggestedSkill: "acceptance-report",
       shouldEscalate: false,
     });
+    expect(runtimeContext.governanceState).toMatchObject({
+      autonomyMode: "fallback",
+      riskLevel: "medium",
+    });
     expect(runtimeContext.proceduralExecution).toMatchObject({
       nearMissCandidate: true,
       retryClass: "skill_fallback",
       suggestedSkill: "acceptance-report",
       shouldEscalate: false,
+      autonomyMode: "fallback",
     });
   });
 

@@ -2323,6 +2323,15 @@ describe("MemorySystemContextEngine", () => {
         ),
       ],
       runtimeContext: {
+        governanceState: {
+          version: 1,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          approvalRequired: false,
+          secretPromptDetected: false,
+          destructiveActionDetected: false,
+          reasons: ["planner:unknown"],
+        },
         proceduralExecution: {
           version: 1,
           availableSkills: ["memory-diagnostics", "acceptance-report"],
@@ -2341,6 +2350,9 @@ describe("MemorySystemContextEngine", () => {
           retryClass: "skill_fallback",
           suggestedSkill: "acceptance-report",
           shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
           nextImprovement:
             "Consider parameterizing memory-diagnostics so it can cover acceptance reporting without duplication.",
         },
@@ -2369,6 +2381,8 @@ describe("MemorySystemContextEngine", () => {
       ],
     });
 
+    expect(packet.text).toContain("Recommended procedural skills:");
+    expect(packet.text).toContain("acceptance-report");
     expect(packet.text).toContain("Procedural guidance:");
     expect(
       packet.retrievalItems.some(

@@ -2741,6 +2741,68 @@ function deriveRuntimeSignalCandidates(params: {
     });
   }
 
+  const governanceState =
+    runtime.governanceState && typeof runtime.governanceState === "object"
+      ? (runtime.governanceState as {
+          autonomyMode?: unknown;
+          riskLevel?: unknown;
+          approvalRequired?: unknown;
+          secretPromptDetected?: unknown;
+          destructiveActionDetected?: unknown;
+          reasons?: unknown;
+        })
+      : undefined;
+  if (governanceState) {
+    const autonomyMode =
+      governanceState.autonomyMode === "continue" ||
+      governanceState.autonomyMode === "fallback" ||
+      governanceState.autonomyMode === "approval_required" ||
+      governanceState.autonomyMode === "escalate"
+        ? governanceState.autonomyMode
+        : "continue";
+    const riskLevel =
+      governanceState.riskLevel === "low" ||
+      governanceState.riskLevel === "medium" ||
+      governanceState.riskLevel === "high"
+        ? governanceState.riskLevel
+        : "low";
+    const reasons = uniqueStrings(
+      Array.isArray(governanceState.reasons)
+        ? governanceState.reasons.filter(
+            (reason): reason is string => typeof reason === "string" && reason.trim().length > 0,
+          )
+        : [],
+    );
+    pushRuntimeCandidate({
+      category: "strategy",
+      text: [
+        `Governance state for current execution: autonomy mode ${autonomyMode}`,
+        `risk ${riskLevel}`,
+        governanceState.approvalRequired === true ? "approval required" : "",
+        governanceState.secretPromptDetected === true ? "secret extraction request detected" : "",
+        governanceState.destructiveActionDetected === true
+          ? "destructive action request detected"
+          : "",
+        reasons.length > 0 ? `reasons ${reasons.join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      evidence: reasons.length > 0 ? reasons : [`autonomy=${autonomyMode}`, `risk=${riskLevel}`],
+      environmentTags: uniqueStrings([
+        "runtime:governance",
+        `governance:mode:${autonomyMode}`,
+        `governance:risk:${riskLevel}`,
+        governanceState.approvalRequired === true ? "governance:approval-required" : "",
+        governanceState.secretPromptDetected === true ? "governance:secret-detected" : "",
+        governanceState.destructiveActionDetected === true ? "governance:destructive-detected" : "",
+      ]),
+      confidence: 0.92,
+      strength: 0.9,
+      importanceClass: riskLevel === "high" ? "critical" : "useful",
+      trend: "stable",
+    });
+  }
+
   const proceduralExecution =
     runtime.proceduralExecution && typeof runtime.proceduralExecution === "object"
       ? (runtime.proceduralExecution as {
@@ -2758,6 +2820,9 @@ function deriveRuntimeSignalCandidates(params: {
           suggestedSkill?: unknown;
           shouldEscalate?: unknown;
           escalationReason?: unknown;
+          autonomyMode?: unknown;
+          riskLevel?: unknown;
+          governanceReasons?: unknown;
           nextImprovement?: unknown;
         })
       : undefined;
@@ -2842,14 +2907,37 @@ function deriveRuntimeSignalCandidates(params: {
       proceduralExecution.escalationReason === "unknown"
         ? proceduralExecution.escalationReason
         : undefined;
+    const autonomyMode =
+      proceduralExecution.autonomyMode === "continue" ||
+      proceduralExecution.autonomyMode === "fallback" ||
+      proceduralExecution.autonomyMode === "approval_required" ||
+      proceduralExecution.autonomyMode === "escalate"
+        ? proceduralExecution.autonomyMode
+        : "continue";
+    const riskLevel =
+      proceduralExecution.riskLevel === "low" ||
+      proceduralExecution.riskLevel === "medium" ||
+      proceduralExecution.riskLevel === "high"
+        ? proceduralExecution.riskLevel
+        : "low";
+    const governanceReasons = uniqueStrings(
+      Array.isArray(proceduralExecution.governanceReasons)
+        ? proceduralExecution.governanceReasons.filter(
+            (reason): reason is string => typeof reason === "string" && reason.trim().length > 0,
+          )
+        : [],
+    );
     const proceduralEvidence = uniqueStrings([
       likelySkills.length > 0 ? `skills=${likelySkills.join(",")}` : "",
       alternativeSkills.length > 0 ? `alt_skills=${alternativeSkills.join(",")}` : "",
       toolChain.length > 0 ? `tools=${toolChain.join(",")}` : "",
       changedArtifacts.length > 0 ? `artifacts=${changedArtifacts.join(",")}` : "",
       `retry=${retryClass}`,
+      `autonomy=${autonomyMode}`,
+      `risk=${riskLevel}`,
       suggestedSkill ? `suggested_skill=${suggestedSkill}` : "",
       shouldEscalate ? `escalate=${escalationReason ?? "unknown"}` : "",
+      governanceReasons.length > 0 ? `governance=${governanceReasons.join(",")}` : "",
       nextImprovement ?? "",
     ]).filter(Boolean);
     const proceduralText = [
@@ -2860,6 +2948,8 @@ function deriveRuntimeSignalCandidates(params: {
       changedArtifacts.length > 0 ? `on ${changedArtifacts.join(", ")}` : "",
       `with outcome ${outcome}`,
       `retry class ${retryClass}`,
+      `autonomy mode ${autonomyMode}`,
+      `risk ${riskLevel}`,
       suggestedSkill ? `suggested fallback ${suggestedSkill}` : "",
       shouldEscalate ? `requires escalation ${escalationReason ?? "unknown"}` : "",
       nextImprovement ? `Next improvement: ${nextImprovement}` : "",
@@ -2877,7 +2967,10 @@ function deriveRuntimeSignalCandidates(params: {
         "runtime:procedural",
         `procedural:outcome:${outcome}`,
         `procedural:retry:${retryClass}`,
+        `procedural:autonomy:${autonomyMode}`,
+        `procedural:risk:${riskLevel}`,
         `task-mode:${taskMode}`,
+        ...(likelySkills.map((skill) => `skill:${skill}`) ?? []),
         ...(toolChain.map((tool) => `tool:${tool}`) ?? []),
         ...(alternativeSkills.map((skill) => `skill:${skill}`) ?? []),
         suggestedSkill ? `procedural:suggested-skill:${suggestedSkill}` : "",
@@ -5324,6 +5417,35 @@ function expandRelatedMemories(
   return expanded;
 }
 
+function recommendProceduralSkillsFromEntries(entries: LongTermMemoryEntry[]): string[] {
+  const weights = new Map<string, number>();
+  for (const entry of entries) {
+    const baseWeight =
+      entry.activeStatus === "superseded" || entry.activeStatus === "stale"
+        ? 0.35
+        : entry.activeStatus === "archived"
+          ? 0.15
+          : 1;
+    const tags = entry.environmentTags ?? [];
+    for (const tag of tags) {
+      if (!tag.startsWith("skill:")) {
+        continue;
+      }
+      const skill = tag.slice("skill:".length).trim();
+      if (!skill) {
+        continue;
+      }
+      const suggestedBoost = tags.includes(`procedural:suggested-skill:${skill}`) ? 0.75 : 0;
+      const score = baseWeight + suggestedBoost + entry.strength * 0.35 + entry.confidence * 0.25;
+      weights.set(skill, (weights.get(skill) ?? 0) + score);
+    }
+  }
+  return [...weights.entries()]
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 4)
+    .map(([skill]) => skill);
+}
+
 export function retrieveMemoryContextPacket(
   snapshot: MemoryStoreSnapshot,
   params?: { messages?: AgentMessage[] },
@@ -5399,6 +5521,10 @@ export function retrieveMemoryContextPacket(
     (item.environmentTags ?? []).includes("runtime:procedural"),
   );
   if (proceduralGuidance.length > 0) {
+    const recommendedSkills = recommendProceduralSkillsFromEntries(proceduralGuidance);
+    if (recommendedSkills.length > 0) {
+      sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
+    }
     sections.push(
       `Procedural guidance:\n- ${proceduralGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );

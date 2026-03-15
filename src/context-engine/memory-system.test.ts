@@ -3469,6 +3469,7 @@ describe("MemorySystemContextEngine", () => {
 
     expect(packet.text).toContain("Skill family guidance:");
     expect(packet.text).toContain("family=diagnostics");
+    expect(packet.text).toContain("template_candidate=true");
     expect(packet.text).toContain("preferred_fallback=acceptance-report");
     expect(
       packet.retrievalItems.some((item) => item.reason.includes("skill family guidance")),

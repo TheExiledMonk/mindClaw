@@ -325,6 +325,34 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.rationale).toContain("consolidating within diagnostics");
   });
 
+  it("uses template-ready family guidance to generalize a single stable skill instead of forking it", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Turn the diagnostics workflow into a reusable template instead of creating another fork.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=memory-diagnostics family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.30 evidence=3",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing template_candidate=true primary=memory-diagnostics",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("memory-diagnostics");
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
+    expect(state.orchestrationState.skillFamilies).toContain("diagnostics");
+    expect(state.orchestrationState.rationale).toContain(
+      "template-ready diagnostics family guidance",
+    );
+  });
+
   it("uses skill effectiveness guidance from memory to prefer the stronger accumulated skill", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Fix the diagnostics workflow and pick the strongest reusable path.")],
@@ -983,6 +1011,72 @@ describe("agentic-state", () => {
     expect(record.consolidationAction).toBeDefined();
     expect(record.workspaceKind).toBe("unknown");
     expect(record.failurePattern).toBe("near_miss");
+  });
+
+  it("marks family-guided generalization as a template candidate in procedural records", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Generalize the diagnostics workflow without creating another specialized fork.",
+        ),
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=memory-diagnostics family=diagnostics task_mode=general workspace=project env=node validation=exec score=3.10 evidence=3",
+        "Skill family guidance:",
+        "- family=diagnostics trend=stable consolidation=generalize_existing template_candidate=true primary=memory-diagnostics",
+      ].join("\n"),
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran diagnostics verification successfully.",
+        },
+      ],
+      diffSignals: [
+        {
+          artifactRef: "scripts/memory-diagnostics-report.ts",
+          changeKind: "modified",
+          summary: "Updated diagnostics workflow output.",
+        },
+      ],
+    });
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "memory-diagnostics", primaryEnv: "node" }],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran diagnostics verification successfully.",
+        },
+      ],
+      diffSignals: [
+        {
+          artifactRef: "scripts/memory-diagnostics-report.ts",
+          changeKind: "modified",
+          summary: "Updated diagnostics workflow output.",
+        },
+      ],
+    });
+
+    expect(record.consolidationAction).toBe("generalize_existing");
+    expect(record.templateCandidate).toBe(true);
+    expect(record.nextImprovement).toContain("generalize_existing");
   });
 
   it("marks failed procedural workflows as near-miss candidates", () => {

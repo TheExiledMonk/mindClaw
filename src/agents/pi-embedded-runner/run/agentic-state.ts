@@ -402,6 +402,7 @@ type AgenticRegressionMemorySignal = {
   qualityFailureReasons: string[];
   regressingSkillFamilies: string[];
   consolidationPreferredFamilies: string[];
+  templatePreferredFamilies: string[];
   preferredFallbackSkills: string[];
 };
 
@@ -682,6 +683,7 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
       qualityFailureReasons: [],
       regressingSkillFamilies: [],
       consolidationPreferredFamilies: [],
+      templatePreferredFamilies: [],
       preferredFallbackSkills: [],
     };
   }
@@ -728,6 +730,14 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     }),
     6,
   );
+  const templatePreferredFamilies = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const templateCandidate = line.match(/template_candidate=(true|false)/i)?.[1]?.trim();
+      return family && templateCandidate === "true" ? [family] : [];
+    }),
+    6,
+  );
   const preferredFallbackSkills = uniqueCompact(
     familyLines.flatMap((line) => {
       const fallback = line.match(/preferred_fallback=([a-z0-9_.-]+)/i)?.[1]?.trim();
@@ -746,6 +756,7 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     qualityFailureReasons,
     regressingSkillFamilies,
     consolidationPreferredFamilies,
+    templatePreferredFamilies,
     preferredFallbackSkills,
   };
 }
@@ -1459,12 +1470,13 @@ function buildOrchestrationState(params: {
   const memoryPromotedSkills = new Set(params.memoryPromotedSkills ?? []);
   const memoryWorkflowChains = params.memoryWorkflowChains ?? [];
   const memoryMultiSkillHint = params.memoryMultiSkillHint === true;
-  const memoryRegressionSignals = params.memoryRegressionSignals ?? {
+  const memoryRegressionSignals: AgenticRegressionMemorySignal = params.memoryRegressionSignals ?? {
     missingFallbackRegression: false,
     escalationRegression: false,
     qualityFailureReasons: [],
     regressingSkillFamilies: [],
     consolidationPreferredFamilies: [],
+    templatePreferredFamilies: [],
     preferredFallbackSkills: [],
   };
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
@@ -1689,6 +1701,20 @@ function buildOrchestrationState(params: {
   const overlapFamilies = overlapSignals.families.filter((family) =>
     memoryRegressionSignals.consolidationPreferredFamilies.includes(family),
   );
+  const promotedSkills = uniqueCompact(
+    availableSkills.map((skill) => skill.name).filter((skill) => memoryPromotedSkills.has(skill)),
+    6,
+  );
+  const primarySkillFamily = primarySkill ? inferSkillFamily(primarySkill) : undefined;
+  const familyGuidedGeneralization =
+    primarySkillFamily &&
+    (memoryRegressionSignals.templatePreferredFamilies.includes(primarySkillFamily) ||
+      (memoryRegressionSignals.consolidationPreferredFamilies.includes(primarySkillFamily) &&
+        (effectiveFamilies.includes(primarySkillFamily) ||
+          promotedSkills.includes(primarySkill ?? "") ||
+          memoryStabilizedSkills.has(primarySkill ?? ""))))
+      ? primarySkillFamily
+      : undefined;
   const stabilitySkills = uniqueCompact(
     [
       ...availableSkills
@@ -1698,10 +1724,6 @@ function buildOrchestrationState(params: {
         .map((skill) => skill.name)
         .filter((skill) => memoryRecoveringSkills.has(skill)),
     ],
-    6,
-  );
-  const promotedSkills = uniqueCompact(
-    availableSkills.map((skill) => skill.name).filter((skill) => memoryPromotedSkills.has(skill)),
     6,
   );
   const recoveringPrimaryFamily =
@@ -1721,7 +1743,9 @@ function buildOrchestrationState(params: {
       ? inferSkillFamily(primarySkill)
       : undefined;
   const consolidationAction: AgenticConsolidationAction =
-    overlapSignals.overlappingSkills.length >= 3 || overlapFamilies.length > 0
+    overlapSignals.overlappingSkills.length >= 3 ||
+    overlapFamilies.length > 0 ||
+    Boolean(familyGuidedGeneralization)
       ? "generalize_existing"
       : primarySkill && promotedSkills.includes(primarySkill) && !recoveringPrimaryFamily
         ? "extend_existing"
@@ -1734,10 +1758,17 @@ function buildOrchestrationState(params: {
               ? "create_new"
               : "none";
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${familyGuidedGeneralization ? ` with template-ready ${familyGuidedGeneralization} family guidance` : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
+  const orchestrationFamilies = uniqueCompact(
+    [
+      ...overlapSignals.families,
+      ...(familyGuidedGeneralization ? [familyGuidedGeneralization] : []),
+    ],
+    6,
+  );
   return {
     version: 1,
     primarySkill,
@@ -1753,7 +1784,7 @@ function buildOrchestrationState(params: {
     hasViableFallback,
     multiSkillCandidate,
     chainedWorkflow,
-    skillFamilies: overlapSignals.families,
+    skillFamilies: orchestrationFamilies,
     overlappingSkills: overlapSignals.overlappingSkills,
     stabilityState,
     stabilitySkills,
@@ -2257,7 +2288,9 @@ export function buildProceduralExecutionRecord(params: {
   const templateCandidate =
     params.verificationState.outcome !== "failed" &&
     params.verificationState.outcome !== "blocked" &&
-    (changedArtifacts.length > 1 || toolChain.length > 1);
+    (changedArtifacts.length > 1 ||
+      toolChain.length > 1 ||
+      params.orchestrationState.consolidationAction === "generalize_existing");
 
   let nextImprovement: string | undefined;
   const resolvedPrimarySkill =

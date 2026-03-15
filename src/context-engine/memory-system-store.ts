@@ -806,10 +806,14 @@ function deriveSkillFamilyGuidanceLine(entry: LongTermMemoryEntry): string | und
       .find((tag) => tag.startsWith("procedural:primary-skill:"))
       ?.replace("procedural:primary-skill:", "")
       .trim() || "";
+  const templateCandidate =
+    (entry.environmentTags ?? []).includes("procedural:template-candidate") ||
+    consolidation === "generalize_existing";
   return [
     `family=${family}`,
     `trend=${trend}`,
     consolidation !== "none" ? `consolidation=${consolidation}` : "",
+    templateCandidate ? "template_candidate=true" : "",
     preferredFallback ? `preferred_fallback=${preferredFallback}` : "",
     primarySkill ? `primary=${primarySkill}` : "",
   ]

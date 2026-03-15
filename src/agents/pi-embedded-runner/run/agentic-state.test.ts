@@ -63,6 +63,77 @@ describe("agentic-state", () => {
     expect(buildAgenticSystemPromptAddition(state)).toContain("## Execution State");
   });
 
+  it("derives repo, language, validation, and branch context from the live environment", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the React TypeScript diagnostics screen, keep the release branch safe, and rerun repo validation.",
+        ),
+      ],
+      activeArtifacts: ["src/ui/DiagnosticsPanel.tsx", "package.json"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/ui",
+        gitBranch: "release/agentic-env",
+        gitCommit: "abc1234",
+        transcriptExists: true,
+      },
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary:
+            "Ran pnpm exec vitest run src/ui/DiagnosticsPanel.test.tsx and the validation failed.",
+          artifactRefs: ["src/ui/DiagnosticsPanel.tsx"],
+        },
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pnpm exec tsc -p tsconfig.json --noEmit successfully after the UI fix.",
+        },
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the release checklist for the UI package.",
+        },
+      ],
+      availableSkills: ["ui-diagnostics"],
+      availableSkillInfo: [{ name: "ui-diagnostics", primaryEnv: "node" }],
+    });
+
+    expect(state.environmentState.repoFingerprint).toContain("openclaw:packages/ui:project");
+    expect(state.environmentState.languageSignals).toEqual(
+      expect.arrayContaining(["typescript", "node"]),
+    );
+    expect(state.environmentState.frameworkSignals).toEqual(
+      expect.arrayContaining(["react", "vitest", "pnpm"]),
+    );
+    expect(state.environmentState.validationCommands?.join(" | ")).toContain(
+      "pnpm exec vitest run src/ui/DiagnosticsPanel.test.tsx",
+    );
+    expect(state.environmentState.validationCommands?.join(" | ")).toContain(
+      "pnpm exec tsc -p tsconfig.json --noEmit",
+    );
+    expect(state.environmentState.permissionSignals).toEqual(
+      expect.arrayContaining([
+        "command_execution",
+        "file_read",
+        "git_metadata",
+        "transcript_access",
+      ]),
+    );
+    expect(state.environmentState.branchConventions).toContain("release_branch");
+    expect(state.plannerState.nextAction).toContain("Use repo-aware validation");
+    const prompt = buildAgenticSystemPromptAddition(state);
+    expect(prompt).toContain("Repo fingerprint:");
+    expect(prompt).toContain("Languages: typescript, node");
+    expect(prompt).toContain("Frameworks:");
+    expect(prompt).toContain("Validation commands:");
+    expect(prompt).toContain("Branch conventions: release_branch");
+  });
+
   it("marks failures as blockers and requests replanning or escalation", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Implement the task-state model and get the tests passing.")],
@@ -1146,6 +1217,69 @@ describe("agentic-state", () => {
     expect(record.consolidationAction).toBeDefined();
     expect(record.workspaceKind).toBe("unknown");
     expect(record.failurePattern).toBe("near_miss");
+  });
+
+  it("persists environment model signals into procedural execution records", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Repair the Python migration helper on the hotfix branch and rerun pytest before handing off.",
+        ),
+      ],
+      activeArtifacts: ["migrations/fix_helper.py"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "services/migrations",
+        gitBranch: "hotfix/migration-helper",
+      },
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pytest tests/test_fix_helper.py successfully.",
+        },
+      ],
+      availableSkills: ["python-migration"],
+      availableSkillInfo: [{ name: "python-migration", primaryEnv: "python" }],
+    });
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "python-migration", primaryEnv: "python" }],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pytest tests/test_fix_helper.py successfully.",
+        },
+      ],
+      diffSignals: [
+        {
+          artifactRef: "migrations/fix_helper.py",
+          changeKind: "modified",
+          summary: "Adjusted migration helper behavior.",
+        },
+      ],
+    });
+
+    expect(record.repoFingerprint).toContain("openclaw:services/migrations:project");
+    expect(record.languageSignals).toEqual(expect.arrayContaining(["python"]));
+    expect(record.frameworkSignals).toEqual(expect.arrayContaining(["pytest"]));
+    expect(record.validationCommands?.join(" | ")).toContain("pytest tests/test_fix_helper.py");
+    expect(record.permissionSignals).toEqual(
+      expect.arrayContaining(["command_execution", "git_metadata"]),
+    );
+    expect(record.branchConventions).toContain("hotfix_branch");
   });
 
   it("marks family-guided generalization as a template candidate in procedural records", () => {

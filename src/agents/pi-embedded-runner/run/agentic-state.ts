@@ -151,9 +151,15 @@ export type AgenticEnvironmentState = {
   workspaceKind: "project" | "temporary" | "unknown";
   gitBranch?: string;
   gitCommit?: string;
+  repoFingerprint?: string;
   capabilitySignals: string[];
   preferredValidationTools: string[];
   skillEnvironments: string[];
+  languageSignals?: string[];
+  frameworkSignals?: string[];
+  validationCommands?: string[];
+  permissionSignals?: string[];
+  branchConventions?: string[];
 };
 
 export type AgenticFailureLearningState = {
@@ -209,6 +215,12 @@ export type ProceduralExecutionRecord = {
   capabilitySignals: string[];
   preferredValidationTools: string[];
   skillEnvironments: string[];
+  repoFingerprint?: string;
+  languageSignals?: string[];
+  frameworkSignals?: string[];
+  validationCommands?: string[];
+  permissionSignals?: string[];
+  branchConventions?: string[];
   failurePattern: "clean_success" | "near_miss" | "blocked_path" | "hard_failure";
   learnFromFailure: boolean;
   failureReasons: string[];
@@ -285,7 +297,8 @@ export type AgenticAcceptanceScenarioId =
   | "durable_merge_family_fallback_alignment"
   | "durable_template_family_replan_alignment"
   | "failure_derived_merge_family_alignment"
-  | "failure_derived_template_family_alignment";
+  | "failure_derived_template_family_alignment"
+  | "failure_derived_quality_gate_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -309,7 +322,8 @@ export type AgenticSoakScenarioId =
   | "effectiveness_drift_recovery"
   | "recovered_watch_stabilization"
   | "consolidation_mode_transition"
-  | "failure_derived_consolidation_replan";
+  | "failure_derived_consolidation_replan"
+  | "failure_derived_recovery_transition";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -1928,6 +1942,8 @@ function buildEnvironmentState(params: {
   workspaceState?: WorkspaceState;
   toolSignals?: ToolSignal[];
   availableSkills?: SkillInfo[];
+  objective?: string;
+  activeArtifacts?: string[];
 }): AgenticEnvironmentState {
   const workspaceKind: AgenticEnvironmentState["workspaceKind"] = (
     params.workspaceTags ?? []
@@ -1959,14 +1975,247 @@ function buildEnvironmentState(params: {
     (params.availableSkills ?? []).map((skill) => skill.primaryEnv).filter(Boolean),
     6,
   );
+  const languageSignals = inferEnvironmentLanguages({
+    objective: params.objective,
+    activeArtifacts: params.activeArtifacts,
+    toolSignals: params.toolSignals,
+    skillEnvironments,
+  });
+  const frameworkSignals = inferEnvironmentFrameworks({
+    objective: params.objective,
+    activeArtifacts: params.activeArtifacts,
+    toolSignals: params.toolSignals,
+    workspaceTags: params.workspaceTags,
+  });
+  const validationCommands = inferValidationCommands({
+    toolSignals: params.toolSignals,
+    languages: languageSignals,
+    frameworks: frameworkSignals,
+  });
+  const permissionSignals = uniqueCompact(
+    [
+      toolNames.has("exec") ? "command_execution" : undefined,
+      toolNames.has("read") ? "file_read" : undefined,
+      toolNames.has("write") ? "file_write" : undefined,
+      (params.workspaceTags ?? []).includes("git-worktree") ? "git_metadata" : undefined,
+      params.workspaceState?.transcriptExists ? "transcript_access" : undefined,
+      workspaceKind === "temporary" ? "temporary_workspace" : undefined,
+      workspaceKind === "project" ? "project_workspace" : undefined,
+    ],
+    8,
+  );
+  const branchConventions = inferBranchConventions(params.workspaceState?.gitBranch);
+  const repoFingerprint = buildRepoFingerprint({
+    workspaceKind,
+    workspaceState: params.workspaceState,
+    languages: languageSignals,
+    frameworks: frameworkSignals,
+    validationCommands,
+  });
   return {
     version: 1,
     workspaceKind,
     gitBranch: params.workspaceState?.gitBranch,
     gitCommit: params.workspaceState?.gitCommit,
+    repoFingerprint,
     capabilitySignals,
     preferredValidationTools,
     skillEnvironments,
+    languageSignals,
+    frameworkSignals,
+    validationCommands,
+    permissionSignals,
+    branchConventions,
+  };
+}
+
+function inferEnvironmentLanguages(params: {
+  objective?: string;
+  activeArtifacts?: string[];
+  toolSignals?: ToolSignal[];
+  skillEnvironments?: string[];
+}): string[] {
+  const corpus = [
+    params.objective ?? "",
+    ...(params.activeArtifacts ?? []),
+    ...(params.toolSignals?.map((signal) => signal.summary) ?? []),
+  ]
+    .join("\n")
+    .toLowerCase();
+  const artifacts = (params.activeArtifacts ?? []).map((artifact) => artifact.toLowerCase());
+  return uniqueCompact(
+    [
+      artifacts.some((artifact) => /\.(ts|tsx)$/.test(artifact)) || /\btypescript\b/.test(corpus)
+        ? "typescript"
+        : undefined,
+      artifacts.some((artifact) => /\.(js|jsx|mjs|cjs)$/.test(artifact)) ||
+      /\bjavascript\b/.test(corpus)
+        ? "javascript"
+        : undefined,
+      artifacts.some((artifact) => artifact.endsWith(".py")) || /\bpython\b/.test(corpus)
+        ? "python"
+        : undefined,
+      artifacts.some((artifact) => artifact.endsWith(".rs")) || /\brust\b/.test(corpus)
+        ? "rust"
+        : undefined,
+      artifacts.some((artifact) => artifact.endsWith(".go")) ||
+      /\bgolang\b|\bgo test\b/.test(corpus)
+        ? "go"
+        : undefined,
+      artifacts.some((artifact) => artifact.endsWith(".java")) || /\bjava\b/.test(corpus)
+        ? "java"
+        : undefined,
+      ...(params.skillEnvironments ?? []).map((env) => env.toLowerCase()),
+    ],
+    6,
+  );
+}
+
+function inferEnvironmentFrameworks(params: {
+  objective?: string;
+  activeArtifacts?: string[];
+  toolSignals?: ToolSignal[];
+  workspaceTags?: string[];
+}): string[] {
+  const corpus = [
+    params.objective ?? "",
+    ...(params.activeArtifacts ?? []),
+    ...(params.toolSignals?.map((signal) => signal.summary) ?? []),
+    ...(params.workspaceTags ?? []),
+  ]
+    .join("\n")
+    .toLowerCase();
+  return uniqueCompact(
+    [
+      /\breact\b|\.tsx\b/.test(corpus) ? "react" : undefined,
+      /\bnext\.?js\b|\bnextjs\b/.test(corpus) ? "nextjs" : undefined,
+      /\bvitest\b/.test(corpus) ? "vitest" : undefined,
+      /\bjest\b/.test(corpus) ? "jest" : undefined,
+      /\bpytest\b/.test(corpus) ? "pytest" : undefined,
+      /\bdocker\b/.test(corpus) ? "docker" : undefined,
+      /\bpnpm\b/.test(corpus) ? "pnpm" : undefined,
+      /\bnpm\b/.test(corpus) ? "npm" : undefined,
+      /\bcargo\b/.test(corpus) ? "cargo" : undefined,
+    ],
+    6,
+  );
+}
+
+function extractValidationCommandsFromSummary(summary: string): string[] {
+  const matches = [
+    ...summary.matchAll(
+      /\b(pnpm exec [^;\n]+|pnpm [^;\n]+|npm run [^;\n]+|yarn [^;\n]+|pytest(?: [^;\n]+)?|vitest(?: [^;\n]+)?|cargo (?:test|check|build)(?: [^;\n]+)?|go test(?: [^;\n]+)?|tsc(?: [^;\n]+)?|ruff(?: [^;\n]+)?|eslint(?: [^;\n]+)?)/gi,
+    ),
+  ];
+  return uniqueCompact(
+    matches.map((match) =>
+      match[1]
+        .trim()
+        .replace(/\s+(?:and|with|because)\b.*$/i, "")
+        .replace(/\s+(?:successfully|failed)\b.*$/i, ""),
+    ),
+    4,
+  );
+}
+
+function inferValidationCommands(params: {
+  toolSignals?: ToolSignal[];
+  languages: string[];
+  frameworks: string[];
+}): string[] {
+  const extracted = uniqueCompact(
+    (params.toolSignals ?? []).flatMap((signal) =>
+      extractValidationCommandsFromSummary(signal.summary),
+    ),
+    6,
+  );
+  if (extracted.length > 0) {
+    return extracted;
+  }
+  return uniqueCompact(
+    [
+      params.languages.includes("typescript")
+        ? "pnpm exec tsc -p tsconfig.json --noEmit"
+        : undefined,
+      params.frameworks.includes("vitest") ? "pnpm exec vitest run" : undefined,
+      params.frameworks.includes("pytest") || params.languages.includes("python")
+        ? "pytest"
+        : undefined,
+      params.languages.includes("rust") ? "cargo test" : undefined,
+      params.languages.includes("go") ? "go test ./..." : undefined,
+    ],
+    4,
+  );
+}
+
+function inferBranchConventions(gitBranch?: string): string[] {
+  const normalized = gitBranch?.toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+  return uniqueCompact(
+    [
+      /^(main|master)$/.test(normalized) ? "default_branch" : undefined,
+      /^(develop|development|dev)$/.test(normalized) ? "development_branch" : undefined,
+      /^(release\/|release-)/.test(normalized) ? "release_branch" : undefined,
+      /^(hotfix\/|hotfix-)/.test(normalized) ? "hotfix_branch" : undefined,
+      /^(feature\/|feat\/|feature-)/.test(normalized) ? "feature_branch" : undefined,
+      /^(chore\/|chore-)/.test(normalized) ? "chore_branch" : undefined,
+    ],
+    4,
+  );
+}
+
+function buildRepoFingerprint(params: {
+  workspaceKind: AgenticEnvironmentState["workspaceKind"];
+  workspaceState?: WorkspaceState;
+  languages: string[];
+  frameworks: string[];
+  validationCommands: string[];
+}): string | undefined {
+  const workspace = params.workspaceState?.workspaceName ?? "workspace";
+  const relativePath = params.workspaceState?.sessionRelativePath ?? ".";
+  const languagePart = params.languages.slice(0, 2).join("+") || "unknown";
+  const frameworkPart = params.frameworks.slice(0, 2).join("+") || "general";
+  const validationPart =
+    params.validationCommands.length > 0
+      ? params.validationCommands[0].split(/\s+/).slice(0, 2).join("_")
+      : "novalidation";
+  return `${workspace}:${relativePath}:${params.workspaceKind}:${languagePart}:${frameworkPart}:${validationPart}`;
+}
+
+function reconcilePlannerStateWithEnvironment(params: {
+  plannerState: AgenticPlannerState;
+  environmentState: AgenticEnvironmentState;
+}): AgenticPlannerState {
+  const { plannerState, environmentState } = params;
+  const validationCommands = environmentState.validationCommands ?? [];
+  const branchConventions = environmentState.branchConventions ?? [];
+  const nextActionParts = uniqueCompact(
+    [
+      plannerState.nextAction,
+      validationCommands.length > 0 && plannerState.status !== "complete"
+        ? `Use repo-aware validation: ${validationCommands.slice(0, 2).join(" then ")}.`
+        : undefined,
+      branchConventions.includes("release_branch") || branchConventions.includes("hotfix_branch")
+        ? `Respect branch convention: ${branchConventions.join(", ")}.`
+        : undefined,
+    ],
+    3,
+  );
+  const rationaleParts = uniqueCompact(
+    [
+      plannerState.rationale,
+      environmentState.repoFingerprint
+        ? `environment=${truncate(environmentState.repoFingerprint, 120)}`
+        : undefined,
+    ],
+    4,
+  );
+  return {
+    ...plannerState,
+    nextAction: nextActionParts.length > 0 ? nextActionParts.join(" ") : plannerState.nextAction,
+    rationale: rationaleParts.length > 0 ? rationaleParts.join(" | ") : plannerState.rationale,
   };
 }
 
@@ -2267,17 +2516,23 @@ export function buildAgenticExecutionState(params: {
     workspaceState: params.workspaceState,
     toolSignals: params.toolSignals,
     availableSkills: availableSkillInfo,
+    objective: taskState.objective,
+    activeArtifacts,
   });
   const failureLearningState = buildFailureLearningState({
     verificationState,
     plannerState,
     orchestrationState,
   });
-  const reconciledPlannerState = reconcilePlannerStateWithOrchestration({
+  const orchestrationReconciledPlannerState = reconcilePlannerStateWithOrchestration({
     plannerState,
     orchestrationState,
     likelySkills: params.likelySkills,
     memoryRegressionSignals,
+  });
+  const reconciledPlannerState = reconcilePlannerStateWithEnvironment({
+    plannerState: orchestrationReconciledPlannerState,
+    environmentState,
   });
   const governanceState = buildGovernanceState({
     messages: params.messages,
@@ -2361,9 +2616,33 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
       ? `Skill prerequisites: ${state.orchestrationState.prerequisiteWarnings.join(", ")}`
       : undefined;
   const environmentGuidance = `Environment: ${state.environmentState.workspaceKind}${state.environmentState.gitBranch ? ` branch=${state.environmentState.gitBranch}` : ""}`;
+  const repoFingerprintGuidance = state.environmentState.repoFingerprint
+    ? `Repo fingerprint: ${state.environmentState.repoFingerprint}`
+    : undefined;
   const capabilitySignalsGuidance =
     state.environmentState.capabilitySignals.length > 0
       ? `Capabilities: ${state.environmentState.capabilitySignals.join(", ")}`
+      : undefined;
+  const languageSignalsGuidance =
+    state.environmentState.languageSignals && state.environmentState.languageSignals.length > 0
+      ? `Languages: ${state.environmentState.languageSignals.join(", ")}`
+      : undefined;
+  const frameworkSignalsGuidance =
+    state.environmentState.frameworkSignals && state.environmentState.frameworkSignals.length > 0
+      ? `Frameworks: ${state.environmentState.frameworkSignals.join(", ")}`
+      : undefined;
+  const validationCommandsGuidance =
+    state.environmentState.validationCommands &&
+    state.environmentState.validationCommands.length > 0
+      ? `Validation commands: ${state.environmentState.validationCommands.join(" | ")}`
+      : undefined;
+  const permissionSignalsGuidance =
+    state.environmentState.permissionSignals && state.environmentState.permissionSignals.length > 0
+      ? `Permissions: ${state.environmentState.permissionSignals.join(", ")}`
+      : undefined;
+  const branchConventionsGuidance =
+    state.environmentState.branchConventions && state.environmentState.branchConventions.length > 0
+      ? `Branch conventions: ${state.environmentState.branchConventions.join(", ")}`
       : undefined;
   const failureLearningGuidance = `Failure pattern: ${state.failureLearningState.failurePattern}`;
   const lines = [
@@ -2400,7 +2679,13 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     capabilityGapGuidance,
     consolidationGuidance,
     environmentGuidance,
+    repoFingerprintGuidance,
     capabilitySignalsGuidance,
+    languageSignalsGuidance,
+    frameworkSignalsGuidance,
+    validationCommandsGuidance,
+    permissionSignalsGuidance,
+    branchConventionsGuidance,
     failureLearningGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
     fallbackSkillGuidance,
@@ -2579,6 +2864,12 @@ export function buildProceduralExecutionRecord(params: {
     capabilitySignals: params.environmentState.capabilitySignals,
     preferredValidationTools: params.environmentState.preferredValidationTools,
     skillEnvironments: params.environmentState.skillEnvironments,
+    repoFingerprint: params.environmentState.repoFingerprint,
+    languageSignals: params.environmentState.languageSignals,
+    frameworkSignals: params.environmentState.frameworkSignals,
+    validationCommands: params.environmentState.validationCommands,
+    permissionSignals: params.environmentState.permissionSignals,
+    branchConventions: params.environmentState.branchConventions,
     failurePattern: params.failureLearningState.failurePattern,
     learnFromFailure: params.failureLearningState.learnFromFailure,
     failureReasons: params.failureLearningState.failureReasons,
@@ -4066,6 +4357,133 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Failure-derived template family guidance can keep replanning inside the stable workflow family."
         : "Failure-derived template family guidance did not preserve stable-family replanning.",
       details: `retry=${state.plannerState.retryClass} escalate=${state.plannerState.shouldEscalate} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const mergeDiagnostics = inspectAgenticExecutionObservability(
+      buildAgenticExecutionState({
+        messages: [
+          {
+            role: "user",
+            content:
+              "Use repeated failed diagnostics overlap evidence to choose the strongest sibling path and keep release guidance aligned.",
+            timestamp: Date.now(),
+          } as AgentMessage,
+        ],
+        toolSignals: [
+          {
+            toolName: "exec",
+            status: "error",
+            summary: "Diagnostics validation failed again for the current path.",
+          },
+        ],
+        availableSkills: ["memory-diagnostics", "diagnostics-report"],
+        likelySkills: ["memory-diagnostics"],
+        availableSkillInfo: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "diagnostics-report", primaryEnv: "node" },
+        ],
+        memorySystemPromptAddition: [
+          "Integrated memory packet",
+          "Skill family guidance:",
+          "- family=diagnostics task_mode=debugging env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=diagnostics-report,memory-diagnostics durable=true",
+        ].join("\n"),
+      }),
+    );
+    const mergeReport = runAgenticQualityGate({
+      diagnosticsOverride: mergeDiagnostics,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        mergeFamilies: ["diagnostics@debugging/node"],
+      },
+    });
+    const templateDiagnostics = inspectAgenticExecutionObservability(
+      buildAgenticExecutionState({
+        messages: [
+          {
+            role: "user",
+            content:
+              "Use repeated failed acceptance near-miss evidence to stay inside the stable reporting workflow family.",
+            timestamp: Date.now(),
+          } as AgentMessage,
+        ],
+        toolSignals: [
+          {
+            toolName: "exec",
+            status: "error",
+            summary: "Acceptance workflow validation nearly worked but still needs refinement.",
+          },
+        ],
+        availableSkills: ["acceptance-report"],
+        likelySkills: ["acceptance-report"],
+        availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+        memorySystemPromptAddition: [
+          "Integrated memory packet",
+          "Skill family guidance:",
+          "- family=verification task_mode=debugging env=node trend=stable consolidation=generalize_existing template_candidate=true durable=true",
+        ].join("\n"),
+      }),
+    );
+    const templateReport = runAgenticQualityGate({
+      diagnosticsOverride: templateDiagnostics,
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+        templateFamilies: ["verification@debugging/node"],
+      },
+    });
+    const passed =
+      mergeReport.recommendations.includes(
+        "Memory-backed merge-ready families: diagnostics@debugging/node.",
+      ) &&
+      mergeReport.recommendations.some((recommendation) =>
+        recommendation.includes("Merge-ready consolidation is active for sibling skills"),
+      ) &&
+      templateReport.recommendations.includes(
+        "Memory-backed template-ready families: verification@debugging/node.",
+      ) &&
+      templateReport.recommendations.includes(
+        "Template-ready consolidation is active; parameterize the stable workflow instead of creating a new fork.",
+      );
+    scenarios.push({
+      id: "failure_derived_quality_gate_alignment",
+      passed,
+      summary: passed
+        ? "Failure-derived family trends stay aligned with release-facing quality gate recommendations."
+        : "Failure-derived family trends drifted before reaching the quality gate.",
+      details: `merge=${mergeReport.recommendations.join("|")} template=${templateReport.recommendations.join("|")}`,
     });
   }
 

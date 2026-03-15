@@ -4,6 +4,7 @@ import {
   buildAgenticExecutionState,
   buildAgenticSystemPromptAddition,
   buildProceduralExecutionRecord,
+  formatAgenticExecutionObservabilityReport,
   inspectAgenticExecutionObservability,
 } from "./agentic-state.js";
 
@@ -340,6 +341,29 @@ describe("agentic-state", () => {
     expect(report.hasViableFallback).toBe(false);
     expect(report.recommendations).toContain(
       "Add or learn a viable fallback workflow before retrying.",
+    );
+  });
+
+  it("formats the agentic observability report in summary and markdown forms", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Fix the diagnostics workflow and find a viable fallback.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    const report = inspectAgenticExecutionObservability(state);
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "escalation=yes fallback=missing",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "# Agentic Diagnostics Report",
     );
   });
 

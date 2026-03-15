@@ -221,6 +221,8 @@
     "agentic:acceptance:markdown": "node --import tsx scripts/agentic-acceptance-report.ts --format markdown",
     "agentic:acceptance:summary": "node --import tsx scripts/agentic-acceptance-report.ts --format summary",
     "agentic:diagnostics": "node --import tsx scripts/agentic-diagnostics-report.ts",
+    "agentic:diagnostics:markdown": "node --import tsx scripts/agentic-diagnostics-report.ts --format markdown",
+    "agentic:diagnostics:summary": "node --import tsx scripts/agentic-diagnostics-report.ts --format summary",
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",

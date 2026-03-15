@@ -184,7 +184,9 @@ export type AgenticAcceptanceScenarioId =
   | "memory_guided_fallback"
   | "verified_memory_preferred"
   | "missing_fallback_escalation"
-  | "environment_prerequisite_guard";
+  | "environment_prerequisite_guard"
+  | "observability_escalation_alignment"
+  | "fallback_guidance_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -1486,6 +1488,47 @@ export function inspectAgenticExecutionObservability(
   };
 }
 
+export function formatAgenticExecutionObservabilityReport(
+  report: AgenticExecutionObservabilityReport,
+  format: "json" | "summary" | "markdown" = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [
+      report.summary,
+      `escalation=${report.escalationRequired ? "yes" : "no"} fallback=${report.hasViableFallback ? "viable" : "missing"}`,
+      report.rankedSkills.length > 0 ? `ranked=${report.rankedSkills.join(">")}` : "ranked=none",
+      report.recommendations.length > 0
+        ? `recommendations=${report.recommendations.join(" | ")}`
+        : "recommendations=none",
+    ];
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Agentic Diagnostics Report",
+    "",
+    `- Summary: ${report.summary}`,
+    `- Retry class: ${report.retryClass}`,
+    `- Autonomy mode: ${report.autonomyMode}`,
+    `- Risk level: ${report.riskLevel}`,
+    `- Primary skill: ${report.primarySkill ?? "none"}`,
+    `- Suggested skill: ${report.suggestedSkill ?? "none"}`,
+    `- Ranked skills: ${report.rankedSkills.length > 0 ? report.rankedSkills.join(" > ") : "none"}`,
+    `- Failure pattern: ${report.failurePattern}`,
+    `- Viable fallback: ${report.hasViableFallback ? "yes" : "no"}`,
+    `- Escalation required: ${report.escalationRequired ? "yes" : "no"}`,
+    `- Capability gaps: ${report.capabilityGaps.length > 0 ? report.capabilityGaps.join(", ") : "none"}`,
+    "",
+    "## Recommendations",
+    ...(report.recommendations.length > 0
+      ? report.recommendations.map((recommendation) => `- ${recommendation}`)
+      : ["- none"]),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   const scenarios: AgenticAcceptanceScenarioResult[] = [];
 
@@ -1640,6 +1683,88 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Environment prerequisites downgrade incompatible fallback skills."
         : "Environment prerequisites failed to guard incompatible fallback skills.",
       details: `primary=${state.orchestrationState.primarySkill ?? "none"} prereqs=${state.orchestrationState.prerequisiteWarnings.join(",")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Fix the diagnostics workflow and find a viable fallback.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const passed =
+      report.escalationRequired &&
+      !report.hasViableFallback &&
+      report.recommendations.includes("Add or learn a viable fallback workflow before retrying.");
+    scenarios.push({
+      id: "observability_escalation_alignment",
+      passed,
+      summary: passed
+        ? "Observability report matches missing-fallback escalation behavior."
+        : "Observability report drifted from missing-fallback escalation behavior.",
+      details: `escalation=${report.escalationRequired} fallback=${report.hasViableFallback} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow and switch to the strongest remembered reporting path if needed.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: with outcome failed: failure pattern near_miss",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const passed =
+      report.retryClass === "skill_fallback" &&
+      report.suggestedSkill === "acceptance-report" &&
+      report.rankedSkills[0] === "acceptance-report";
+    scenarios.push({
+      id: "fallback_guidance_alignment",
+      passed,
+      summary: passed
+        ? "Observability report preserves memory-guided fallback ordering."
+        : "Observability report lost alignment with memory-guided fallback ordering.",
+      details: `retry=${report.retryClass} suggested=${report.suggestedSkill ?? "none"} ranked=${report.rankedSkills.join(">")}`,
     });
   }
 

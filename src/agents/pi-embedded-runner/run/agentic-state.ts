@@ -269,6 +269,38 @@ export type AgenticAcceptanceReport = {
   summary: string;
 };
 
+export type AgenticSoakScenarioId = "retry_replan_recover_complete" | "handoff_resume_completion";
+
+export type AgenticSoakPhaseResult = {
+  label: string;
+  passed: boolean;
+  outcome: AgenticVerificationOutcome;
+  goalSatisfaction: AgenticGoalSatisfaction;
+  retryClass: AgenticRetryClass;
+  autonomyMode: AgenticAutonomyMode;
+  primarySkill?: string;
+  planStepSummary: string[];
+  pendingHandoffSteps: number;
+  details?: string;
+};
+
+export type AgenticSoakScenarioResult = {
+  id: AgenticSoakScenarioId;
+  passed: boolean;
+  summary: string;
+  phases: AgenticSoakPhaseResult[];
+  details?: string;
+};
+
+export type AgenticSoakReport = {
+  passed: boolean;
+  totalScenarios: number;
+  passedScenarios: number;
+  failedScenarioIds: AgenticSoakScenarioId[];
+  scenarios: AgenticSoakScenarioResult[];
+  summary: string;
+};
+
 type ToolSignal = {
   toolName: string;
   status: "success" | "error";
@@ -2822,6 +2854,368 @@ export function formatAgenticAcceptanceReport(
       (scenario) =>
         `- ${scenario.passed ? "PASS" : "FAIL"} \`${scenario.id}\`: ${scenario.summary}${scenario.details ? ` (${scenario.details})` : ""}`,
     ),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function buildSoakPhaseResult(params: {
+  label: string;
+  state: AgenticExecutionState;
+  passed: boolean;
+  details?: string;
+}): AgenticSoakPhaseResult {
+  const handoffReport = buildAgenticHandoffReport(params.state);
+  return {
+    label: params.label,
+    passed: params.passed,
+    outcome: params.state.verificationState.outcome,
+    goalSatisfaction: params.state.verificationState.goalSatisfaction,
+    retryClass: params.state.plannerState.retryClass,
+    autonomyMode: params.state.governanceState.autonomyMode,
+    primarySkill: params.state.orchestrationState.primarySkill,
+    planStepSummary: params.state.taskState.planSteps.map(
+      (step) => `${step.kind}:${step.status}:${step.title}`,
+    ),
+    pendingHandoffSteps: handoffReport.pendingSteps.length,
+    details: params.details,
+  };
+}
+
+export function runAgenticSoakSuite(): AgenticSoakReport {
+  const scenarios: AgenticSoakScenarioResult[] = [];
+
+  {
+    const failureState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, switch to the strongest fallback if validation keeps failing, rerun validation, and prepare the final handoff summary.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: with outcome failed: failure pattern near_miss",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+    const recoveryState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, switch to the strongest fallback if validation keeps failing, rerun validation, and prepare the final handoff summary.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 2,
+          maxAttempts: 3,
+          summary: "Recovered after switching to the remembered fallback workflow.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary:
+            "Reviewed the diagnostics workflow and acceptance-report fallback after recovery.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- acceptance-report",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: with outcome failed: failure pattern near_miss",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+    const completionState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, switch to the strongest fallback if validation keeps failing, rerun validation, and prepare the final handoff summary.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 2,
+          maxAttempts: 3,
+          summary: "Recovered after switching to the remembered fallback workflow.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran diagnostics validation through the acceptance-report workflow and passed.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary:
+            "Diagnostics workflow fixed, fallback workflow applied, validation rerun, and final handoff summary prepared.",
+        },
+        {
+          kind: "handoff",
+          summary:
+            "Operator handoff prepared with the completed validation outcome and next-step note.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- acceptance-report",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: with outcome failed: failure pattern near_miss",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+
+    const phases = [
+      buildSoakPhaseResult({
+        label: "initial_failure",
+        state: failureState,
+        passed:
+          failureState.plannerState.retryClass === "skill_fallback" &&
+          failureState.taskState.planSteps.some(
+            (step) => step.kind === "verification" && step.status === "blocked",
+          ) &&
+          failureState.orchestrationState.primarySkill === "acceptance-report",
+        details: "initial failure should block verification and promote a stronger fallback",
+      }),
+      buildSoakPhaseResult({
+        label: "recovery_replan",
+        state: recoveryState,
+        passed:
+          recoveryState.plannerState.retryClass === "skill_fallback" &&
+          recoveryState.taskState.planSteps.some(
+            (step) => step.kind === "verification" && step.status === "in_progress",
+          ) &&
+          recoveryState.governanceState.autonomyMode === "fallback",
+        details: "recovered retry should reopen verification work under fallback autonomy",
+      }),
+      buildSoakPhaseResult({
+        label: "completion",
+        state: completionState,
+        passed:
+          completionState.verificationState.outcome === "verified" &&
+          completionState.verificationState.goalSatisfaction === "satisfied" &&
+          completionState.taskState.planSteps.every((step) => step.status !== "blocked"),
+        details: "completion should reach verified, satisfied state with no blocked steps",
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "retry_replan_recover_complete",
+      passed,
+      summary: passed
+        ? "A long-running retry path can fail, replan through fallback, and still complete cleanly."
+        : "Retry, replan, and completion drifted across the long-running fallback lifecycle.",
+      phases,
+      details: phases
+        .map(
+          (phase) =>
+            `${phase.label}:${phase.outcome}:${phase.goalSatisfaction}:${phase.retryClass}`,
+        )
+        .join("|"),
+    });
+  }
+
+  {
+    const handoffState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Finalize the diagnostics report, leave the validation rerun for the next operator, and hand off the remaining work clearly.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary:
+            "Diagnostics report finalized and handoff prepared for the remaining validation rerun.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+    });
+    const resumedState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Finalize the diagnostics report, leave the validation rerun for the next operator, and hand off the remaining work clearly.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 2,
+          summary: "Resumed from the prior handoff and continued the remaining validation step.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Reran diagnostics validation successfully and updated the report handoff.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary:
+            "Diagnostics report finalized, validation rerun completed, and the handoff package updated.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+        {
+          kind: "handoff",
+          summary: "Final operator handoff refreshed after the completed validation rerun.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+    });
+
+    const initialHandoff = buildAgenticHandoffReport(handoffState);
+    const resumedHandoff = buildAgenticHandoffReport(resumedState);
+    const phases = [
+      buildSoakPhaseResult({
+        label: "initial_handoff",
+        state: handoffState,
+        passed:
+          initialHandoff.pendingSteps.length > 0 &&
+          initialHandoff.resumePrompt !== undefined &&
+          handoffState.taskState.planSteps.some(
+            (step) => step.kind === "handoff" && step.status === "completed",
+          ),
+        details: "handoff should preserve pending work and a resumable prompt",
+      }),
+      buildSoakPhaseResult({
+        label: "resumed_completion",
+        state: resumedState,
+        passed:
+          resumedState.verificationState.outcome === "verified" &&
+          resumedState.verificationState.goalSatisfaction === "satisfied" &&
+          resumedHandoff.pendingSteps.length === 0,
+        details: "resumed execution should consume the pending handoff work and finish cleanly",
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "handoff_resume_completion",
+      passed,
+      summary: passed
+        ? "Handoff state can be resumed and driven to a verified, satisfied completion."
+        : "Handoff-to-resume lifecycle did not converge on a clean completion state.",
+      phases,
+      details: phases
+        .map(
+          (phase) =>
+            `${phase.label}:${phase.pendingHandoffSteps}:${phase.outcome}:${phase.goalSatisfaction}`,
+        )
+        .join("|"),
+    });
+  }
+
+  const failedScenarioIds = scenarios
+    .filter((scenario) => !scenario.passed)
+    .map((scenario) => scenario.id);
+  const passedScenarios = scenarios.length - failedScenarioIds.length;
+  return {
+    passed: failedScenarioIds.length === 0,
+    totalScenarios: scenarios.length,
+    passedScenarios,
+    failedScenarioIds,
+    scenarios,
+    summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
+  };
+}
+
+export function formatAgenticSoakReport(
+  report: AgenticSoakReport,
+  format: "json" | "summary" | "markdown" = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [
+      report.summary,
+      ...report.scenarios.map(
+        (scenario) =>
+          `${scenario.passed ? "PASS" : "FAIL"} ${scenario.id}: ${scenario.summary} phases=${scenario.phases
+            .map((phase) => `${phase.label}:${phase.passed ? "ok" : "fail"}`)
+            .join("|")}`,
+      ),
+    ];
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Agentic Soak Report",
+    "",
+    `Summary: ${report.summary}`,
+    "",
+    ...report.scenarios.flatMap((scenario) => [
+      `## ${scenario.id}`,
+      `- Passed: ${scenario.passed ? "yes" : "no"}`,
+      `- Summary: ${scenario.summary}`,
+      ...(scenario.details ? [`- Details: ${scenario.details}`] : []),
+      "- Phases:",
+      ...scenario.phases.map(
+        (phase) =>
+          `  - ${phase.label}: ${phase.passed ? "passed" : "failed"} outcome=${phase.outcome} goal=${phase.goalSatisfaction} retry=${phase.retryClass} autonomy=${phase.autonomyMode} pending_handoff=${phase.pendingHandoffSteps}`,
+      ),
+      "",
+    ]),
   ];
   return `${lines.join("\n")}\n`;
 }

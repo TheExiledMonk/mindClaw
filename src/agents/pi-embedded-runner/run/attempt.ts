@@ -1282,12 +1282,18 @@ export function buildAfterTurnRuntimeContext(params: {
     | "extraSystemPrompt"
     | "ownerNumbers"
     | "authProfileId"
-  >;
+  > & {
+    trigger?: string;
+    attempt?: number;
+    maxAttempts?: number;
+  };
   workspaceDir: string;
   agentDir: string;
   sessionFile: string;
   messages?: AgentMessage[];
   promptError?: unknown;
+  promptErrorSource?: "prompt" | "compaction" | null;
+  compactionOccurred?: boolean;
 }): Partial<CompactEmbeddedPiSessionParams> {
   const extractMessageText = (message: AgentMessage): string => {
     const content = (message as { content?: unknown }).content;
@@ -1386,6 +1392,32 @@ export function buildAfterTurnRuntimeContext(params: {
       artifactRefs: [],
     });
   }
+  const retrySignals: Array<{
+    phase: "overflow" | "compaction" | "prompt";
+    outcome: "recovered" | "failed";
+    attempt?: number;
+    maxAttempts?: number;
+    summary: string;
+  }> = [];
+  if (params.attempt.trigger === "overflow") {
+    retrySignals.push({
+      phase: "overflow",
+      outcome: params.promptError ? "failed" : "recovered",
+      attempt: params.attempt.attempt,
+      maxAttempts: params.attempt.maxAttempts,
+      summary: params.promptError
+        ? `Overflow recovery ended with ${params.promptErrorSource === "compaction" ? "compaction" : "prompt"} failure.`
+        : `Overflow recovery completed after ${params.compactionOccurred ? "compaction" : "retry"} handling.`,
+    });
+  } else if (params.promptError && params.attempt.attempt && params.attempt.attempt > 1) {
+    retrySignals.push({
+      phase: params.promptErrorSource === "compaction" ? "compaction" : "prompt",
+      outcome: "failed",
+      attempt: params.attempt.attempt,
+      maxAttempts: params.attempt.maxAttempts,
+      summary: `Runtime attempt ${params.attempt.attempt} failed after retry progression.`,
+    });
+  }
   const resolveGitBranch = (workspaceDir: string): string | undefined => {
     try {
       const headPath = resolveGitHeadPath(workspaceDir);
@@ -1450,6 +1482,7 @@ export function buildAfterTurnRuntimeContext(params: {
     toolSignals,
     diffSignals,
     checkpointSignals,
+    retrySignals,
     promptErrorSummary: params.promptError ? describeUnknownError(params.promptError) : undefined,
   };
 }
@@ -2810,6 +2843,8 @@ export async function runEmbeddedAttempt(
             sessionFile: params.sessionFile,
             messages: messagesSnapshot.slice(prePromptMessageCount),
             promptError,
+            promptErrorSource,
+            compactionOccurred: compactionOccurredThisAttempt,
           });
 
           if (typeof params.contextEngine.afterTurn === "function") {

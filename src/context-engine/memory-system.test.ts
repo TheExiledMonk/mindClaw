@@ -353,6 +353,34 @@ describe("memory system store", () => {
     ).toBe(true);
   });
 
+  it("captures runtime retry signals as durable memory", () => {
+    const compiled = compileMemoryState({
+      sessionId: "session-runtime-retries",
+      messages: [userMessage("Continue the runtime integration work.")],
+      runtimeContext: {
+        retrySignals: [
+          {
+            phase: "overflow",
+            outcome: "failed",
+            attempt: 2,
+            maxAttempts: 3,
+            summary: "Overflow recovery ended with compaction failure.",
+          },
+        ],
+      },
+    });
+
+    const retryEntry = compiled.longTermMemory.find((entry) =>
+      entry.text.includes("Runtime overflow retry failed"),
+    );
+
+    expect(retryEntry?.sourceType).toBe("direct_observation");
+    expect(retryEntry?.importanceClass).toBe("critical");
+    expect(retryEntry?.environmentTags).toContain("runtime:retry");
+    expect(retryEntry?.environmentTags).toContain("retry:overflow");
+    expect(retryEntry?.environmentTags).toContain("retry-outcome:failed");
+  });
+
   it("gates permanent-memory promotion through explicit permanence policy", () => {
     const compiled = compileMemoryState({
       sessionId: "permanence-policy-a",
@@ -1950,8 +1978,17 @@ describe("MemorySystemContextEngine", () => {
 
     const metadata = JSON.parse(
       await fs.readFile(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "store-metadata.json"), "utf8"),
-    ) as { backend?: string; version?: number };
+    ) as {
+      backend?: string;
+      version?: number;
+      longTermCount?: number;
+      conceptCount?: number;
+      permanentNodeCount?: number;
+    };
     expect(metadata).toMatchObject({ backend: "fs-json", version: 1 });
+    expect(typeof metadata.longTermCount).toBe("number");
+    expect(typeof metadata.conceptCount).toBe("number");
+    expect(typeof metadata.permanentNodeCount).toBe("number");
   });
 
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {
@@ -2065,10 +2102,18 @@ describe("MemorySystemContextEngine", () => {
         backend?: string;
         lastIntegrityCheckResult?: string;
         lastIntegrityCheckAt?: number;
+        longTermCount?: number;
+        conceptCount?: number;
+        graphNodeCount?: number;
+        graphEdgeCount?: number;
       };
       expect(metadata.backend).toBe("sqlite-graph");
       expect(metadata.lastIntegrityCheckResult).toBe("ok");
       expect(typeof metadata.lastIntegrityCheckAt).toBe("number");
+      expect(typeof metadata.longTermCount).toBe("number");
+      expect(typeof metadata.conceptCount).toBe("number");
+      expect(typeof metadata.graphNodeCount).toBe("number");
+      expect(typeof metadata.graphEdgeCount).toBe("number");
     } finally {
       db.close();
     }

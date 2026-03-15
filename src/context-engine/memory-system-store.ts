@@ -209,6 +209,12 @@ export type MemoryStoreMetadata = {
   updatedAt: number;
   lastIntegrityCheckAt?: number;
   lastIntegrityCheckResult?: "ok";
+  longTermCount?: number;
+  conceptCount?: number;
+  contestedConceptCount?: number;
+  permanentNodeCount?: number;
+  graphNodeCount?: number;
+  graphEdgeCount?: number;
 };
 
 export type MemoryCompileResult = MemoryStoreSnapshot & {
@@ -426,6 +432,63 @@ function sanitizeMemoryStoreMetadata(
         : undefined,
     lastIntegrityCheckResult:
       candidate?.lastIntegrityCheckResult === "ok" ? candidate.lastIntegrityCheckResult : undefined,
+    longTermCount:
+      typeof candidate?.longTermCount === "number" && Number.isFinite(candidate.longTermCount)
+        ? candidate.longTermCount
+        : undefined,
+    conceptCount:
+      typeof candidate?.conceptCount === "number" && Number.isFinite(candidate.conceptCount)
+        ? candidate.conceptCount
+        : undefined,
+    contestedConceptCount:
+      typeof candidate?.contestedConceptCount === "number" &&
+      Number.isFinite(candidate.contestedConceptCount)
+        ? candidate.contestedConceptCount
+        : undefined,
+    permanentNodeCount:
+      typeof candidate?.permanentNodeCount === "number" &&
+      Number.isFinite(candidate.permanentNodeCount)
+        ? candidate.permanentNodeCount
+        : undefined,
+    graphNodeCount:
+      typeof candidate?.graphNodeCount === "number" && Number.isFinite(candidate.graphNodeCount)
+        ? candidate.graphNodeCount
+        : undefined,
+    graphEdgeCount:
+      typeof candidate?.graphEdgeCount === "number" && Number.isFinite(candidate.graphEdgeCount)
+        ? candidate.graphEdgeCount
+        : undefined,
+  };
+}
+
+function countPermanentNodes(root: PermanentMemoryNode): number {
+  return 1 + root.children.reduce((sum, child) => sum + countPermanentNodes(child), 0);
+}
+
+function buildSnapshotStoreMetadata(params: {
+  backend: MemoryStoreBackendKind;
+  snapshot: MemoryStoreSnapshot;
+  previous?: MemoryStoreMetadata;
+}): MemoryStoreMetadata {
+  const conceptIds = new Set(
+    params.snapshot.longTermMemory.map((entry) => getEntryConceptId(entry)),
+  );
+  const contestedConceptIds = new Set(
+    params.snapshot.longTermMemory
+      .filter((entry) => entry.adjudicationStatus === "contested")
+      .map((entry) => getEntryConceptId(entry)),
+  );
+  return {
+    ...sanitizeMemoryStoreMetadata(params.previous, params.backend),
+    backend: params.backend,
+    version: 1,
+    updatedAt: Date.now(),
+    longTermCount: params.snapshot.longTermMemory.length,
+    conceptCount: conceptIds.size,
+    contestedConceptCount: contestedConceptIds.size,
+    permanentNodeCount: countPermanentNodes(params.snapshot.permanentMemory),
+    graphNodeCount: params.snapshot.graph.nodes.length,
+    graphEdgeCount: params.snapshot.graph.edges.length,
   };
 }
 
@@ -1794,6 +1857,46 @@ function deriveRuntimeSignalCandidates(params: {
       confidence: kind === "failure" ? 0.93 : 0.86,
       strength: kind === "failure" ? 0.94 : 0.82,
       importanceClass: kind === "failure" ? "critical" : "useful",
+      trend: "rising",
+    });
+  }
+
+  const retrySignals = Array.isArray(runtime.retrySignals) ? runtime.retrySignals : [];
+  for (const signal of retrySignals) {
+    if (!signal || typeof signal !== "object") {
+      continue;
+    }
+    const phase =
+      signal.phase === "overflow" || signal.phase === "compaction" || signal.phase === "prompt"
+        ? signal.phase
+        : undefined;
+    const outcome =
+      signal.outcome === "recovered" || signal.outcome === "failed" ? signal.outcome : undefined;
+    const summary =
+      typeof signal.summary === "string" && signal.summary.trim().length > 0
+        ? signal.summary.trim()
+        : undefined;
+    const attempt =
+      typeof signal.attempt === "number" && Number.isFinite(signal.attempt)
+        ? signal.attempt
+        : undefined;
+    const maxAttempts =
+      typeof signal.maxAttempts === "number" && Number.isFinite(signal.maxAttempts)
+        ? signal.maxAttempts
+        : undefined;
+    if (!phase || !outcome || !summary) {
+      continue;
+    }
+    pushRuntimeCandidate({
+      category: "episode",
+      text: `Runtime ${phase} retry ${outcome}: ${summary}${
+        attempt ? ` (attempt ${attempt}${maxAttempts ? `/${maxAttempts}` : ""})` : ""
+      }`,
+      evidence: [summary],
+      environmentTags: ["runtime:retry", `retry:${phase}`, `retry-outcome:${outcome}`],
+      confidence: outcome === "failed" ? 0.93 : 0.84,
+      strength: outcome === "failed" ? 0.94 : 0.8,
+      importanceClass: outcome === "failed" ? "critical" : "useful",
       trend: "rising",
     });
   }
@@ -4964,21 +5067,6 @@ export async function loadMemoryStoreSnapshot(params: {
         })(),
         "sqlite-graph",
       );
-      db.prepare(
-        `
-          INSERT INTO memory_store_metadata (key, value)
-          VALUES ('store', ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        `,
-      ).run(
-        JSON.stringify({
-          ...metadata,
-          backend: "sqlite-graph",
-          updatedAt: Date.now(),
-          lastIntegrityCheckAt: Date.now(),
-          lastIntegrityCheckResult: "ok",
-        } satisfies MemoryStoreMetadata),
-      );
       const workingRow = db
         .prepare("SELECT json FROM working_memory WHERE session_id = ?")
         .get(params.sessionId) as { json?: string } | undefined;
@@ -5075,7 +5163,7 @@ export async function loadMemoryStoreSnapshot(params: {
             recentEvents: [],
             recentDecisions: [],
           };
-      return {
+      const snapshot: MemoryStoreSnapshot = {
         workingMemory,
         longTermMemory: longTermRows.map((row) => {
           const entry = sanitizeLongTermEntry(JSON.parse(row.json) as LongTermMemoryEntry);
@@ -5109,6 +5197,26 @@ export async function loadMemoryStoreSnapshot(params: {
           updatedAt: Date.now(),
         }),
       };
+      db.prepare(
+        `
+          INSERT INTO memory_store_metadata (key, value)
+          VALUES ('store', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `,
+      ).run(
+        JSON.stringify(
+          buildSnapshotStoreMetadata({
+            backend: "sqlite-graph",
+            snapshot,
+            previous: {
+              ...metadata,
+              lastIntegrityCheckAt: Date.now(),
+              lastIntegrityCheckResult: "ok",
+            },
+          }) satisfies MemoryStoreMetadata,
+        ),
+      );
+      return snapshot;
     } finally {
       db.close();
     }
@@ -5122,11 +5230,6 @@ export async function loadMemoryStoreSnapshot(params: {
     ),
     backend.kind,
   );
-  await backend.writeJson(paths.metadataFile, {
-    ...metadata,
-    backend: backend.kind,
-    updatedAt: Date.now(),
-  } satisfies MemoryStoreMetadata);
   const workingMemory = await backend.readJson<WorkingMemorySnapshot>(paths.workingFile, {
     sessionId: params.sessionId,
     updatedAt: Date.now(),
@@ -5148,13 +5251,22 @@ export async function loadMemoryStoreSnapshot(params: {
   const graph = sanitizeGraphSnapshot(
     await backend.readJson<MemoryGraphSnapshot>(paths.graphFile, createEmptyGraph()),
   );
-  return {
+  const snapshot: MemoryStoreSnapshot = {
     workingMemory,
     longTermMemory,
     pendingSignificance: pendingSignificance.map((entry) => sanitizePendingEntry(entry)),
     permanentMemory,
     graph,
   };
+  await backend.writeJson(
+    paths.metadataFile,
+    buildSnapshotStoreMetadata({
+      backend: backend.kind,
+      snapshot,
+      previous: metadata,
+    }) satisfies MemoryStoreMetadata,
+  );
+  return snapshot;
 }
 
 export async function persistMemoryStoreSnapshot(params: {
@@ -5198,11 +5310,19 @@ export async function persistMemoryStoreSnapshot(params: {
           ON CONFLICT(key) DO UPDATE SET value = excluded.value
         `,
       ).run(
-        JSON.stringify({
-          ...metadata,
-          backend: "sqlite-graph",
-          updatedAt: Date.now(),
-        } satisfies MemoryStoreMetadata),
+        JSON.stringify(
+          buildSnapshotStoreMetadata({
+            backend: "sqlite-graph",
+            snapshot: {
+              workingMemory: params.workingMemory,
+              longTermMemory: params.longTermMemory,
+              pendingSignificance: params.pendingSignificance,
+              permanentMemory: params.permanentMemory,
+              graph: params.graph,
+            },
+            previous: metadata,
+          }) satisfies MemoryStoreMetadata,
+        ),
       );
       db.prepare(
         `
@@ -5383,11 +5503,20 @@ export async function persistMemoryStoreSnapshot(params: {
     backend.kind,
   );
   await Promise.all([
-    backend.writeJson(paths.metadataFile, {
-      ...metadata,
-      backend: backend.kind,
-      updatedAt: Date.now(),
-    } satisfies MemoryStoreMetadata),
+    backend.writeJson(
+      paths.metadataFile,
+      buildSnapshotStoreMetadata({
+        backend: backend.kind,
+        snapshot: {
+          workingMemory: params.workingMemory,
+          longTermMemory: params.longTermMemory,
+          pendingSignificance: params.pendingSignificance,
+          permanentMemory: params.permanentMemory,
+          graph: params.graph,
+        },
+        previous: metadata,
+      }) satisfies MemoryStoreMetadata,
+    ),
     backend.writeJson(paths.workingFile, params.workingMemory),
     backend.writeJson(paths.longTermFile, params.longTermMemory),
     backend.writeJson(paths.pendingFile, params.pendingSignificance),

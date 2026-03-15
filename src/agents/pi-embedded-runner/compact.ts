@@ -168,6 +168,13 @@ export type CompactEmbeddedPiSessionParams = {
     summary: string;
     artifactRefs?: string[];
   }>;
+  retrySignals?: Array<{
+    phase: "overflow" | "compaction" | "prompt";
+    outcome: "recovered" | "failed";
+    attempt?: number;
+    maxAttempts?: number;
+    summary: string;
+  }>;
   promptErrorSummary?: string;
 };
 

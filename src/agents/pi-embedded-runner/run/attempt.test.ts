@@ -1302,6 +1302,46 @@ describe("buildAfterTurnRuntimeContext", () => {
       ]),
     );
   });
+
+  it("emits retry signals for overflow recovery attempts", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        trigger: "overflow",
+        attempt: 2,
+        maxAttempts: 3,
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      promptError: new Error("context overflow persisted"),
+      promptErrorSource: "compaction",
+      compactionOccurred: true,
+    });
+
+    expect(runtimeContext.retrySignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "overflow",
+          outcome: "failed",
+          attempt: 2,
+          maxAttempts: 3,
+          summary: expect.stringContaining("compaction failure"),
+        }),
+      ]),
+    );
+  });
 });
 
 describe("shouldRunContextEngineCheckpointReview", () => {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeSqlite } from "../memory/sqlite.js";
 import {
   buildMemoryContextPacket,
   buildWorkingMemorySnapshot,
@@ -1606,5 +1607,27 @@ describe("MemorySystemContextEngine", () => {
     await expect(
       fs.stat(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite")),
     ).resolves.toBeTruthy();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      const conceptCount = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_concepts WHERE session_id = ?")
+        .get(sessionId) as { count: number };
+      const aliasCount = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_concept_aliases WHERE session_id = ?")
+        .get(sessionId) as { count: number };
+      const conceptRow = db
+        .prepare("SELECT canonical_text FROM memory_concepts WHERE session_id = ? LIMIT 1")
+        .get(sessionId) as { canonical_text: string } | undefined;
+
+      expect(conceptCount.count).toBeGreaterThan(0);
+      expect(aliasCount.count).toBeGreaterThan(0);
+      expect(conceptRow?.canonical_text).toBeTruthy();
+    } finally {
+      db.close();
+    }
   });
 });

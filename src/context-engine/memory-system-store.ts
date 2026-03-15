@@ -3631,12 +3631,32 @@ function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): v
     CREATE TABLE IF NOT EXISTS long_term_memory (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
+      concept_id TEXT NOT NULL,
       concept_key TEXT NOT NULL,
       ontology_kind TEXT NOT NULL,
       active_status TEXT NOT NULL,
       permanence_status TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS memory_concepts (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      concept_key TEXT NOT NULL,
+      canonical_text TEXT NOT NULL,
+      category TEXT NOT NULL,
+      ontology_kind TEXT NOT NULL,
+      permanence_status TEXT NOT NULL,
+      adjudication_status TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS memory_concept_aliases (
+      session_id TEXT NOT NULL,
+      concept_id TEXT NOT NULL,
+      alias TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, concept_id, alias)
     );
     CREATE TABLE IF NOT EXISTS pending_memory (
       id TEXT PRIMARY KEY,
@@ -3671,6 +3691,57 @@ function ensureSqliteGraphStoreSchema(db: import("node:sqlite").DatabaseSync): v
   `);
 }
 
+type PersistedMemoryConcept = {
+  id: string;
+  conceptKey: string;
+  canonicalText: string;
+  category: MemoryCategory;
+  ontologyKind: MemoryOntologyKind;
+  permanenceStatus: MemoryPermanenceStatus;
+  adjudicationStatus: MemoryAdjudicationStatus;
+  memoryIds: string[];
+  aliases: string[];
+  updatedAt: number;
+};
+
+function buildPersistedMemoryConcepts(entries: LongTermMemoryEntry[]): PersistedMemoryConcept[] {
+  const byConcept = new Map<string, PersistedMemoryConcept>();
+  for (const entry of entries) {
+    const conceptId = `concept-${stableHash(entry.conceptKey || entry.semanticKey)}`;
+    const existing = byConcept.get(conceptId);
+    if (!existing) {
+      byConcept.set(conceptId, {
+        id: conceptId,
+        conceptKey: entry.conceptKey,
+        canonicalText: entry.canonicalText,
+        category: entry.category,
+        ontologyKind: entry.ontologyKind,
+        permanenceStatus: entry.permanenceStatus,
+        adjudicationStatus: entry.adjudicationStatus,
+        memoryIds: [entry.id],
+        aliases: uniqueStrings([...(entry.conceptAliases ?? []), entry.text]),
+        updatedAt: entry.updatedAt,
+      });
+      continue;
+    }
+    existing.memoryIds = uniqueIds([...existing.memoryIds, entry.id]);
+    existing.aliases = uniqueStrings([
+      ...existing.aliases,
+      ...(entry.conceptAliases ?? []),
+      entry.text,
+    ]);
+    if (entry.updatedAt >= existing.updatedAt) {
+      existing.canonicalText = entry.canonicalText || existing.canonicalText;
+      existing.category = entry.category;
+      existing.ontologyKind = entry.ontologyKind;
+      existing.permanenceStatus = entry.permanenceStatus;
+      existing.adjudicationStatus = entry.adjudicationStatus;
+      existing.updatedAt = entry.updatedAt;
+    }
+  }
+  return [...byConcept.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
+}
+
 export async function loadMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
@@ -3697,6 +3768,26 @@ export async function loadMemoryStoreSnapshot(params: {
       const longTermRows = db
         .prepare("SELECT json FROM long_term_memory WHERE session_id = ? ORDER BY updated_at DESC")
         .all(params.sessionId) as Array<{ json: string }>;
+      const conceptRows = db
+        .prepare(
+          "SELECT id, concept_key, canonical_text, category, ontology_kind, permanence_status, adjudication_status, updated_at, json FROM memory_concepts WHERE session_id = ? ORDER BY updated_at DESC",
+        )
+        .all(params.sessionId) as Array<{
+        id: string;
+        concept_key: string;
+        canonical_text: string;
+        category: MemoryCategory;
+        ontology_kind: MemoryOntologyKind;
+        permanence_status: MemoryPermanenceStatus;
+        adjudication_status: MemoryAdjudicationStatus;
+        updated_at: number;
+        json: string;
+      }>;
+      const aliasRows = db
+        .prepare(
+          "SELECT concept_id, alias FROM memory_concept_aliases WHERE session_id = ? ORDER BY updated_at DESC",
+        )
+        .all(params.sessionId) as Array<{ concept_id: string; alias: string }>;
       const pendingRows = db
         .prepare("SELECT json FROM pending_memory WHERE session_id = ? ORDER BY updated_at DESC")
         .all(params.sessionId) as Array<{ json: string }>;
@@ -3715,6 +3806,21 @@ export async function loadMemoryStoreSnapshot(params: {
           "SELECT json FROM memory_graph_edges WHERE session_id = ? ORDER BY updated_at DESC",
         )
         .all(params.sessionId) as Array<{ json: string }>;
+      const aliasesByConcept = new Map<string, string[]>();
+      for (const row of aliasRows) {
+        const bucket = aliasesByConcept.get(row.concept_id) ?? [];
+        bucket.push(row.alias);
+        aliasesByConcept.set(row.concept_id, bucket);
+      }
+      const conceptByKey = new Map<string, PersistedMemoryConcept>();
+      for (const row of conceptRows) {
+        const concept = JSON.parse(row.json) as PersistedMemoryConcept;
+        concept.aliases = uniqueStrings([
+          ...(aliasesByConcept.get(row.id) ?? []),
+          ...(concept.aliases ?? []),
+        ]);
+        conceptByKey.set(row.concept_key, concept);
+      }
       const workingMemory = workingRow?.json
         ? (JSON.parse(workingRow.json) as WorkingMemorySnapshot)
         : {
@@ -3730,9 +3836,23 @@ export async function loadMemoryStoreSnapshot(params: {
           };
       return {
         workingMemory,
-        longTermMemory: longTermRows.map((row) =>
-          sanitizeLongTermEntry(JSON.parse(row.json) as LongTermMemoryEntry),
-        ),
+        longTermMemory: longTermRows.map((row) => {
+          const entry = sanitizeLongTermEntry(JSON.parse(row.json) as LongTermMemoryEntry);
+          const concept = conceptByKey.get(entry.conceptKey);
+          if (!concept) {
+            return entry;
+          }
+          return {
+            ...entry,
+            canonicalText: concept.canonicalText || entry.canonicalText,
+            conceptAliases: uniqueStrings([
+              ...(entry.conceptAliases ?? []),
+              ...(concept.aliases ?? []),
+            ]),
+            permanenceStatus: concept.permanenceStatus ?? entry.permanenceStatus,
+            adjudicationStatus: concept.adjudicationStatus ?? entry.adjudicationStatus,
+          };
+        }),
         pendingSignificance: pendingRows.map((row) =>
           sanitizePendingEntry(JSON.parse(row.json) as PendingMemoryEntry),
         ),
@@ -3822,20 +3942,25 @@ export async function persistMemoryStoreSnapshot(params: {
         `,
       ).run(params.sessionId, JSON.stringify(params.workingMemory), Date.now());
       db.prepare("DELETE FROM long_term_memory WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_concepts WHERE session_id = ?").run(params.sessionId);
+      db.prepare("DELETE FROM memory_concept_aliases WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM pending_memory WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM permanent_nodes WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_graph_nodes WHERE session_id = ?").run(params.sessionId);
       db.prepare("DELETE FROM memory_graph_edges WHERE session_id = ?").run(params.sessionId);
 
+      const concepts = buildPersistedMemoryConcepts(params.longTermMemory);
+      const conceptIdByKey = new Map(concepts.map((concept) => [concept.conceptKey, concept.id]));
       const insertLongTerm = db.prepare(
         `INSERT INTO long_term_memory (
-          id, session_id, concept_key, ontology_kind, active_status, permanence_status, updated_at, json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, session_id, concept_id, concept_key, ontology_kind, active_status, permanence_status, updated_at, json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const entry of params.longTermMemory) {
         insertLongTerm.run(
           entry.id,
           params.sessionId,
+          conceptIdByKey.get(entry.conceptKey) ?? `concept-${stableHash(entry.conceptKey)}`,
           entry.conceptKey,
           entry.ontologyKind,
           entry.activeStatus,
@@ -3843,6 +3968,31 @@ export async function persistMemoryStoreSnapshot(params: {
           entry.updatedAt,
           JSON.stringify(entry),
         );
+      }
+      const insertConcept = db.prepare(
+        `INSERT INTO memory_concepts (
+          id, session_id, concept_key, canonical_text, category, ontology_kind, permanence_status, adjudication_status, updated_at, json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const insertAlias = db.prepare(
+        "INSERT INTO memory_concept_aliases (session_id, concept_id, alias, updated_at) VALUES (?, ?, ?, ?)",
+      );
+      for (const concept of concepts) {
+        insertConcept.run(
+          concept.id,
+          params.sessionId,
+          concept.conceptKey,
+          concept.canonicalText,
+          concept.category,
+          concept.ontologyKind,
+          concept.permanenceStatus,
+          concept.adjudicationStatus,
+          concept.updatedAt,
+          JSON.stringify(concept),
+        );
+        for (const alias of concept.aliases) {
+          insertAlias.run(params.sessionId, concept.id, alias, concept.updatedAt);
+        }
       }
       const insertPending = db.prepare(
         "INSERT INTO pending_memory (id, session_id, updated_at, json) VALUES (?, ?, ?, ?)",

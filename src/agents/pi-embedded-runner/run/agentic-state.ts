@@ -395,6 +395,7 @@ export type AgenticQualityGateReport = {
   failReasons: string[];
   clarificationClasses: string[];
   clarificationProfile: "none" | "environment_variable" | "approval" | "external_input" | "mixed";
+  clarificationTrendPolicy: "none" | "observe" | "blocking";
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -7549,6 +7550,8 @@ export function runAgenticQualityGate(params?: {
       ? (mapClarificationTrendToQualityFailReason(risingClarificationTrend) ??
         "diagnostics_clarification_trend_rising")
       : undefined;
+  const clarificationTrendPolicy: AgenticQualityGateReport["clarificationTrendPolicy"] =
+    !risingClarificationTrend ? "none" : params?.failOnClarificationTrend ? "blocking" : "observe";
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7639,6 +7642,7 @@ export function runAgenticQualityGate(params?: {
     failReasons,
     clarificationClasses,
     clarificationProfile,
+    clarificationTrendPolicy,
     acceptance,
     soak,
     diagnostics,
@@ -7672,6 +7676,7 @@ export function formatAgenticQualityGateReport(
       `soak_clarification_profile=${soakClarificationProfile}`,
       `soak_clarification_mix=${soakClarificationMix.length > 0 ? soakClarificationMix.join(",") : "none"}`,
       `soak_clarification_trends=${soakClarificationTrends.length > 0 ? soakClarificationTrends.join(",") : "none"}`,
+      `soak_clarification_trend_policy=${report.clarificationTrendPolicy}`,
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
@@ -7706,6 +7711,7 @@ export function formatAgenticQualityGateReport(
     `- Clarification profile: ${soakClarificationProfile}`,
     `- Clarification mix: ${soakClarificationMix.length > 0 ? soakClarificationMix.join(", ") : "none"}`,
     `- Clarification trends: ${soakClarificationTrends.length > 0 ? soakClarificationTrends.join(", ") : "none"}`,
+    `- Clarification trend policy: ${report.clarificationTrendPolicy}`,
     "",
     "## Diagnostics",
     `- Summary: ${report.diagnostics.summary}`,

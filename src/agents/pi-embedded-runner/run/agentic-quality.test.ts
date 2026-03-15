@@ -96,6 +96,9 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_clarification_trends=",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_trend_policy=",
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -113,6 +116,9 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification profile:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification mix:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification trends:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification trend policy:",
+    );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Template-ready families:",
@@ -648,6 +654,9 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_clarification_trends=environment_variable:falling(2->1),approval:rising(0->1)",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_trend_policy=observe",
+    );
   });
 
   it("can fail the quality gate on a rising long-run clarification blocker trend", () => {
@@ -702,6 +711,13 @@ describe("agentic quality gate", () => {
     expect(report.failReasons).toContain("diagnostics_clarification_trend_approval");
     expect(report.recommendations).toContain(
       "Long-run clarification blocker trend is rising: approval:rising(0->1).",
+    );
+    expect(report.clarificationTrendPolicy).toBe("blocking");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_trend_policy=blocking",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification trend policy: blocking",
     );
   });
 

@@ -1083,6 +1083,67 @@ describe("agentic-state", () => {
     );
   });
 
+  it("requires approval for mutating work on protected branches before verification is complete", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the release-branch diagnostics regression in src/diagnostics/report.ts and keep the deployment safe.",
+        ),
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics implementation and release checklist.",
+        },
+      ],
+    });
+
+    expect(state.governanceState.approvalRequired).toBe(true);
+    expect(state.governanceState.autonomyMode).toBe("approval_required");
+    expect(state.governanceState.riskLevel).toBe("high");
+    expect(state.governanceState.reasons).toContain("protected_branch_change_guard");
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Governance reasons: protected_branch_change_guard",
+    );
+    expect(state.plannerState.nextAction).toContain("Respect branch convention: release_branch");
+  });
+
+  it("raises medium governance risk when project code work lacks validation context", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Implement the diagnostics formatter changes in src/diagnostics/formatter.ts."),
+      ],
+      activeArtifacts: ["src/diagnostics/formatter.ts"],
+      workspaceTags: ["workspace"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "feature/formatter-update",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the formatter implementation and current diagnostics output.",
+        },
+      ],
+    });
+
+    expect(state.governanceState.approvalRequired).toBe(false);
+    expect(state.governanceState.autonomyMode).toBe("continue");
+    expect(state.governanceState.riskLevel).toBe("medium");
+    expect(state.governanceState.reasons).toContain("missing_validation_context");
+  });
+
   it("flags secret extraction requests in governance state", () => {
     const state = buildAgenticExecutionState({
       messages: [

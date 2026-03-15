@@ -298,7 +298,8 @@ export type AgenticAcceptanceScenarioId =
   | "durable_template_family_replan_alignment"
   | "failure_derived_merge_family_alignment"
   | "failure_derived_template_family_alignment"
-  | "failure_derived_quality_gate_alignment";
+  | "failure_derived_quality_gate_alignment"
+  | "protected_branch_governance_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -1389,8 +1390,10 @@ function buildPlannerState(params: {
 
 function buildGovernanceState(params: {
   messages: AgentMessage[];
+  taskState: AgenticTaskState;
   verificationState: AgenticVerificationState;
   plannerState: AgenticPlannerState;
+  environmentState: AgenticEnvironmentState;
 }): AgenticGovernanceState {
   const corpus = params.messages.map((message) => extractMessageText(message)).join("\n");
   const lowered = corpus.toLowerCase();
@@ -1401,10 +1404,34 @@ function buildGovernanceState(params: {
     /\b(rm -rf|git reset --hard|drop database|drop table|delete production|wipe|destroy)\b/.test(
       lowered,
     );
+  const protectedBranch =
+    params.environmentState.branchConventions?.some((entry) =>
+      ["default_branch", "release_branch", "hotfix_branch"].includes(entry),
+    ) ?? false;
+  const mutatingWorkDetected =
+    params.taskState.activeArtifacts.length > 0 ||
+    /\b(fix|update|modify|edit|change|implement|repair|rewrite|refactor|patch|migrate|deploy|release)\b/.test(
+      lowered,
+    );
+  const needsValidationContext =
+    params.taskState.taskMode === "coding" ||
+    params.taskState.taskMode === "debugging" ||
+    params.taskState.taskMode === "operations";
+  const missingValidationContext =
+    needsValidationContext &&
+    params.environmentState.workspaceKind === "project" &&
+    (params.environmentState.preferredValidationTools?.length ?? 0) === 0;
+  const protectedBranchApprovalGate =
+    protectedBranch &&
+    mutatingWorkDetected &&
+    params.verificationState.outcome !== "verified" &&
+    !params.plannerState.shouldEscalate;
   const reasons = uniqueCompact(
     [
       secretPromptDetected ? "secret_exfiltration_request" : undefined,
       destructiveActionDetected ? "destructive_action_detected" : undefined,
+      protectedBranchApprovalGate ? "protected_branch_change_guard" : undefined,
+      missingValidationContext ? "missing_validation_context" : undefined,
       params.plannerState.shouldEscalate
         ? `planner:${params.plannerState.escalationReason ?? "unknown"}`
         : undefined,
@@ -1412,7 +1439,7 @@ function buildGovernanceState(params: {
     ],
     5,
   );
-  const approvalRequired = destructiveActionDetected;
+  const approvalRequired = destructiveActionDetected || protectedBranchApprovalGate;
   const autonomyMode: AgenticAutonomyMode =
     secretPromptDetected || params.plannerState.shouldEscalate
       ? "escalate"
@@ -1424,14 +1451,17 @@ function buildGovernanceState(params: {
   const riskLevel: AgenticRiskLevel =
     secretPromptDetected ||
     destructiveActionDetected ||
-    params.plannerState.escalationReason === "environment_mismatch"
+    params.plannerState.escalationReason === "environment_mismatch" ||
+    protectedBranchApprovalGate
       ? "high"
-      : params.plannerState.retryClass === "skill_fallback" ||
-          params.verificationState.outcome === "partial" ||
-          params.verificationState.outcome === "failed" ||
-          params.verificationState.outcome === "blocked"
+      : missingValidationContext
         ? "medium"
-        : "low";
+        : params.plannerState.retryClass === "skill_fallback" ||
+            params.verificationState.outcome === "partial" ||
+            params.verificationState.outcome === "failed" ||
+            params.verificationState.outcome === "blocked"
+          ? "medium"
+          : "low";
   return {
     version: 1,
     autonomyMode,
@@ -2536,8 +2566,10 @@ export function buildAgenticExecutionState(params: {
   });
   const governanceState = buildGovernanceState({
     messages: params.messages,
+    taskState,
     verificationState,
     plannerState: reconciledPlannerState,
+    environmentState,
   });
 
   return {
@@ -4484,6 +4516,49 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Failure-derived family trends stay aligned with release-facing quality gate recommendations."
         : "Failure-derived family trends drifted before reaching the quality gate.",
       details: `merge=${mergeReport.recommendations.join("|")} template=${templateReport.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const protectedBranchState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the release-branch diagnostics regression in src/diagnostics/report.ts and keep the deployment safe.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["src/diagnostics/report.ts"],
+      workspaceTags: ["workspace", "git-worktree"],
+      workspaceState: {
+        workspaceName: "openclaw",
+        sessionRelativePath: "packages/diagnostics",
+        gitBranch: "release/diagnostics-fix",
+      },
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Read the diagnostics implementation and release checklist.",
+        },
+      ],
+    });
+    const passed =
+      protectedBranchState.governanceState.approvalRequired &&
+      protectedBranchState.governanceState.autonomyMode === "approval_required" &&
+      protectedBranchState.governanceState.riskLevel === "high" &&
+      protectedBranchState.governanceState.reasons.includes("protected_branch_change_guard") &&
+      (protectedBranchState.plannerState.nextAction ?? "").includes(
+        "Respect branch convention: release_branch",
+      );
+    scenarios.push({
+      id: "protected_branch_governance_alignment",
+      passed,
+      summary: passed
+        ? "Protected branch mutation work now requires approval and branch-aware guidance."
+        : "Protected branch mutation work did not trigger the expected governance boundary.",
+      details: `autonomy=${protectedBranchState.governanceState.autonomyMode} reasons=${protectedBranchState.governanceState.reasons.join("|")} next=${protectedBranchState.plannerState.nextAction ?? "none"}`,
     });
   }
 

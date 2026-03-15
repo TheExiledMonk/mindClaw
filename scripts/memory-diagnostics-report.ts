@@ -8,6 +8,8 @@ type CliArgs = {
   backendKind?: "fs-json" | "sqlite-doc" | "sqlite-graph";
   includeAcceptance: boolean;
   acceptanceBackendKinds?: Array<"fs-json" | "sqlite-doc" | "sqlite-graph">;
+  failOnIssues: boolean;
+  failOnAcceptance: boolean;
   outputPath?: string;
   messages: AgentMessage[];
 };
@@ -17,6 +19,8 @@ function parseArgs(argv: string[]): CliArgs {
   let sessionId = "default";
   let backendKind: CliArgs["backendKind"];
   let includeAcceptance = false;
+  let failOnIssues = false;
+  let failOnAcceptance = false;
   let outputPath: string | undefined;
   const acceptanceBackendKinds: Array<"fs-json" | "sqlite-doc" | "sqlite-graph"> = [];
   const messages: AgentMessage[] = [];
@@ -43,6 +47,14 @@ function parseArgs(argv: string[]): CliArgs {
     }
     if (arg === "--acceptance") {
       includeAcceptance = true;
+      continue;
+    }
+    if (arg === "--fail-on-issues") {
+      failOnIssues = true;
+      continue;
+    }
+    if (arg === "--fail-on-acceptance") {
+      failOnAcceptance = true;
       continue;
     }
     if (arg === "--acceptance-backend" && next) {
@@ -74,6 +86,8 @@ function parseArgs(argv: string[]): CliArgs {
     backendKind,
     includeAcceptance,
     acceptanceBackendKinds: acceptanceBackendKinds.length > 0 ? acceptanceBackendKinds : undefined,
+    failOnIssues,
+    failOnAcceptance,
     outputPath,
     messages,
   };
@@ -95,6 +109,12 @@ async function main(): Promise<void> {
     await fs.writeFile(args.outputPath, payload, "utf8");
   }
   process.stdout.write(payload);
+  if (args.failOnIssues && report.health.issues.length > 0) {
+    process.exitCode = 1;
+  }
+  if (args.failOnAcceptance && report.failedAcceptanceScenarios.length > 0) {
+    process.exitCode = 1;
+  }
 }
 
 await main();

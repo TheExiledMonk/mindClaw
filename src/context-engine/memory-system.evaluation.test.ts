@@ -91,6 +91,44 @@ describe("memory system evaluation scenarios", () => {
     expect(merged?.lastRevisionKind).toMatch(/reasserted|updated|narrowed/);
   });
 
+  it("converges instruction-like category drift when canonical entities stay aligned", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-category-drift",
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-category-drift",
+      previous: first,
+      messages: [
+        userMessage("Continue using the permanent path in memory-system.ts on feature/memory-v2."),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+
+    const durableArtifactConcepts = new Set(
+      second.longTermMemory
+        .filter(
+          (entry) =>
+            entry.ontologyKind === "constraint" &&
+            entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
+        )
+        .map((entry) => entry.conceptKey),
+    );
+
+    expect(durableArtifactConcepts.size).toBe(1);
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",

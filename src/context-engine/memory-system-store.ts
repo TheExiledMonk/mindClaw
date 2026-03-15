@@ -328,6 +328,7 @@ export type MemoryAcceptanceScenarioResult = {
     | "scope_isolation"
     | "contested_visibility"
     | "entity_resolution"
+    | "session_handoff_continuity"
     | "backend_parity"
     | "runtime_lifecycle"
     | "permanence_invalidation"
@@ -354,6 +355,7 @@ export type MemoryDiagnosticsReport = {
   health: MemoryStoreHealthReport;
   retrieval?: MemoryRetrievalObservabilityReport;
   acceptance?: MemoryAcceptanceReport;
+  failedAcceptanceScenarios: string[];
   recommendations: string[];
   summary: string;
 };
@@ -967,6 +969,32 @@ function inferAdjudicationStatus(params: {
   return "authoritative";
 }
 
+function areCompatibleMemoryCategories(left: MemoryCategory, right: MemoryCategory): boolean {
+  if (left === right) {
+    return true;
+  }
+  const instructionFamily = new Set<MemoryCategory>(["decision", "strategy"]);
+  if (instructionFamily.has(left) && instructionFamily.has(right)) {
+    return true;
+  }
+  const observationalFamily = new Set<MemoryCategory>(["fact", "episode"]);
+  if (observationalFamily.has(left) && observationalFamily.has(right)) {
+    return true;
+  }
+  return false;
+}
+
+function areCompatibleOntologyKinds(left: MemoryOntologyKind, right: MemoryOntologyKind): boolean {
+  if (left === right) {
+    return true;
+  }
+  const instructionFamily = new Set<MemoryOntologyKind>(["constraint", "pattern"]);
+  if (instructionFamily.has(left) && instructionFamily.has(right)) {
+    return true;
+  }
+  return false;
+}
+
 function classifyRevisionKind(
   current: Pick<LongTermMemoryEntry, "text" | "category">,
   incoming: Pick<LongTermMemoryEntry, "text" | "category">,
@@ -1349,10 +1377,10 @@ function findConceptMatch(
     ) {
       return candidate;
     }
-    if (candidate.category !== incoming.category) {
+    if (!areCompatibleMemoryCategories(candidate.category, incoming.category)) {
       continue;
     }
-    if (candidate.ontologyKind !== incoming.ontologyKind) {
+    if (!areCompatibleOntologyKinds(candidate.ontologyKind, incoming.ontologyKind)) {
       continue;
     }
     if (
@@ -5363,6 +5391,78 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
+  const handoffWorkspaceDir = path.join(params.workspaceDir, `${MEMORY_SYSTEM_DIRNAME}-handoff`);
+  const handoffTargetWorkspaceDir = path.join(
+    params.workspaceDir,
+    `${MEMORY_SYSTEM_DIRNAME}-handoff-target`,
+  );
+  await fs.mkdir(handoffWorkspaceDir, { recursive: true });
+  await fs.mkdir(handoffTargetWorkspaceDir, { recursive: true });
+  const handoffFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:handoff-source`,
+    messages: [
+      userMessageForSuite(
+        "Use the permanent memory-system path in src/context-engine/memory-system.ts for the handoff path.",
+      ),
+    ],
+  });
+  await persistMemoryStoreSnapshot({
+    workspaceDir: handoffWorkspaceDir,
+    sessionId: `${sessionIdPrefix}:handoff-source`,
+    backendKind: "sqlite-graph",
+    workingMemory: handoffFirst.workingMemory,
+    longTermMemory: handoffFirst.longTermMemory,
+    pendingSignificance: handoffFirst.pendingSignificance,
+    permanentMemory: handoffFirst.permanentMemory,
+    graph: handoffFirst.graph,
+  });
+  const handoffBundle = await exportMemoryStoreBundle({
+    workspaceDir: handoffWorkspaceDir,
+    sessionId: `${sessionIdPrefix}:handoff-source`,
+    backendKind: "sqlite-graph",
+  });
+  await importMemoryStoreBundle({
+    workspaceDir: handoffTargetWorkspaceDir,
+    bundle: handoffBundle,
+    targetSessionId: `${sessionIdPrefix}:handoff-target`,
+    backendKind: "sqlite-graph",
+  });
+  const handoffLoaded = await loadMemoryStoreSnapshot({
+    workspaceDir: handoffTargetWorkspaceDir,
+    sessionId: `${sessionIdPrefix}:handoff-target`,
+    backendKind: "sqlite-graph",
+  });
+  const handoffNext = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:handoff-target`,
+    previous: handoffLoaded,
+    messages: [
+      userMessageForSuite(
+        "Continue the handoff and confirm the permanent memory-system path in src/context-engine/memory-system.ts.",
+      ),
+    ],
+  });
+  const handoffPacket = retrieveMemoryContextPacket(handoffNext, {
+    messages: [
+      userMessageForSuite(
+        "During handoff, what should we keep using in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const handoffVisible = handoffPacket.retrievalItems.some((item) =>
+    item.text.includes("permanent memory-system path"),
+  );
+  scenarios.push({
+    scenario: "session_handoff_continuity",
+    passed:
+      handoffNext.longTermMemory.length >= handoffLoaded.longTermMemory.length &&
+      handoffVisible &&
+      Boolean(handoffNext.review.carryForwardSummary),
+    summary: `handoff long-term=${handoffNext.longTermMemory.length} visible=${handoffVisible}`,
+    details: handoffPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const parityCompiled = compileMemoryState({
     sessionId: `${sessionIdPrefix}:parity`,
     messages: [
@@ -5642,9 +5742,14 @@ export async function generateMemoryDiagnosticsReport(params: {
         backendKinds: params.acceptanceBackendKinds,
       })
     : undefined;
+  const failedAcceptanceScenarios = acceptance
+    ? acceptance.scenarios
+        .filter((scenario) => !scenario.passed)
+        .map((scenario) => scenario.scenario)
+    : [];
   const recommendations = uniqueStrings([
     ...health.recommendations,
-    ...(acceptance && !acceptance.passed
+    ...(failedAcceptanceScenarios.length > 0
       ? ["review failed acceptance scenarios before promoting the store"]
       : []),
   ]);
@@ -5668,6 +5773,7 @@ export async function generateMemoryDiagnosticsReport(params: {
     health,
     retrieval,
     acceptance,
+    failedAcceptanceScenarios,
     recommendations,
     summary,
   };

@@ -229,6 +229,7 @@ export type ProceduralExecutionRecord = {
 
 export type AgenticExecutionObservabilityReport = {
   summary: string;
+  progressSummary: string;
   retryClass: AgenticRetryClass;
   autonomyMode: AgenticAutonomyMode;
   riskLevel: AgenticRiskLevel;
@@ -252,11 +253,13 @@ export type AgenticExecutionObservabilityReport = {
   planSteps: AgenticPlanStep[];
   goalSatisfaction: AgenticGoalSatisfaction;
   unresolvedCriteria: string[];
+  assumptions: string[];
   recommendations: string[];
 };
 
 export type AgenticHandoffReport = {
   summary: string;
+  progressSummary: string;
   objective?: string;
   completedSteps: string[];
   pendingSteps: string[];
@@ -305,7 +308,8 @@ export type AgenticAcceptanceScenarioId =
   | "failure_derived_quality_gate_alignment"
   | "protected_branch_governance_alignment"
   | "environment_guard_retry_alignment"
-  | "guarded_handoff_alignment";
+  | "guarded_handoff_alignment"
+  | "concise_progress_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -332,7 +336,8 @@ export type AgenticSoakScenarioId =
   | "failure_derived_consolidation_replan"
   | "failure_derived_recovery_transition"
   | "environment_guarded_retry_lifecycle"
-  | "guarded_handoff_boundary";
+  | "guarded_handoff_boundary"
+  | "concise_progress_resume_boundary";
 
 export type AgenticSoakPhaseResult = {
   label: string;
@@ -2967,6 +2972,11 @@ export function buildProceduralExecutionRecord(params: {
 export function inspectAgenticExecutionObservability(
   state: AgenticExecutionState,
 ): AgenticExecutionObservabilityReport {
+  const completedSteps = state.taskState.planSteps.filter((step) => step.status === "completed");
+  const activeSteps = state.taskState.planSteps.filter(
+    (step) => step.status === "in_progress" || step.status === "pending",
+  );
+  const blockedSteps = state.taskState.planSteps.filter((step) => step.status === "blocked");
   const recommendations = uniqueCompact(
     [
       state.plannerState.shouldEscalate
@@ -3015,8 +3025,20 @@ export function inspectAgenticExecutionObservability(
   ]
     .filter(Boolean)
     .join(" ");
+  const progressSummary = uniqueCompact(
+    [
+      `completed=${completedSteps.length}`,
+      `active=${activeSteps.length}`,
+      blockedSteps.length > 0 ? `blocked=${blockedSteps.length}` : "blocked=0",
+      state.plannerState.nextAction
+        ? `next=${truncate(state.plannerState.nextAction, 120)}`
+        : undefined,
+    ],
+    4,
+  ).join(" ");
   return {
     summary,
+    progressSummary,
     retryClass: state.plannerState.retryClass,
     autonomyMode: state.governanceState.autonomyMode,
     riskLevel: state.governanceState.riskLevel,
@@ -3040,6 +3062,7 @@ export function inspectAgenticExecutionObservability(
     planSteps: state.taskState.planSteps,
     goalSatisfaction: state.verificationState.goalSatisfaction,
     unresolvedCriteria: state.verificationState.unresolvedCriteria,
+    assumptions: state.taskState.assumptions,
     recommendations,
   };
 }
@@ -3054,6 +3077,7 @@ export function formatAgenticExecutionObservabilityReport(
   if (format === "summary") {
     const lines = [
       report.summary,
+      `progress=${report.progressSummary}`,
       `escalation=${report.escalationRequired ? "yes" : "no"} fallback=${report.hasViableFallback ? "viable" : "missing"}`,
       report.rankedSkills.length > 0 ? `ranked=${report.rankedSkills.join(">")}` : "ranked=none",
       report.effectiveSkills.length > 0
@@ -3077,6 +3101,9 @@ export function formatAgenticExecutionObservabilityReport(
         ? `merge_skills=${report.mergeSkills.length > 0 ? report.mergeSkills.join(">") : "candidate"}`
         : "merge_skills=none",
       `goal=${report.goalSatisfaction}`,
+      report.assumptions.length > 0
+        ? `assumptions=${report.assumptions.join(" | ")}`
+        : "assumptions=none",
       report.recommendations.length > 0
         ? `recommendations=${report.recommendations.join(" | ")}`
         : "recommendations=none",
@@ -3090,6 +3117,7 @@ export function formatAgenticExecutionObservabilityReport(
     "# Agentic Diagnostics Report",
     "",
     `- Summary: ${report.summary}`,
+    `- Progress: ${report.progressSummary}`,
     `- Retry class: ${report.retryClass}`,
     `- Autonomy mode: ${report.autonomyMode}`,
     `- Risk level: ${report.riskLevel}`,
@@ -3108,6 +3136,7 @@ export function formatAgenticExecutionObservabilityReport(
     `- Merge skills: ${report.mergeSkills.length > 0 ? report.mergeSkills.join(", ") : "none"}`,
     `- Goal satisfaction: ${report.goalSatisfaction}`,
     `- Unresolved criteria: ${report.unresolvedCriteria.length > 0 ? report.unresolvedCriteria.join(" | ") : "none"}`,
+    `- Assumptions: ${report.assumptions.length > 0 ? report.assumptions.join(" | ") : "none"}`,
     `- Failure pattern: ${report.failurePattern}`,
     `- Viable fallback: ${report.hasViableFallback ? "yes" : "no"}`,
     `- Escalation required: ${report.escalationRequired ? "yes" : "no"}`,
@@ -3136,6 +3165,17 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
   const blockedSteps = state.taskState.planSteps
     .filter((step) => step.status === "blocked")
     .map((step) => step.title);
+  const progressSummary = uniqueCompact(
+    [
+      `completed=${completedSteps.length}`,
+      `pending=${pendingSteps.length}`,
+      blockedSteps.length > 0 ? `blocked=${blockedSteps.length}` : "blocked=0",
+      state.plannerState.nextAction
+        ? `next=${truncate(state.plannerState.nextAction, 120)}`
+        : undefined,
+    ],
+    4,
+  ).join(" ");
   const operatorReason =
     state.governanceState.reasons[0] ??
     (state.plannerState.retryClass === "clarify" ? "await_validation_context" : undefined);
@@ -3192,6 +3232,7 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
   );
   return {
     summary: summaryParts.join(" "),
+    progressSummary,
     objective: state.taskState.objective,
     completedSteps,
     pendingSteps,
@@ -3218,6 +3259,7 @@ export function formatAgenticHandoffReport(
   if (format === "summary") {
     const lines = [
       report.summary || "handoff=empty",
+      `progress=${report.progressSummary}`,
       `operator=${report.operatorMode}${report.operatorReason ? ` reason=${report.operatorReason}` : ""}`,
       report.nextAction ? `next=${report.nextAction}` : "next=none",
       report.pendingSteps.length > 0
@@ -3237,6 +3279,7 @@ export function formatAgenticHandoffReport(
     "# Agentic Handoff Report",
     "",
     `- Summary: ${report.summary || "none"}`,
+    `- Progress: ${report.progressSummary}`,
     `- Objective: ${report.objective ?? "none"}`,
     `- Operator mode: ${report.operatorMode}`,
     `- Operator reason: ${report.operatorReason ?? "none"}`,
@@ -4832,6 +4875,47 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   }
 
   {
+    const state = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Finalize the diagnostics report, keep the current assumptions visible, and leave the last validation step for the next operator.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a concise operator handoff for the remaining validation step.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+    });
+    const observability = inspectAgenticExecutionObservability(state);
+    const handoff = buildAgenticHandoffReport(state);
+    const passed =
+      observability.progressSummary.includes("completed=") &&
+      observability.assumptions.length > 0 &&
+      formatAgenticExecutionObservabilityReport(observability, "summary").includes("progress=") &&
+      formatAgenticExecutionObservabilityReport(observability, "summary").includes(
+        "assumptions=",
+      ) &&
+      handoff.progressSummary.includes("pending=") &&
+      handoff.assumptions.length > 0 &&
+      formatAgenticHandoffReport(handoff, "summary").includes("progress=");
+    scenarios.push({
+      id: "concise_progress_alignment",
+      passed,
+      summary: passed
+        ? "Operator-facing reports now keep concise progress and assumptions visible for resume."
+        : "Concise progress or assumption surfacing drifted out of operator-facing reports.",
+      details: `progress=${observability.progressSummary} handoff=${handoff.progressSummary}`,
+    });
+  }
+
+  {
     const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
@@ -6079,6 +6163,96 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       summary: passed
         ? "Guarded work stays resumable with approval-aware and validation-aware handoff boundaries."
         : "Guarded handoff boundaries did not stay intact across the soak lifecycle.",
+      phases,
+      details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
+    });
+  }
+
+  {
+    const initialState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Finalize the diagnostics report, keep assumptions visible, and leave the remaining validation step for the next operator.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+      checkpointSignals: [
+        {
+          kind: "handoff",
+          summary: "Prepared a concise operator handoff for the remaining validation step.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+    });
+    const resumedState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Finalize the diagnostics report, keep assumptions visible, and leave the remaining validation step for the next operator.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 1,
+          maxAttempts: 2,
+          summary:
+            "Resumed from the concise operator handoff and continued the remaining validation step.",
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Reran diagnostics validation successfully and updated the report handoff.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary: "Diagnostics report finalized and remaining validation step completed.",
+          artifactRefs: ["scripts/agentic-diagnostics-report.ts"],
+        },
+      ],
+      activeArtifacts: ["scripts/agentic-diagnostics-report.ts"],
+    });
+    const initialObservability = inspectAgenticExecutionObservability(initialState);
+    const initialHandoff = buildAgenticHandoffReport(initialState);
+    const resumedHandoff = buildAgenticHandoffReport(resumedState);
+    const phases = [
+      buildSoakPhaseResult({
+        label: "concise_progress_handoff",
+        state: initialState,
+        passed:
+          initialObservability.progressSummary.includes("active=") &&
+          initialObservability.assumptions.length > 0 &&
+          initialHandoff.progressSummary.includes("pending="),
+        details: `progress=${initialObservability.progressSummary} assumptions=${initialObservability.assumptions.join("|")}`,
+      }),
+      buildSoakPhaseResult({
+        label: "concise_progress_resume",
+        state: resumedState,
+        passed:
+          resumedState.verificationState.outcome === "verified" &&
+          resumedHandoff.progressSummary.includes("completed=") &&
+          resumedHandoff.assumptions.length > 0,
+        details: `progress=${resumedHandoff.progressSummary} assumptions=${resumedHandoff.assumptions.join("|")}`,
+      }),
+    ];
+    const passed = phases.every((phase) => phase.passed);
+    scenarios.push({
+      id: "concise_progress_resume_boundary",
+      passed,
+      summary: passed
+        ? "Concise progress and assumptions stay visible across handoff and resume."
+        : "Concise progress or assumptions drifted across the handoff/resume lifecycle.",
       phases,
       details: phases.map((phase) => `${phase.label}:${phase.details ?? "none"}`).join("|"),
     });

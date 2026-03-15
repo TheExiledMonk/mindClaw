@@ -849,6 +849,8 @@ describe("agentic-state", () => {
     expect(report.goalSatisfaction).toBeDefined();
     expect(report.stabilityState).toBe("neutral");
     expect(report.stabilitySkills).toEqual([]);
+    expect(report.progressSummary).toContain("blocked=");
+    expect(Array.isArray(report.assumptions)).toBe(true);
     expect(report.recommendations).toContain(
       "Add or learn a viable fallback workflow before retrying.",
     );
@@ -872,6 +874,8 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "escalation=yes fallback=missing",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("progress=");
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("assumptions=");
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("plan=");
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "effective_skills=",
@@ -882,6 +886,7 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain("Progress:");
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "## Plan Steps",
     );
@@ -1081,11 +1086,13 @@ describe("agentic-state", () => {
     });
     const protectedReport = buildAgenticHandoffReport(protectedBranchState);
     expect(protectedReport.operatorMode).toBe("approval_required");
+    expect(protectedReport.progressSummary).toContain("pending=");
     expect(protectedReport.resumeCondition).toContain("Wait for operator approval");
     expect(protectedReport.resumePrompt).toContain("Resume after approval");
     expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain(
       "operator=approval_required",
     );
+    expect(formatAgenticHandoffReport(protectedReport, "summary")).toContain("progress=");
 
     const validationThinState = buildAgenticExecutionState({
       messages: [
@@ -1120,7 +1127,10 @@ describe("agentic-state", () => {
     expect(validationReport.operatorMode).toBe("pause");
     expect(validationReport.resumeCondition).toContain("Capture an observed validation command");
     expect(validationReport.resumePrompt).toContain("Resume after prerequisites are restored");
+    expect(validationReport.assumptions.length).toBeGreaterThan(0);
     expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Operator mode:");
+    expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Progress:");
+    expect(formatAgenticHandoffReport(validationReport, "markdown")).toContain("Assumptions:");
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {

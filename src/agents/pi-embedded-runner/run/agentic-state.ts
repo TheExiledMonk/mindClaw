@@ -398,6 +398,8 @@ export type AgenticQualityGateReport = {
   clarificationClasses: string[];
   clarificationProfile: "none" | "environment_variable" | "approval" | "external_input" | "mixed";
   clarificationTrendPolicy: "none" | "observe" | "blocking";
+  soakClarificationTrendPolicy: "none" | "observe" | "blocking";
+  clarificationTrendPolicyAlignment: "aligned" | "drift";
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -7617,6 +7619,10 @@ export function runAgenticQualityGate(params?: {
       : undefined;
   const clarificationTrendPolicy: AgenticQualityGateReport["clarificationTrendPolicy"] =
     !risingClarificationTrend ? "none" : params?.failOnClarificationTrend ? "blocking" : "observe";
+  const soakClarificationTrendPolicy: AgenticQualityGateReport["soakClarificationTrendPolicy"] =
+    soak.clarificationTrendPolicy ?? "none";
+  const clarificationTrendPolicyAlignment: AgenticQualityGateReport["clarificationTrendPolicyAlignment"] =
+    soakClarificationTrendPolicy === clarificationTrendPolicy ? "aligned" : "drift";
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7668,6 +7674,9 @@ export function runAgenticQualityGate(params?: {
       risingClarificationTrend
         ? `Long-run clarification blocker trend is rising: ${risingClarificationTrend}.`
         : undefined,
+      clarificationTrendPolicyAlignment === "drift"
+        ? `Clarification trend policy diverges from soak trend policy: quality=${clarificationTrendPolicy} soak=${soakClarificationTrendPolicy}.`
+        : undefined,
       diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"
         ? "Capture an observed validation command before allowing another retry on project work."
         : undefined,
@@ -7708,6 +7717,8 @@ export function runAgenticQualityGate(params?: {
     clarificationClasses,
     clarificationProfile,
     clarificationTrendPolicy,
+    soakClarificationTrendPolicy,
+    clarificationTrendPolicyAlignment,
     acceptance,
     soak,
     diagnostics,
@@ -7741,7 +7752,9 @@ export function formatAgenticQualityGateReport(
       `soak_clarification_profile=${soakClarificationProfile}`,
       `soak_clarification_mix=${soakClarificationMix.length > 0 ? soakClarificationMix.join(",") : "none"}`,
       `soak_clarification_trends=${soakClarificationTrends.length > 0 ? soakClarificationTrends.join(",") : "none"}`,
-      `soak_clarification_trend_policy=${report.clarificationTrendPolicy}`,
+      `soak_clarification_trend_policy=${report.soakClarificationTrendPolicy}`,
+      `quality_clarification_trend_policy=${report.clarificationTrendPolicy}`,
+      `clarification_trend_policy_alignment=${report.clarificationTrendPolicyAlignment}`,
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
@@ -7776,7 +7789,9 @@ export function formatAgenticQualityGateReport(
     `- Clarification profile: ${soakClarificationProfile}`,
     `- Clarification mix: ${soakClarificationMix.length > 0 ? soakClarificationMix.join(", ") : "none"}`,
     `- Clarification trends: ${soakClarificationTrends.length > 0 ? soakClarificationTrends.join(", ") : "none"}`,
-    `- Clarification trend policy: ${report.clarificationTrendPolicy}`,
+    `- Soak clarification trend policy: ${report.soakClarificationTrendPolicy}`,
+    `- Quality clarification trend policy: ${report.clarificationTrendPolicy}`,
+    `- Clarification trend policy alignment: ${report.clarificationTrendPolicyAlignment}`,
     "",
     "## Diagnostics",
     `- Summary: ${report.diagnostics.summary}`,

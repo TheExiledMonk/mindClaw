@@ -552,6 +552,26 @@ describe("memory system store", () => {
     ).toBe(true);
   });
 
+  it("adds artifact references into the permanent memory tree", () => {
+    const compiled = compileMemoryState({
+      sessionId: "artifact-tree-a",
+      messages: [
+        userMessage(
+          "The fix for v2026.3.13-1 lives in src/context-engine/memory-system.ts and docs/memory-system-integration.md.",
+        ),
+      ],
+    });
+
+    const projects = compiled.permanentMemory.children.find((child) => child.label === "projects");
+    const currentBot = projects?.children.find((child) => child.label === "current-bot");
+    const artifacts = currentBot?.children.find((child) => child.label === "artifacts");
+
+    expect(artifacts?.children.some((child) => child.summary === "src/context-engine/memory-system.ts")).toBe(true);
+    expect(
+      artifacts?.children.some((child) => child.summary === "docs/memory-system-integration.md"),
+    ).toBe(true);
+  });
+
   it("extracts generalized pattern memories and marks superseded memories", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",

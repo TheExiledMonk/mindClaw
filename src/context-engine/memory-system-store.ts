@@ -59,7 +59,8 @@ export type PermanentNodeRelation =
   | "derived_from"
   | "relevant_to"
   | "superseded_by"
-  | "supports";
+  | "supports"
+  | "linked_to";
 export type MemoryRelationType =
   | "derived_from"
   | "relevant_to"
@@ -1456,6 +1457,52 @@ export function mergePermanentMemoryTree(
       updatedAt: Date.now(),
       children: [],
     });
+
+    if ((candidate.artifactRefs ?? []).length > 0) {
+      let artifactCursor = nextRoot;
+      for (const segment of ["projects", "current-bot", "artifacts"]) {
+        artifactCursor = ensureChildNode(
+          artifactCursor,
+          segment,
+          segment === "artifacts" ? "artifact" : "context",
+        );
+      }
+      for (const ref of candidate.artifactRefs) {
+        const artifactKey = normalizeComparable(ref);
+        const existingArtifact = artifactCursor.children.find(
+          (child) => normalizeComparable(child.summary ?? child.label) === artifactKey,
+        );
+        if (existingArtifact) {
+          existingArtifact.updatedAt = Date.now();
+          existingArtifact.evidence = dedupeTexts(
+            [...existingArtifact.evidence, candidate.text, ...candidate.evidence],
+            MAX_WORKING_ITEMS,
+          );
+          existingArtifact.sourceMemoryIds = uniqueIds([
+            ...existingArtifact.sourceMemoryIds,
+            candidate.id,
+          ]);
+          existingArtifact.confidence = Math.min(
+            1,
+            Math.max(existingArtifact.confidence, candidate.confidence),
+          );
+          continue;
+        }
+        artifactCursor.children.push({
+          id: `${artifactCursor.id}/${artifactCursor.children.length + 1}`,
+          label: path.basename(ref),
+          nodeType: "artifact",
+          relationToParent: "linked_to",
+          summary: ref,
+          evidence: dedupeTexts([candidate.text, ...candidate.evidence], MAX_WORKING_ITEMS),
+          sourceMemoryIds: [candidate.id],
+          confidence: candidate.confidence,
+          activeStatus: candidate.activeStatus,
+          updatedAt: Date.now(),
+          children: [],
+        });
+      }
+    }
   }
   return nextRoot;
 }

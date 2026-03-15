@@ -12,6 +12,7 @@ import {
   exportMemoryStoreBundle,
   generateMemoryDiagnosticsReport,
   formatMemoryDiagnosticsReport,
+  formatMemoryAcceptanceReport,
   importMemoryStoreBundle,
   inspectMemoryStoreHealth,
   inspectMemoryRetrievalObservability,
@@ -2366,6 +2367,11 @@ describe("MemorySystemContextEngine", () => {
     expect(markdown).toContain("## Acceptance");
     expect(summary).toContain("summary:");
     expect(summary).toContain("acceptance:");
+    const acceptanceMarkdown = formatMemoryAcceptanceReport(report.acceptance!, "markdown");
+    const acceptanceSummary = formatMemoryAcceptanceReport(report.acceptance!, "summary");
+    expect(acceptanceMarkdown).toContain("# Memory Acceptance Report");
+    expect(acceptanceMarkdown).toContain("## Scenarios");
+    expect(acceptanceSummary).toContain("scenarios:");
   });
 
   it("includes maintenance details when diagnostics runs repair", async () => {

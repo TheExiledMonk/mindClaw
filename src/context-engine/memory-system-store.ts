@@ -346,7 +346,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "mixed_lifecycle_soak"
     | "project_lifecycle_long_run"
     | "scope_matrix_resilience"
-    | "rivalry_governance";
+    | "rivalry_governance"
+    | "multi_tenant_release_handoff";
   passed: boolean;
   summary: string;
   details: string[];
@@ -360,6 +361,8 @@ export type MemoryAcceptanceReport = {
   scenarios: MemoryAcceptanceScenarioResult[];
   summary: string;
 };
+
+export type MemoryAcceptanceReportFormat = "json" | "summary" | "markdown";
 
 export type MemoryDiagnosticsReport = {
   generatedAt: number;
@@ -6605,6 +6608,142 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
+  const multiTenantTurns = [
+    {
+      text: "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer acme version v2026.3.13-2 install profile profile-b on release/memory-v3.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/multi-tenant-release.jsonl",
+        },
+      },
+    },
+    {
+      text: "Hand off the permanent rollout state in src/context-engine/memory-system.ts for customer acme version v2026.3.13-2 install profile profile-b on release/memory-v3.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/multi-tenant-release.jsonl",
+        },
+        checkpointSignals: [
+          {
+            kind: "handoff",
+            summary: "Hand off the acme release/memory-v3 rollout state.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+    {
+      text: "Use the permanent memory-system path in src/context-engine/memory-system.ts for customer beta version v2026.3.13-2 install profile profile-b on release/memory-v3.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/multi-tenant-release.jsonl",
+        },
+      },
+    },
+    {
+      text: "I observed directly that the permanent memory-system path in src/context-engine/memory-system.ts works for customer beta version v2026.3.13-2 install profile profile-b on release/memory-v3.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/multi-tenant-release.jsonl",
+        },
+        retrySignals: [
+          {
+            phase: "prompt",
+            outcome: "recovered",
+            summary: "Recovered while validating the beta rollout state.",
+            attempt: 2,
+            maxAttempts: 3,
+          },
+        ],
+      },
+    },
+    {
+      text: "Do not use the old workaround in src/context-engine/memory-system.ts for customer beta version v2026.3.13-2 install profile profile-b on release/memory-v3.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/multi-tenant-release.jsonl",
+        },
+      },
+    },
+    {
+      text: "Complete the beta rollout state review in src/context-engine/memory-system.ts for customer beta version v2026.3.13-2 install profile profile-b on release/memory-v3.",
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "release/memory-v3",
+          workspaceName: "openclaw",
+          sessionRelativePath: "sessions/multi-tenant-release.jsonl",
+        },
+        checkpointSignals: [
+          {
+            kind: "completion",
+            summary: "Completed the beta release/memory-v3 rollout review.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+          },
+        ],
+      },
+    },
+  ] as const;
+  let multiTenantCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:multi-tenant-release`,
+    messages: [userMessageForSuite(multiTenantTurns[0].text)],
+    runtimeContext: multiTenantTurns[0].runtimeContext as never,
+  });
+  for (const turn of multiTenantTurns.slice(1)) {
+    multiTenantCompiled = compileMemoryState({
+      sessionId: `${sessionIdPrefix}:multi-tenant-release`,
+      previous: multiTenantCompiled,
+      messages: [userMessageForSuite(turn.text)],
+      runtimeContext: turn.runtimeContext as never,
+    });
+  }
+  const multiTenantPacket = retrieveMemoryContextPacket(multiTenantCompiled, {
+    messages: [
+      userMessageForSuite(
+        "For customer beta version v2026.3.13-2 install profile profile-b on release/memory-v3, what should we use in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const multiTenantBetaVisible = multiTenantPacket.retrievalItems.some(
+    (item) =>
+      item.reason.includes("customer=beta") &&
+      item.reason.includes("release/memory-v3") &&
+      item.reason.includes("profile=profile-b") &&
+      item.text.includes("customer beta"),
+  );
+  const multiTenantAcmeLeak = multiTenantPacket.retrievalItems.some(
+    (item) =>
+      item.reason.includes("customer=acme") &&
+      item.text.includes("customer acme") &&
+      !item.reason.includes("customer=beta"),
+  );
+  const multiTenantRuntimeSignals = multiTenantCompiled.longTermMemory.filter((entry) =>
+    (entry.environmentTags ?? []).some((tag) =>
+      ["runtime:checkpoint", "runtime:retry"].includes(tag),
+    ),
+  ).length;
+  scenarios.push({
+    scenario: "multi_tenant_release_handoff",
+    passed:
+      multiTenantBetaVisible &&
+      !multiTenantAcmeLeak &&
+      multiTenantRuntimeSignals >= 2 &&
+      multiTenantCompiled.review.contestedRevisionConceptIds.length <= 2,
+    summary: `multi-tenant beta-visible=${multiTenantBetaVisible} acme-leaked=${multiTenantAcmeLeak} runtime-signals=${multiTenantRuntimeSignals}`,
+    details: multiTenantPacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const passedCount = scenarios.filter((scenario) => scenario.passed).length;
   const failedCount = scenarios.length - passedCount;
   return {
@@ -6618,6 +6757,51 @@ export async function runMemoryAcceptanceSuite(params: {
       220,
     ),
   };
+}
+
+export function formatMemoryAcceptanceReport(
+  report: MemoryAcceptanceReport,
+  format: MemoryAcceptanceReportFormat = "json",
+): string {
+  if (format === "json") {
+    return `${JSON.stringify(report, null, 2)}\n`;
+  }
+  if (format === "summary") {
+    const lines = [
+      `summary: ${report.summary}`,
+      `scenarios: ${report.passedCount}/${report.scenarioCount}`,
+    ];
+    if (report.failedCount > 0) {
+      lines.push(
+        `failed: ${report.scenarios
+          .filter((scenario) => !scenario.passed)
+          .map((scenario) => scenario.scenario)
+          .join(", ")}`,
+      );
+    }
+    return `${lines.join("\n")}\n`;
+  }
+  const lines = [
+    "# Memory Acceptance Report",
+    "",
+    `- Summary: ${report.summary}`,
+    `- Passed scenarios: ${report.passedCount}/${report.scenarioCount}`,
+    `- Failed scenarios: ${report.failedCount}`,
+    "",
+    "## Scenarios",
+    "",
+  ];
+  for (const scenario of report.scenarios) {
+    lines.push(
+      `### ${scenario.scenario}`,
+      "",
+      `- Passed: ${scenario.passed ? "yes" : "no"}`,
+      `- Summary: ${scenario.summary}`,
+      `- Details: ${scenario.details.length > 0 ? scenario.details.join("; ") : "none"}`,
+      "",
+    );
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function userMessageForSuite(content: string): AgentMessage {

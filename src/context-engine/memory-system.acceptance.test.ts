@@ -15,7 +15,7 @@ describe("memory system acceptance suite", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.scenarioCount).toBeGreaterThanOrEqual(15);
+    expect(report.scenarioCount).toBeGreaterThanOrEqual(16);
     expect(report.failedCount).toBe(0);
     expect(report.summary).toContain("acceptance");
     expect(report.scenarios.every((scenario) => scenario.details.length > 0)).toBe(true);
@@ -56,7 +56,7 @@ describe("memory system acceptance suite", () => {
     expect(invalidation?.summary).toContain("superseded=");
   });
 
-  it("includes entity resolution, evidence priority, weak-evidence governance, rivalry governance, handoff continuity, store recovery, soak, long-run lifecycle, and scope-matrix scenarios", async () => {
+  it("includes entity resolution, evidence priority, weak-evidence governance, rivalry governance, handoff continuity, store recovery, soak, long-run lifecycle, scope-matrix, and multi-tenant release scenarios", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-acceptance-"));
 
     const report = await runMemoryAcceptanceSuite({
@@ -90,6 +90,9 @@ describe("memory system acceptance suite", () => {
     const scopeMatrix = report.scenarios.find(
       (scenario) => scenario.scenario === "scope_matrix_resilience",
     );
+    const multiTenantRelease = report.scenarios.find(
+      (scenario) => scenario.scenario === "multi_tenant_release_handoff",
+    );
 
     expect(entityResolution?.passed).toBe(true);
     expect(entityResolution?.summary).toContain("entity-visible=");
@@ -109,5 +112,7 @@ describe("memory system acceptance suite", () => {
     expect(longRun?.summary).toContain("long-run constraints=");
     expect(scopeMatrix?.passed).toBe(true);
     expect(scopeMatrix?.summary).toContain("scope-matrix concepts=");
+    expect(multiTenantRelease?.passed).toBe(true);
+    expect(multiTenantRelease?.summary).toContain("multi-tenant beta-visible=");
   });
 });

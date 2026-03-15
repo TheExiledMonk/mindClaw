@@ -38,6 +38,22 @@ pnpm memory:diagnostics:markdown --session my-session --backend sqlite-graph --a
 
 Use this when you want a shareable operator report.
 
+### Acceptance Summary
+
+```bash
+pnpm memory:acceptance:summary --backend fs-json --backend sqlite-graph
+```
+
+Use this for a quick release-style validation pass.
+
+### Acceptance Markdown
+
+```bash
+pnpm memory:acceptance:markdown --backend fs-json --backend sqlite-graph --out .artifacts/memory/acceptance.md
+```
+
+Use this when you want a shareable acceptance report separate from the diagnostics report.
+
 ### Strict Production Gate
 
 ```bash
@@ -109,14 +125,16 @@ The acceptance suite currently covers:
 - mixed lifecycle soak
 - project lifecycle long run
 - scope matrix resilience
+- multi-tenant release handoff
 
 ## Recommended Release Workflow
 
 1. Run diagnostics in summary mode.
 2. Run diagnostics again with acceptance and strict failure flags.
-3. If issues remain, inspect contested, fragile, or weak winners before release.
-4. If the store is unhealthy, run repair or recovery and rerun diagnostics.
-5. Save a markdown report for release evidence if needed.
+3. Run `pnpm memory:acceptance:summary --backend fs-json --backend sqlite-graph`.
+4. If issues remain, inspect contested, fragile, or weak winners before release.
+5. If the store is unhealthy, run repair or recovery and rerun diagnostics.
+6. Save markdown diagnostics and acceptance reports for release evidence if needed.
 
 ## Current Backend Guidance
 

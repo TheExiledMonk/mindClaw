@@ -323,6 +323,7 @@ export type AgenticQualityGateReport = {
   diagnostics: AgenticExecutionObservabilityReport;
   weakeningSkills: string[];
   effectiveSkills: string[];
+  recoveringSkills: string[];
   effectivenessTrend?: "stable" | "watch" | "regressing";
   summary: string;
 };
@@ -372,6 +373,7 @@ type ProceduralMemorySkillSignal = {
   recommendedSkills: string[];
   weightedSkills: Map<string, number>;
   weightedFamilies: Map<string, number>;
+  recoveringSkills: string[];
   workflowChains: string[][];
   multiSkillHint: boolean;
 };
@@ -456,14 +458,16 @@ function extractProceduralMemorySkillSignals(params: {
   const workflowHints = extractProceduralWorkflowChains(params);
   const weightedSkills = new Map<string, number>();
   const weightedFamilies = new Map<string, number>();
+  const availableSkills = params.availableSkills;
   for (const skill of recommendedSkills) {
     weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + 2.5);
   }
-  if (!params.memoryText || !params.availableSkills || params.availableSkills.length === 0) {
+  if (!params.memoryText || !availableSkills || availableSkills.length === 0) {
     return {
       recommendedSkills,
       weightedSkills,
       weightedFamilies,
+      recoveringSkills: [],
       workflowChains: workflowHints.chains,
       multiSkillHint: workflowHints.multiSkillHint,
     };
@@ -493,7 +497,7 @@ function extractProceduralMemorySkillSignals(params: {
             normalizedLine.includes("failure pattern hard_failure")
           ? -0.75
           : 0;
-    for (const skill of params.availableSkills) {
+    for (const skill of availableSkills) {
       const normalizedSkill = skill.toLowerCase();
       if (!normalizedLine.includes(normalizedSkill)) {
         continue;
@@ -537,17 +541,48 @@ function extractProceduralMemorySkillSignals(params: {
     if (Number.isFinite(score) && params.preferredEnv && scopedEnv) {
       score *= scopedEnv === params.preferredEnv ? 1.15 : score >= 0 ? -0.15 : 0.15;
     }
-    if (skill && Number.isFinite(score) && params.availableSkills.includes(skill)) {
+    if (skill && Number.isFinite(score) && availableSkills.includes(skill)) {
       weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
     }
     if (family && Number.isFinite(score)) {
       weightedFamilies.set(family, (weightedFamilies.get(family) ?? 0) + score);
     }
   }
+  const recoveryMatch = params.memoryText.match(/Skill recovery guidance:\s*((?:\n-\s+[^\n]+)+)/i);
+  const recoveryLines = recoveryMatch
+    ? recoveryMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
+  const recoveringSkills = uniqueCompact(
+    recoveryLines.flatMap((line) => {
+      const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+      return skill && availableSkills.includes(skill) ? [skill] : [];
+    }),
+    6,
+  );
+  for (const line of recoveryLines) {
+    const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedTaskMode = line.match(/task_mode=([a-z0-9._-]+)/i)?.[1]?.trim();
+    const scopedEnv = line.match(/env=([a-z0-9._-]+)/i)?.[1]?.trim();
+    if (!skill || !availableSkills.includes(skill)) {
+      continue;
+    }
+    let score = -0.35;
+    if (params.taskMode && scopedTaskMode && scopedTaskMode === params.taskMode) {
+      score += 0.15;
+    }
+    if (params.preferredEnv && scopedEnv && scopedEnv === params.preferredEnv) {
+      score += 0.1;
+    }
+    weightedSkills.set(skill, (weightedSkills.get(skill) ?? 0) + score);
+  }
   return {
     recommendedSkills,
     weightedSkills,
     weightedFamilies,
+    recoveringSkills,
     workflowChains: workflowHints.chains,
     multiSkillHint: workflowHints.multiSkillHint,
   };
@@ -3653,11 +3688,13 @@ export function runAgenticQualityGate(params?: {
   failOnEscalation?: boolean;
   failOnMissingFallback?: boolean;
   failOnWeakeningSkills?: boolean;
+  failOnRecoveringSkills?: boolean;
   acceptanceOverride?: AgenticAcceptanceReport;
   soakOverride?: AgenticSoakReport;
   memoryTrend?: {
     weakeningSkills?: string[];
     effectiveSkills?: string[];
+    recoveringSkills?: string[];
     trend?: "stable" | "watch" | "regressing";
   };
 }): AgenticQualityGateReport {
@@ -3669,6 +3706,7 @@ export function runAgenticQualityGate(params?: {
   const diagnostics = inspectAgenticExecutionObservability(diagnosticsState);
   const weakeningSkills = uniqueCompact(params?.memoryTrend?.weakeningSkills ?? [], 6);
   const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
+  const recoveringSkills = uniqueCompact(params?.memoryTrend?.recoveringSkills ?? [], 6);
   const effectivenessTrend = params?.memoryTrend?.trend;
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
@@ -3682,11 +3720,16 @@ export function runAgenticQualityGate(params?: {
     params?.failOnWeakeningSkills && weakeningSkills.length > 0
       ? "weakening_scoped_skills"
       : undefined,
+    params?.failOnRecoveringSkills && recoveringSkills.length > 0
+      ? "recovering_scoped_skills"
+      : undefined,
   ].filter((reason): reason is string => Boolean(reason));
   const diagnosticsPassed =
     (!params?.failOnEscalation || !diagnostics.escalationRequired) &&
     (!params?.failOnMissingFallback || diagnostics.hasViableFallback);
-  const effectivenessPassed = !params?.failOnWeakeningSkills || weakeningSkills.length === 0;
+  const effectivenessPassed =
+    (!params?.failOnWeakeningSkills || weakeningSkills.length === 0) &&
+    (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
   const passed = acceptance.passed && soak.passed && diagnosticsPassed && effectivenessPassed;
   return {
     passed,
@@ -3700,6 +3743,7 @@ export function runAgenticQualityGate(params?: {
     diagnostics,
     weakeningSkills,
     effectiveSkills,
+    recoveringSkills,
     effectivenessTrend,
     summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"} effectiveness=${effectivenessPassed ? "pass" : "fail"}`,
   };
@@ -3720,6 +3764,7 @@ export function formatAgenticQualityGateReport(
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `weakening_skills=${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(",") : "none"}`,
+      `recovering_skills=${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(",") : "none"}`,
       `fail_reasons=${report.failReasons.length > 0 ? report.failReasons.join(",") : "none"}`,
     ];
     return `${lines.join("\n")}\n`;
@@ -3750,6 +3795,7 @@ export function formatAgenticQualityGateReport(
     `- Trend: ${report.effectivenessTrend ?? "unknown"}`,
     `- Effective skills: ${report.effectiveSkills.length > 0 ? report.effectiveSkills.join(", ") : "none"}`,
     `- Weakening skills: ${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(", ") : "none"}`,
+    `- Recovering skills: ${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(", ") : "none"}`,
   ];
   return `${lines.join("\n")}\n`;
 }

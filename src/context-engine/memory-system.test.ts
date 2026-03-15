@@ -3359,6 +3359,121 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("score=");
   });
 
+  it("injects skill recovery guidance into retrieved memory packets", () => {
+    const weakeningCompiled = compileMemoryState({
+      sessionId: "agent:skill-recovery-guidance-packet",
+      messages: [userMessage("Track a recovered diagnostics workflow without over-promoting it.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "uncertain",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "none",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: true,
+          retryClass: "same_path_retry",
+          suggestedSkill: undefined,
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: [],
+          skillChain: ["diagnostics-repair"],
+          workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+          rankedSkills: ["diagnostics-repair"],
+          prerequisiteWarnings: [],
+          capabilityGaps: ["no_viable_fallback"],
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "blocked_path",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Do not promote the weak diagnostics path yet.",
+          planSteps: [],
+        },
+      } as never,
+    });
+    const recoveredCompiled = compileMemoryState({
+      sessionId: "agent:skill-recovery-guidance-packet",
+      messages: [userMessage("Track a recovered diagnostics workflow without over-promoting it.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair", "acceptance-report"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: ["acceptance-report"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "extend_existing",
+          overlappingSkills: ["acceptance-report"],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: false,
+          retryClass: "skill_fallback",
+          suggestedSkill: "acceptance-report",
+          shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: ["acceptance-report"],
+          skillChain: ["diagnostics-repair", "acceptance-report"],
+          workflowSteps: [
+            { skill: "diagnostics-repair", role: "primary" },
+            { skill: "acceptance-report", role: "fallback" },
+          ],
+          rankedSkills: ["diagnostics-repair", "acceptance-report"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          multiSkillCandidate: true,
+          chainedWorkflow: true,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "recovered_path",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "Keep watching the recovered diagnostics path before promotion.",
+          planSteps: [],
+        },
+      } as never,
+    });
+    for (const entry of weakeningCompiled.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of recoveredCompiled.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    weakeningCompiled.longTermMemory.push(...recoveredCompiled.longTermMemory);
+
+    const packet = retrieveMemoryContextPacket(weakeningCompiled, {
+      messages: [userMessage("Which recovered diagnostics path is still watch-only?")],
+    });
+
+    expect(packet.text).toContain("Skill recovery guidance:");
+    expect(packet.text).toContain("skill=diagnostics-repair");
+    expect(packet.text).toContain("state=recovered_watch");
+  });
+
   it("includes maintenance details when diagnostics runs repair", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-diagnostics-repair-"));
     const sessionId = "agent:diagnostics-repair";

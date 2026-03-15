@@ -6413,6 +6413,7 @@ export function retrieveMemoryContextPacket(
   if (proceduralGuidance.length > 0) {
     const recommendedSkills = recommendProceduralSkillsFromEntries(proceduralGuidance);
     const effectivenessGuidance = deriveSkillEffectivenessGuidance(proceduralGuidance);
+    const recoveryGuidance = deriveRecoveringScopedSkills(proceduralGuidance);
     if (recommendedSkills.length > 0) {
       sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
     }
@@ -6423,6 +6424,17 @@ export function retrieveMemoryContextPacket(
             (item) =>
               `skill=${item.skill} family=${item.family} task_mode=${item.taskMode} workspace=${item.workspaceKind} env=${item.env} validation=${item.validation} score=${item.score.toFixed(2)} evidence=${item.evidenceCount}`,
           )
+          .join("\n- ")}`,
+      );
+    }
+    if (recoveryGuidance.length > 0) {
+      sections.push(
+        `Skill recovery guidance:\n- ${recoveryGuidance
+          .map((item) => {
+            const [skill, scope] = item.split("@");
+            const [taskMode, env] = (scope ?? "").split("/");
+            return `skill=${skill} task_mode=${taskMode || "general"} env=${env || "unknown"} state=recovered_watch`;
+          })
           .join("\n- ")}`,
       );
     }

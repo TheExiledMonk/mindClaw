@@ -57,6 +57,22 @@ describe("agentic quality gate", () => {
     expect(report.weakeningSkills).toContain("diagnostics-repair@debugging/node");
   });
 
+  it("can fail the effectiveness portion when recovering scoped skills are disallowed", () => {
+    const report = runAgenticQualityGate({
+      failOnRecoveringSkills: true,
+      memoryTrend: {
+        trend: "watch",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        recoveringSkills: ["diagnostics-repair@debugging/node"],
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.effectivenessPassed).toBe(false);
+    expect(report.failReasons).toContain("recovering_scoped_skills");
+    expect(report.recoveringSkills).toContain("diagnostics-repair@debugging/node");
+  });
+
   it("formats the quality gate report in summary and markdown forms", () => {
     const report = runAgenticQualityGate({
       memoryTrend: {
@@ -67,6 +83,7 @@ describe("agentic quality gate", () => {
     });
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("agentic quality gate");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("recovering_skills=");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "# Agentic Quality Gate Report",
     );

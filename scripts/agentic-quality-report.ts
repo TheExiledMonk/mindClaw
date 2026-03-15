@@ -33,6 +33,7 @@ function parseArgs(argv: string[]): {
   failOnEscalation: boolean;
   failOnMissingFallback: boolean;
   failOnWeakeningSkills: boolean;
+  failOnRecoveringSkills: boolean;
 } {
   let format: "json" | "summary" | "markdown" = "json";
   let outputPath: string | undefined;
@@ -43,6 +44,7 @@ function parseArgs(argv: string[]): {
   let failOnEscalation = false;
   let failOnMissingFallback = false;
   let failOnWeakeningSkills = false;
+  let failOnRecoveringSkills = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const next = argv[index + 1];
@@ -86,6 +88,10 @@ function parseArgs(argv: string[]): {
     }
     if (arg === "--fail-on-weakening-skills") {
       failOnWeakeningSkills = true;
+      continue;
+    }
+    if (arg === "--fail-on-recovering-skills") {
+      failOnRecoveringSkills = true;
     }
   }
   return {
@@ -99,6 +105,7 @@ function parseArgs(argv: string[]): {
     failOnEscalation,
     failOnMissingFallback,
     failOnWeakeningSkills,
+    failOnRecoveringSkills,
   };
 }
 
@@ -108,6 +115,7 @@ async function main(): Promise<void> {
     | {
         weakeningSkills?: string[];
         effectiveSkills?: string[];
+        recoveringSkills?: string[];
         trend?: "stable" | "watch" | "regressing";
       }
     | undefined;
@@ -122,6 +130,7 @@ async function main(): Promise<void> {
       ? {
           weakeningSkills: diagnostics.agenticTrends.weakeningSkills,
           effectiveSkills: diagnostics.agenticTrends.effectiveSkills,
+          recoveringSkills: diagnostics.agenticTrends.recoveringSkills,
           trend: diagnostics.agenticTrends.trend,
         }
       : undefined;
@@ -131,6 +140,7 @@ async function main(): Promise<void> {
     failOnEscalation: args.failOnEscalation,
     failOnMissingFallback: args.failOnMissingFallback,
     failOnWeakeningSkills: args.failOnWeakeningSkills,
+    failOnRecoveringSkills: args.failOnRecoveringSkills,
     memoryTrend,
   });
   const payload = formatAgenticQualityGateReport(report, args.format);
@@ -144,7 +154,8 @@ async function main(): Promise<void> {
     (args.failOnSoak && !report.soakPassed) ||
     (args.failOnEscalation && !report.diagnosticsPassed) ||
     (args.failOnMissingFallback && !report.diagnosticsPassed) ||
-    (args.failOnWeakeningSkills && !report.effectivenessPassed)
+    (args.failOnWeakeningSkills && !report.effectivenessPassed) ||
+    (args.failOnRecoveringSkills && !report.effectivenessPassed)
   ) {
     process.exitCode = 1;
   }

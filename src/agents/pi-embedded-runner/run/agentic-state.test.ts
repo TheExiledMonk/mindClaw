@@ -364,6 +364,31 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.consolidationAction).toBe("extend_existing");
   });
 
+  it("treats recovered scoped skills as watch-only compared with a stronger stable sibling", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Fix the diagnostics workflow and prefer the most stable reusable path."),
+      ],
+      availableSkills: ["diagnostics-repair", "acceptance-report"],
+      likelySkills: ["diagnostics-repair"],
+      availableSkillInfo: [
+        { name: "diagnostics-repair", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill effectiveness guidance:",
+        "- skill=diagnostics-repair family=diagnostics task_mode=general workspace=project env=node validation=exec score=2.20 evidence=3",
+        "- skill=acceptance-report family=verification task_mode=general workspace=project env=node validation=exec score=2.40 evidence=3",
+        "Skill recovery guidance:",
+        "- skill=diagnostics-repair task_mode=general env=node state=recovered_watch",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.rankedSkills[0]).toBe("acceptance-report");
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+  });
+
   it("uses memory-weighted orchestration to choose the fallback skill", () => {
     const state = buildAgenticExecutionState({
       messages: [

@@ -2770,6 +2770,218 @@ describe("MemorySystemContextEngine", () => {
     expect(markdown).toContain("## Agentic Trends");
   });
 
+  it("surfaces scoped effective and weakening skills in agentic diagnostics trends", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-agentic-effectiveness-"),
+    );
+    const sessionId = "agent:agentic-effectiveness-trends";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [userMessage("Track which scoped workflows are getting stronger or weaker.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["acceptance-report", "memory-diagnostics"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: ["memory-diagnostics"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "extend_existing",
+          overlappingSkills: ["acceptance-report", "memory-diagnostics"],
+          skillFamilies: ["verification"],
+          nearMissCandidate: false,
+          retryClass: "skill_fallback",
+          suggestedSkill: "memory-diagnostics",
+          shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "acceptance-report",
+          fallbackSkills: ["memory-diagnostics"],
+          skillChain: ["acceptance-report", "memory-diagnostics"],
+          workflowSteps: [
+            { skill: "acceptance-report", role: "primary" },
+            { skill: "memory-diagnostics", role: "fallback" },
+          ],
+          rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          effectiveSkills: ["acceptance-report"],
+          effectiveFamilies: ["verification"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: true,
+          chainedWorkflow: true,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: true,
+          failureReasons: [],
+          nextImprovement: "Keep reusing the acceptance-report path in node debugging work.",
+        },
+        agenticObservability: {
+          version: 1,
+          summary:
+            "retry=skill_fallback autonomy=fallback risk=medium failure=blocked_path fallback=missing",
+          retryClass: "skill_fallback",
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          primarySkill: "acceptance-report",
+          suggestedSkill: "memory-diagnostics",
+          workflowSteps: [],
+          rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          effectiveSkills: ["acceptance-report"],
+          effectiveFamilies: ["verification"],
+          consolidationAction: "none",
+          overlappingSkills: [],
+          capabilityGaps: ["no_viable_fallback"],
+          failurePattern: "blocked_path",
+          hasViableFallback: false,
+          escalationRequired: false,
+          planSteps: [],
+          goalSatisfaction: "partial",
+          unresolvedCriteria: ["find a viable fallback"],
+          recommendations: ["Add or learn a viable fallback workflow before retrying."],
+        },
+        agenticQualityGate: {
+          passed: false,
+          acceptancePassed: true,
+          soakPassed: true,
+          diagnosticsPassed: false,
+          failReasons: ["diagnostics_missing_fallback"],
+          acceptance: {
+            passed: true,
+            totalScenarios: 16,
+            passedScenarios: 16,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic acceptance 16/16 passed",
+          },
+          soak: {
+            passed: true,
+            totalScenarios: 2,
+            passedScenarios: 2,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic soak 2/2 passed",
+          },
+          diagnostics: {
+            summary:
+              "retry=skill_fallback autonomy=fallback risk=medium failure=blocked_path fallback=missing",
+            retryClass: "skill_fallback",
+            autonomyMode: "fallback",
+            riskLevel: "medium",
+            primarySkill: "acceptance-report",
+            suggestedSkill: "memory-diagnostics",
+            workflowSteps: [],
+            rankedSkills: ["acceptance-report", "memory-diagnostics"],
+            effectiveSkills: ["acceptance-report"],
+            effectiveFamilies: ["verification"],
+            consolidationAction: "none",
+            overlappingSkills: [],
+            capabilityGaps: ["no_viable_fallback"],
+            failurePattern: "blocked_path",
+            hasViableFallback: false,
+            escalationRequired: false,
+            planSteps: [],
+            goalSatisfaction: "partial",
+            unresolvedCriteria: ["find a viable fallback"],
+            recommendations: ["Add or learn a viable fallback workflow before retrying."],
+          },
+          summary: "agentic quality gate acceptance=pass soak=pass diagnostics=fail",
+        },
+      } as never,
+    });
+    const weakeningSnapshot = compileMemoryState({
+      sessionId,
+      messages: [userMessage("Track which scoped workflows are getting stronger or weaker.")],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["diagnostics-repair"],
+          likelySkills: ["diagnostics-repair"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "uncertain",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "none",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          nearMissCandidate: true,
+          retryClass: "same_path_retry",
+          suggestedSkill: undefined,
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: ["planner:unknown"],
+          primarySkill: "diagnostics-repair",
+          fallbackSkills: [],
+          skillChain: ["diagnostics-repair"],
+          workflowSteps: [{ skill: "diagnostics-repair", role: "primary" }],
+          rankedSkills: ["diagnostics-repair"],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: ["no_viable_fallback"],
+          hasViableFallback: false,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "blocked_path",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Avoid reusing the weak diagnostics repair path in this scope.",
+        },
+      } as never,
+    });
+    snapshot.longTermMemory.push(...weakeningSnapshot.longTermMemory);
+    snapshot.pendingSignificance.push(...weakeningSnapshot.pendingSignificance);
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+    });
+
+    expect(report.agenticTrends?.effectiveSkills).toContain("acceptance-report@debugging/node");
+    expect(report.agenticTrends?.effectiveFamilies).toContain("verification@debugging/node");
+    expect(report.agenticTrends?.weakeningSkills).toContain("diagnostics-repair@debugging/node");
+    expect(report.recommendations).toContain(
+      "review weakening scoped skills before extending or promoting the current workflow family",
+    );
+    const summary = formatMemoryDiagnosticsReport(report, "summary");
+    const markdown = formatMemoryDiagnosticsReport(report, "markdown");
+    expect(summary).toContain("agentic_effective_skills:");
+    expect(markdown).toContain("Effective skills:");
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("injects agentic regression guidance into retrieved memory packets", () => {
     const compiled = compileMemoryState({
       sessionId: "agent:agentic-regression-packet",

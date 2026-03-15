@@ -394,6 +394,9 @@ export type MemoryAgenticTrendReport = {
   failingSoakSignals: number;
   failingQualityGateSignals: number;
   qualityFailureReasons: string[];
+  effectiveSkills: string[];
+  effectiveFamilies: string[];
+  weakeningSkills: string[];
   latestSummaries: string[];
   trend: "stable" | "watch" | "regressing";
   summary: string;
@@ -8043,7 +8046,10 @@ function inspectMemoryAgenticTrends(
       (entry.environmentTags ?? []).some((tag) => tag.startsWith("runtime:agentic-")),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  if (agenticEntries.length === 0) {
+  const proceduralEntries = snapshot.longTermMemory
+    .filter((entry) => (entry.environmentTags ?? []).includes("runtime:procedural"))
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (agenticEntries.length === 0 && proceduralEntries.length === 0) {
     return undefined;
   }
   const observabilitySignals = agenticEntries.filter((entry) =>
@@ -8074,6 +8080,21 @@ function inspectMemoryAgenticTrends(
         .map((tag) => tag.replace("agentic:quality-failure:", "")),
     ),
   );
+  const effectivenessGuidance = deriveSkillEffectivenessGuidance(proceduralEntries);
+  const effectiveSkills = effectivenessGuidance
+    .filter((item) => item.score >= 1.5)
+    .slice(0, 3)
+    .map((item) => `${item.skill}@${item.taskMode}/${item.env}`);
+  const effectiveFamilies = uniqueStrings(
+    effectivenessGuidance
+      .filter((item) => item.score >= 1)
+      .slice(0, 4)
+      .map((item) => `${item.family}@${item.taskMode}/${item.env}`),
+  ).slice(0, 3);
+  const weakeningSkills = effectivenessGuidance
+    .filter((item) => item.score <= -0.5)
+    .slice(0, 3)
+    .map((item) => `${item.skill}@${item.taskMode}/${item.env}`);
   const latestSummaries = agenticEntries.slice(0, 3).map((entry) => clipText(entry.text, 160));
   const trend =
     failingQualityGateSignals > 0 || failingSoakSignals > 0
@@ -8091,6 +8112,9 @@ function inspectMemoryAgenticTrends(
     failingSoakSignals,
     failingQualityGateSignals,
     qualityFailureReasons,
+    effectiveSkills,
+    effectiveFamilies,
+    weakeningSkills,
     latestSummaries,
     trend,
     summary: clipText(
@@ -8101,6 +8125,8 @@ function inspectMemoryAgenticTrends(
         `escalations=${escalationSignals}`,
         `soak_failures=${failingSoakSignals}`,
         `quality_failures=${failingQualityGateSignals}`,
+        effectiveSkills.length > 0 ? `effective=${effectiveSkills.join(",")}` : "",
+        weakeningSkills.length > 0 ? `weakening=${weakeningSkills.join(",")}` : "",
         qualityFailureReasons.length > 0 ? `reasons=${qualityFailureReasons.join(",")}` : "",
       ]
         .filter(Boolean)
@@ -8177,6 +8203,9 @@ export async function generateMemoryDiagnosticsReport(params: {
       : agenticTrends?.trend === "watch"
         ? ["monitor agentic fallback and escalation drift before promotion"]
         : []),
+    ...(agenticTrends?.weakeningSkills.length
+      ? ["review weakening scoped skills before extending or promoting the current workflow family"]
+      : []),
   ]);
   const summary = clipText(
     [
@@ -8226,6 +8255,12 @@ export function formatMemoryDiagnosticsReport(
     }
     if (report.agenticTrends) {
       lines.push(`agentic: ${report.agenticTrends.summary}`);
+      if (report.agenticTrends.effectiveSkills.length > 0) {
+        lines.push(`agentic_effective_skills: ${report.agenticTrends.effectiveSkills.join(", ")}`);
+      }
+      if (report.agenticTrends.weakeningSkills.length > 0) {
+        lines.push(`agentic_weakening_skills: ${report.agenticTrends.weakeningSkills.join(", ")}`);
+      }
     }
     if (report.failedAcceptanceScenarios.length > 0) {
       lines.push(`failed_acceptance: ${report.failedAcceptanceScenarios.join(", ")}`);
@@ -8274,6 +8309,9 @@ export function formatMemoryDiagnosticsReport(
       `- Failing soak signals: ${report.agenticTrends.failingSoakSignals}`,
       `- Failing quality-gate signals: ${report.agenticTrends.failingQualityGateSignals}`,
       `- Quality failure reasons: ${report.agenticTrends.qualityFailureReasons.length > 0 ? report.agenticTrends.qualityFailureReasons.join(", ") : "none"}`,
+      `- Effective skills: ${report.agenticTrends.effectiveSkills.length > 0 ? report.agenticTrends.effectiveSkills.join(", ") : "none"}`,
+      `- Effective families: ${report.agenticTrends.effectiveFamilies.length > 0 ? report.agenticTrends.effectiveFamilies.join(", ") : "none"}`,
+      `- Weakening skills: ${report.agenticTrends.weakeningSkills.length > 0 ? report.agenticTrends.weakeningSkills.join(", ") : "none"}`,
       `- Latest summaries: ${report.agenticTrends.latestSummaries.length > 0 ? report.agenticTrends.latestSummaries.join("; ") : "none"}`,
       "",
     );

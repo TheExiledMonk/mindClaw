@@ -266,6 +266,7 @@ export type AgenticAcceptanceScenarioId =
   | "long_run_recovery_reaches_goal_satisfaction"
   | "weakening_skills_quality_gate"
   | "stable_reuse_observability_alignment"
+  | "stable_reuse_promotion_alignment"
   | "recovering_skills_guidance_alignment";
 
 export type AgenticAcceptanceScenarioResult = {
@@ -3266,6 +3267,53 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
 
   {
     const report = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "stable",
+        effectiveSkills: ["acceptance-report@debugging/node"],
+        stabilizedSkills: ["acceptance-report@debugging/node"],
+      },
+    });
+    const summary = formatAgenticQualityGateReport(report, "summary");
+    const markdown = formatAgenticQualityGateReport(report, "markdown");
+    const passed =
+      report.passed &&
+      report.effectivenessPassed &&
+      report.stabilizedSkills.includes("acceptance-report@debugging/node") &&
+      report.recommendations.includes(
+        "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+      ) &&
+      summary.includes("stabilized_skills=acceptance-report@debugging/node") &&
+      markdown.includes(
+        "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+      );
+    scenarios.push({
+      id: "stable_reuse_promotion_alignment",
+      passed,
+      summary: passed
+        ? "Stable scoped skills trigger explicit promotion guidance once the path is durable."
+        : "Stable scoped skills did not trigger the expected promotion guidance.",
+      details: `stabilized=${report.stabilizedSkills.join("|")} recommendations=${report.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const report = runAgenticQualityGate({
       failOnWeakeningSkills: true,
       acceptanceOverride: {
         passed: true,
@@ -3970,6 +4018,7 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
       memoryTrend: {
         trend: "stable",
         effectiveSkills: ["acceptance-report@debugging/node", "diagnostics-repair@debugging/node"],
+        stabilizedSkills: ["diagnostics-repair@debugging/node"],
         recoveringSkills: [],
       },
     });
@@ -3994,8 +4043,11 @@ export function runAgenticSoakSuite(): AgenticSoakReport {
           buildAgenticHandoffReport(stabilizedState).pendingSteps.length === 0 &&
           stabilizedGate.passed &&
           stabilizedGate.effectivenessPassed &&
-          stabilizedGate.recoveringSkills.length === 0,
-        details: `quality_gate=${stabilizedGate.summary}`,
+          stabilizedGate.recoveringSkills.length === 0 &&
+          stabilizedGate.recommendations.includes(
+            "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+          ),
+        details: `quality_gate=${stabilizedGate.summary} recommendations=${stabilizedGate.recommendations.join("|")}`,
       }),
     ];
     const passed = phases.every((phase) => phase.passed);

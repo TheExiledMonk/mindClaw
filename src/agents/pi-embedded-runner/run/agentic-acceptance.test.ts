@@ -5,7 +5,7 @@ describe("agentic acceptance suite", () => {
   it("passes the built-in acceptance scenarios", () => {
     const report = runAgenticAcceptanceSuite();
     expect(report.passed).toBe(true);
-    expect(report.totalScenarios).toBeGreaterThanOrEqual(19);
+    expect(report.totalScenarios).toBeGreaterThanOrEqual(20);
     expect(report.failedScenarioIds).toEqual([]);
     const recoveringScenario = report.scenarios.find(
       (scenario) => scenario.id === "recovering_skills_guidance_alignment",
@@ -15,6 +15,10 @@ describe("agentic acceptance suite", () => {
       (scenario) => scenario.id === "stable_reuse_observability_alignment",
     );
     expect(stableReuseScenario?.passed).toBe(true);
+    const stablePromotionScenario = report.scenarios.find(
+      (scenario) => scenario.id === "stable_reuse_promotion_alignment",
+    );
+    expect(stablePromotionScenario?.passed).toBe(true);
   });
 
   it("formats the acceptance report in summary and markdown forms", () => {

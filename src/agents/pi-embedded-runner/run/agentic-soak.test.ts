@@ -31,6 +31,9 @@ describe("agentic soak suite", () => {
     );
     expect(recoveredWatchLifecycle?.phases[0]?.passed).toBe(true);
     expect(recoveredWatchLifecycle?.phases.at(-1)?.passed).toBe(true);
+    expect(recoveredWatchLifecycle?.phases.at(-1)?.details).toContain(
+      "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+    );
   });
 
   it("formats the soak report in summary and markdown forms", () => {

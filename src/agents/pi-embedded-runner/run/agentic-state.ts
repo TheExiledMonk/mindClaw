@@ -365,6 +365,9 @@ type AgenticRegressionMemorySignal = {
   missingFallbackRegression: boolean;
   escalationRegression: boolean;
   qualityFailureReasons: string[];
+  regressingSkillFamilies: string[];
+  consolidationPreferredFamilies: string[];
+  preferredFallbackSkills: string[];
 };
 
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
@@ -513,20 +516,18 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
       missingFallbackRegression: false,
       escalationRegression: false,
       qualityFailureReasons: [],
+      regressingSkillFamilies: [],
+      consolidationPreferredFamilies: [],
+      preferredFallbackSkills: [],
     };
   }
   const match = memoryText.match(/Agentic regression guidance:\s*((?:\n-\s+[^\n]+)+)/i);
-  if (!match) {
-    return {
-      missingFallbackRegression: false,
-      escalationRegression: false,
-      qualityFailureReasons: [],
-    };
-  }
-  const lines = match[1]
-    .split("\n")
-    .map((line) => line.replace(/^\s*-\s+/, "").trim())
-    .filter(Boolean);
+  const lines = match
+    ? match[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
   const qualityFailureReasons = uniqueCompact(
     lines.flatMap((line) => {
       const reasonsMatch = line.match(/reasons=([a-z0-9_,.-]+)/i);
@@ -540,6 +541,36 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     }),
     6,
   );
+  const familyMatch = memoryText.match(/Skill family guidance:\s*((?:\n-\s+[^\n]+)+)/i);
+  const familyLines = familyMatch
+    ? familyMatch[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
+  const regressingSkillFamilies = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const trend = line.match(/trend=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      return family && (trend === "regressing" || trend === "watch") ? [family] : [];
+    }),
+    6,
+  );
+  const consolidationPreferredFamilies = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const consolidation = line.match(/consolidation=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      return family && consolidation && consolidation !== "none" ? [family] : [];
+    }),
+    6,
+  );
+  const preferredFallbackSkills = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const fallback = line.match(/preferred_fallback=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      return fallback ? [fallback] : [];
+    }),
+    6,
+  );
   const normalized = lines.join("\n").toLowerCase();
   return {
     missingFallbackRegression:
@@ -549,6 +580,9 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     escalationRegression:
       normalized.includes("escalation") || normalized.includes("trend=regressing"),
     qualityFailureReasons,
+    regressingSkillFamilies,
+    consolidationPreferredFamilies,
+    preferredFallbackSkills,
   };
 }
 
@@ -1257,6 +1291,9 @@ function buildOrchestrationState(params: {
     missingFallbackRegression: false,
     escalationRegression: false,
     qualityFailureReasons: [],
+    regressingSkillFamilies: [],
+    consolidationPreferredFamilies: [],
+    preferredFallbackSkills: [],
   };
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const currentLikelySkill = likelySkills[0];
@@ -1352,6 +1389,18 @@ function buildOrchestrationState(params: {
           score += 1.25;
           reasons.push("memory-regression-escape");
         }
+      }
+      if (
+        memoryRegressionSignals.regressingSkillFamilies.includes(inferSkillFamily(skill.name)) &&
+        (params.plannerState?.status === "needs_replan" ||
+          params.plannerState?.status === "blocked")
+      ) {
+        score -= 1.25;
+        reasons.push("family-regression-guard");
+      }
+      if (memoryRegressionSignals.preferredFallbackSkills.includes(skill.name)) {
+        score += 1.75;
+        reasons.push("family-guided-fallback");
       }
       return { skill: skill.name, score, reasons };
     })
@@ -1450,8 +1499,11 @@ function buildOrchestrationState(params: {
       params.taskMode === "operations" ||
       params.taskMode === "coding" ||
       params.taskMode === "debugging");
+  const overlapFamilies = overlapSignals.families.filter((family) =>
+    memoryRegressionSignals.consolidationPreferredFamilies.includes(family),
+  );
   const consolidationAction: AgenticConsolidationAction =
-    overlapSignals.overlappingSkills.length >= 3
+    overlapSignals.overlappingSkills.length >= 3 || overlapFamilies.length > 0
       ? "generalize_existing"
       : overlapSignals.overlappingSkills.length >= 2 || multiSkillCandidate
         ? "extend_existing"
@@ -1459,7 +1511,7 @@ function buildOrchestrationState(params: {
           ? "create_new"
           : "none";
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${overlapFamilies.length > 0 ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -1573,6 +1625,9 @@ function reconcilePlannerStateWithOrchestration(params: {
     missingFallbackRegression: false,
     escalationRegression: false,
     qualityFailureReasons: [],
+    regressingSkillFamilies: [],
+    consolidationPreferredFamilies: [],
+    preferredFallbackSkills: [],
   };
   const rankedAlternatives = params.orchestrationState.rankedSkills.filter(
     (skill) => !likelySkills.includes(skill),

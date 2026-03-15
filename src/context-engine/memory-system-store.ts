@@ -758,6 +758,59 @@ function clipText(text: string, max = 220): string {
   return `${normalized.slice(0, max - 1).trimEnd()}…`;
 }
 
+function deriveSkillFamilyGuidanceLine(entry: LongTermMemoryEntry): string | undefined {
+  const familyTags = (entry.environmentTags ?? [])
+    .filter((tag) => tag.startsWith("procedural:skill-family:"))
+    .map((tag) => tag.replace("procedural:skill-family:", "").trim())
+    .filter(Boolean);
+  if (familyTags.length === 0) {
+    return undefined;
+  }
+  const family = familyTags[0];
+  const consolidation =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:consolidation-action:"))
+      ?.replace("procedural:consolidation-action:", "")
+      .trim() || "none";
+  const preferredFallback =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:suggested-skill:"))
+      ?.replace("procedural:suggested-skill:", "")
+      .trim() ||
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:workflow-step:") && tag.includes(":fallback:"))
+      ?.split(":")
+      .at(-1)
+      ?.trim() ||
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:ranked-skill:2:"))
+      ?.replace(/^procedural:ranked-skill:2:/, "")
+      .trim();
+  const trend =
+    (entry.environmentTags ?? []).includes("procedural:no-viable-fallback") ||
+    (entry.environmentTags ?? []).some((tag) => tag.startsWith("procedural:escalate:")) ||
+    (entry.environmentTags ?? []).includes("procedural:outcome:failed") ||
+    (entry.environmentTags ?? []).includes("procedural:outcome:blocked")
+      ? "regressing"
+      : (entry.environmentTags ?? []).includes("procedural:near-miss")
+        ? "watch"
+        : "stable";
+  const primarySkill =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:primary-skill:"))
+      ?.replace("procedural:primary-skill:", "")
+      .trim() || "";
+  return [
+    `family=${family}`,
+    `trend=${trend}`,
+    consolidation !== "none" ? `consolidation=${consolidation}` : "",
+    preferredFallback ? `preferred_fallback=${preferredFallback}` : "",
+    primarySkill ? `primary=${primarySkill}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function normalizeComparable(text: string): string {
   return text
     .toLowerCase()
@@ -6183,6 +6236,40 @@ export function retrieveMemoryContextPacket(
     accessedConceptIds.push(...agenticRegressionGuidance.map((item) => getEntryConceptId(item)));
     sections.push(
       `Agentic regression guidance:\n- ${agenticRegressionGuidance.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
+    );
+  }
+  const skillFamilyGuidance = rankLongTermEntries(
+    snapshot.longTermMemory.filter((entry) =>
+      (entry.environmentTags ?? []).some(
+        (tag) =>
+          tag.startsWith("procedural:skill-family:") ||
+          tag.startsWith("procedural:consolidation-action:") ||
+          tag === "procedural:no-viable-fallback",
+      ),
+    ),
+    queryTokens,
+    taskMode,
+    scopeContext,
+    queryEntityAliases,
+    adjudications,
+  )
+    .map((entry) => ({ entry, line: deriveSkillFamilyGuidanceLine(entry) }))
+    .filter((item): item is { entry: LongTermMemoryEntry; line: string } => Boolean(item.line))
+    .slice(0, 3);
+  if (skillFamilyGuidance.length > 0) {
+    retrievalItems.push(
+      ...skillFamilyGuidance.map(({ entry, line }) => ({
+        kind: "long-term" as const,
+        text: line,
+        reason: `skill family guidance source=${entry.sourceType}${describeMemoryStateDowngrade(entry).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(entry).join(",")}` : ""}`,
+        memoryId: entry.id,
+        conceptId: getEntryConceptId(entry),
+      })),
+    );
+    accessedLongTermIds.push(...skillFamilyGuidance.map(({ entry }) => entry.id));
+    accessedConceptIds.push(...skillFamilyGuidance.map(({ entry }) => getEntryConceptId(entry)));
+    sections.push(
+      `Skill family guidance:\n- ${skillFamilyGuidance.map(({ line }) => line).join("\n- ")}`,
     );
   }
 

@@ -290,6 +290,41 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
   });
 
+  it("uses skill family guidance from memory to demote a regressing family and generalize a stronger sibling path", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the diagnostics workflow, avoid the weak diagnostics loop, and reuse the stronger verification path.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-repair", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-repair", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics trend=regressing consolidation=generalize_existing preferred_fallback=acceptance-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.rankedSkills[0]).toBe("acceptance-report");
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
+    expect(state.orchestrationState.rationale).toContain("consolidating within diagnostics");
+  });
+
   it("uses memory-weighted orchestration to choose the fallback skill", () => {
     const state = buildAgenticExecutionState({
       messages: [

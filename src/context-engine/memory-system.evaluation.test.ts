@@ -129,6 +129,52 @@ describe("memory system evaluation scenarios", () => {
     expect(durableArtifactConcepts.size).toBe(1);
   });
 
+  it("prefers more reliable evidence types when entity-linked concepts conflict", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-evidence-priority",
+      messages: [
+        userMessage(
+          "Summary says to use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-evidence-priority",
+      previous: first,
+      messages: [
+        userMessage(
+          "I observed directly that we should use the permanent memory-system path in src/context-engine/memory-system.ts on feature/memory-v2.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const packet = retrieveMemoryContextPacket(second, {
+      messages: [
+        userMessage(
+          "On feature/memory-v2, what should we use in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.text.includes("permanent memory-system path") &&
+          item.reason.includes("adjudication=authoritative:winner"),
+      ),
+    ).toBe(true);
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",

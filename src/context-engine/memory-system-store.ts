@@ -328,6 +328,7 @@ export type MemoryAcceptanceScenarioResult = {
     | "scope_isolation"
     | "contested_visibility"
     | "entity_resolution"
+    | "evidence_priority"
     | "session_handoff_continuity"
     | "backend_parity"
     | "runtime_lifecycle"
@@ -1017,6 +1018,21 @@ function classifyRevisionKind(
   return "updated";
 }
 
+function sourceTypeReliabilityScore(sourceType: MemorySourceType): number {
+  switch (sourceType) {
+    case "direct_observation":
+      return 4;
+    case "user_stated":
+      return 3;
+    case "system_inferred":
+      return 2;
+    case "summary_derived":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1361,6 +1377,7 @@ function findConceptMatch(
   const incomingEntityAliases = new Set(
     buildResolvedEntityAliases(incoming).map((alias) => normalizeComparable(alias)),
   );
+  const incomingCanonicalEntityKeys = new Set(buildCanonicalEntityKeys(incoming));
   const incomingEntities = buildMemoryEntitySignature({
     text: incoming.text,
     versionScope: incoming.versionScope,
@@ -1434,6 +1451,13 @@ function findConceptMatch(
     ]).filter((alias) => incomingEntityAliases.has(normalizeComparable(alias))).length;
     const entityAliasCoverage =
       incomingEntityAliases.size > 0 ? entityAliasOverlap / incomingEntityAliases.size : 0;
+    const canonicalEntityOverlap = buildCanonicalEntityKeys(candidate).filter((key) =>
+      incomingCanonicalEntityKeys.has(key),
+    ).length;
+    const canonicalEntityCoverage =
+      incomingCanonicalEntityKeys.size > 0
+        ? canonicalEntityOverlap / incomingCanonicalEntityKeys.size
+        : 0;
     const aliasOverlap = Math.max(
       0,
       ...(candidate.conceptAliases ?? []).map((alias) =>
@@ -1481,13 +1505,14 @@ function findConceptMatch(
       signatureOverlap * 2 +
       aliasOverlap +
       entityAliasOverlap * 2 +
+      canonicalEntityOverlap * 2.5 +
       entityOverlap +
       artifactOverlap * 3 +
       scopeOverlap * 2 +
       runtimeTagOverlap * 2;
     if (
       score >= 6 &&
-      (signatureCoverage >= 0.45 || entityAliasCoverage >= 0.5) &&
+      (signatureCoverage >= 0.45 || entityAliasCoverage >= 0.5 || canonicalEntityCoverage >= 0.5) &&
       (score > bestScore ||
         (score === bestScore &&
           ((candidate.updatedAt ?? 0) > (best?.updatedAt ?? 0) ||
@@ -1843,6 +1868,24 @@ function buildResolvedEntityAliases(params: {
     ...signature.artifactBasenames,
     ...branchAliases,
   ]);
+}
+
+function buildCanonicalEntityKeys(params: {
+  text?: string;
+  versionScope?: string;
+  installProfileScope?: string;
+  customerScope?: string;
+  environmentTags?: string[];
+  artifactRefs?: string[];
+  entityAliases?: string[];
+}): string[] {
+  return uniqueStrings([
+    ...(params.entityAliases ?? []),
+    ...buildResolvedEntityAliases(params),
+  ]).map((alias) => {
+    const classified = classifyResolvedEntityAlias(alias);
+    return `${classified.kind}:${normalizeComparable(classified.canonicalName)}`;
+  });
 }
 
 type MemoryEntityKind =
@@ -5391,6 +5434,89 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
+  const evidenceCompiled = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:evidence`,
+    previous: {
+      workingMemory: buildWorkingMemorySnapshot({
+        sessionId: `${sessionIdPrefix}:evidence`,
+        messages: [],
+      }),
+      longTermMemory: [
+        {
+          id: "ltm-evidence-summary",
+          semanticKey: "evidence::summary::memory-system",
+          conceptKey: "concept::evidence::memory-system",
+          category: "decision",
+          ontologyKind: "constraint",
+          text: "Use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2.",
+          canonicalText:
+            "use old workaround src context-engine memory-system ts on feature memory v2",
+          conceptAliases: [
+            "Use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2.",
+          ],
+          sourceType: "summary_derived",
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+          environmentTags: ["git-branch:feature/memory-v2"],
+          entityAliases: ["feature/memory-v2", "src/context-engine/memory-system.ts"],
+          entityIds: ["entity-branch-evidence", "entity-artifact-evidence"],
+          confidence: 0.72,
+          strength: 0.74,
+          evidence: ["summary evidence"],
+          provenance: [],
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "deferred",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: Date.now() - 5_000,
+          lastConfirmedAt: Date.now() - 5_000,
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          updatedAt: Date.now() - 5_000,
+        },
+      ],
+      pendingSignificance: [],
+      permanentMemory: createPermanentRoot(),
+      graph: { nodes: [], edges: [], updatedAt: Date.now() },
+    },
+    messages: [
+      userMessageForSuite(
+        "I observed directly that we should use the permanent memory-system path in src/context-engine/memory-system.ts on feature/memory-v2.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const evidencePacket = retrieveMemoryContextPacket(evidenceCompiled, {
+    messages: [
+      userMessageForSuite(
+        "On feature/memory-v2, what should we use in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  const evidenceWinner = evidencePacket.retrievalItems.find(
+    (item) => item.kind === "long-term" && item.reason.includes("adjudication="),
+  );
+  scenarios.push({
+    scenario: "evidence_priority",
+    passed:
+      Boolean(evidenceWinner?.text.includes("permanent memory-system path")) &&
+      Boolean(evidenceWinner?.reason.includes("adjudication=authoritative:winner")),
+    summary: `evidence winner=${evidenceWinner?.text.includes("permanent memory-system path") ? "direct" : "other"}`,
+    details: evidencePacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const handoffWorkspaceDir = path.join(params.workspaceDir, `${MEMORY_SYSTEM_DIRNAME}-handoff`);
   const handoffTargetWorkspaceDir = path.join(
     params.workspaceDir,
@@ -6550,6 +6676,8 @@ function buildPersistedMemoryAdjudications(params: {
         (neighbor) => neighbor.id !== entry.id && isContradictoryPair(entry, neighbor),
       ).length * 0.08,
     );
+    const provenanceSupport = Math.min(0.1, (entry.provenance?.length ?? 0) * 0.02);
+    const evidenceSupport = Math.min(0.08, (entry.evidence?.length ?? 0) * 0.015);
     return (
       entry.confidence * 0.34 +
       entry.strength * 0.22 +
@@ -6557,9 +6685,11 @@ function buildPersistedMemoryAdjudications(params: {
       sourceScore +
       importanceScore +
       revisionSupport +
-      artifactSupport -
-      entityConflictPenalty +
+      artifactSupport +
+      provenanceSupport +
+      evidenceSupport +
       entityConsensusSupport -
+      entityConflictPenalty -
       contradictionPenalty -
       supersededPenalty
     );
@@ -6617,6 +6747,16 @@ function buildPersistedMemoryAdjudications(params: {
         .filter((entry) => isContradictoryPair(entry, winner ?? conceptEntries[0]))
         .map((entry) => getEntryConceptId(entry)),
     );
+    const winnerSourceScore = winner ? sourceTypeReliabilityScore(winner.sourceType) : 0;
+    const strongestAlternativeSourceScore = Math.max(
+      0,
+      ...conceptEntries
+        .filter((entry) => entry.id !== winner?.id)
+        .map((entry) => sourceTypeReliabilityScore(entry.sourceType)),
+      ...entityNeighborEntries
+        .filter((entry) => entry.id !== winner?.id)
+        .map((entry) => sourceTypeReliabilityScore(entry.sourceType)),
+    );
     let status: MemoryAdjudicationStatus = winner?.adjudicationStatus ?? "authoritative";
     let resolutionKind: PersistedMemoryAdjudication["resolutionKind"] = "winner";
     let rationale = "weighted evidence favors a single authoritative concept state";
@@ -6645,6 +6785,8 @@ function buildPersistedMemoryAdjudications(params: {
         entityIds.length > 0
           ? "concept family includes scope-specific alternatives over shared canonical entities"
           : "concept family includes scope-specific alternatives with distinct scope signatures";
+    } else if (winner && winnerSourceScore > strongestAlternativeSourceScore && scoreGap >= 0.1) {
+      rationale = `weighted evidence favors the more reliable ${winner.sourceType} observation`;
     } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
       status = winner?.activeStatus === "superseded" ? "superseded" : status;
       resolutionKind = winner?.activeStatus === "superseded" ? "retired" : "winner";

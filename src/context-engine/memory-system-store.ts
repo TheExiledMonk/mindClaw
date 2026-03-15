@@ -1804,6 +1804,48 @@ function detectContradictions(entries: LongTermMemoryEntry[]): MemoryRetrievalIt
   return items;
 }
 
+function describeMemoryStateDowngrade(entry: LongTermMemoryEntry): string[] {
+  const notes: string[] = [];
+  if (entry.activeStatus === "superseded") {
+    notes.push("superseded");
+  } else if (entry.activeStatus === "stale") {
+    notes.push("stale");
+  } else if (entry.activeStatus === "pending") {
+    notes.push("pending");
+  }
+  if (entry.compressionState === "latent") {
+    notes.push("latent");
+  } else if (entry.compressionState === "compressed") {
+    notes.push("compressed");
+  }
+  if (entry.contradictionCount > 0) {
+    notes.push(`contradicted x${entry.contradictionCount}`);
+  }
+  return notes;
+}
+
+function formatMemoryWithState(entry: LongTermMemoryEntry): string {
+  const notes = describeMemoryStateDowngrade(entry);
+  return notes.length === 0
+    ? `[${entry.category}] ${entry.text}`
+    : `[${entry.category}] ${entry.text} (downgraded: ${notes.join(", ")})`;
+}
+
+function includeMemoryForContext(entry: LongTermMemoryEntry, taskMode: MemoryTaskMode): boolean {
+  if (entry.activeStatus === "archived") {
+    return false;
+  }
+  if (entry.activeStatus === "superseded") {
+    return (
+      taskMode === "planning" ||
+      taskMode === "debugging" ||
+      taskMode === "support" ||
+      Boolean(entry.supersededById)
+    );
+  }
+  return true;
+}
+
 function rankLongTermEntries(
   entries: LongTermMemoryEntry[],
   queryTokens: Set<string>,
@@ -1822,63 +1864,65 @@ function rankLongTermEntries(
     }
     return 0;
   };
-  return [...entries].toSorted((a, b) => {
-    const scopeBonus = (entry: LongTermMemoryEntry): number => {
-      let bonus = 0;
-      if (scopeContext?.versionScope && entry.versionScope === scopeContext.versionScope) {
-        bonus += 3;
-      }
-      if (
-        scopeContext?.installProfileScope &&
-        entry.installProfileScope === scopeContext.installProfileScope
-      ) {
-        bonus += 2.5;
-      }
-      if (scopeContext?.customerScope && entry.customerScope === scopeContext.customerScope) {
-        bonus += 2;
-      }
-      if (
-        (entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))
-      ) {
-        bonus += 1.5;
-      }
-      if ((entry.artifactRefs ?? []).some((ref) => scopeContext?.artifactRefs.includes(ref))) {
-        bonus += 2;
-      }
-      return bonus;
-    };
-    const statePenalty = (entry: LongTermMemoryEntry): number => {
-      if (entry.activeStatus === "superseded") {
-        return 6;
-      }
-      if (entry.compressionState === "latent") {
-        return 2.5;
-      }
-      if (entry.activeStatus === "pending") {
-        return 1.5;
-      }
-      return 0;
-    };
-    const contradictionPenalty = (entry: LongTermMemoryEntry): number =>
-      entry.contradictionCount * 1.2;
-    const aScore =
-      computeOverlapScore(a.text, queryTokens) +
-      a.strength * 10 +
-      a.confidence * 4 +
-      taskBonus(a) -
-      statePenalty(a) -
-      contradictionPenalty(a) +
-      scopeBonus(a);
-    const bScore =
-      computeOverlapScore(b.text, queryTokens) +
-      b.strength * 10 +
-      b.confidence * 4 +
-      taskBonus(b) -
-      statePenalty(b) -
-      contradictionPenalty(b) +
-      scopeBonus(b);
-    return bScore - aScore;
-  });
+  return [...entries]
+    .filter((entry) => includeMemoryForContext(entry, taskMode))
+    .toSorted((a, b) => {
+      const scopeBonus = (entry: LongTermMemoryEntry): number => {
+        let bonus = 0;
+        if (scopeContext?.versionScope && entry.versionScope === scopeContext.versionScope) {
+          bonus += 3;
+        }
+        if (
+          scopeContext?.installProfileScope &&
+          entry.installProfileScope === scopeContext.installProfileScope
+        ) {
+          bonus += 2.5;
+        }
+        if (scopeContext?.customerScope && entry.customerScope === scopeContext.customerScope) {
+          bonus += 2;
+        }
+        if (
+          (entry.environmentTags ?? []).some((tag) => scopeContext?.environmentTags.includes(tag))
+        ) {
+          bonus += 1.5;
+        }
+        if ((entry.artifactRefs ?? []).some((ref) => scopeContext?.artifactRefs.includes(ref))) {
+          bonus += 2;
+        }
+        return bonus;
+      };
+      const statePenalty = (entry: LongTermMemoryEntry): number => {
+        if (entry.activeStatus === "superseded") {
+          return 6;
+        }
+        if (entry.compressionState === "latent") {
+          return 2.5;
+        }
+        if (entry.activeStatus === "pending") {
+          return 1.5;
+        }
+        return 0;
+      };
+      const contradictionPenalty = (entry: LongTermMemoryEntry): number =>
+        entry.contradictionCount * 1.2;
+      const aScore =
+        computeOverlapScore(a.text, queryTokens) +
+        a.strength * 10 +
+        a.confidence * 4 +
+        taskBonus(a) -
+        statePenalty(a) -
+        contradictionPenalty(a) +
+        scopeBonus(a);
+      const bScore =
+        computeOverlapScore(b.text, queryTokens) +
+        b.strength * 10 +
+        b.confidence * 4 +
+        taskBonus(b) -
+        statePenalty(b) -
+        contradictionPenalty(b) +
+        scopeBonus(b);
+      return bScore - aScore;
+    });
 }
 
 function classifyArtifactAnchorBucket(
@@ -1930,7 +1974,7 @@ function collectArtifactAnchoredMemories(params: {
       continue;
     }
     const related = byId.get(edge.to);
-    if (!related || related.activeStatus === "superseded" || seen.has(related.id)) {
+    if (!related || !includeMemoryForContext(related, "planning") || seen.has(related.id)) {
       continue;
     }
     const bucket = classifyArtifactAnchorBucket(related);
@@ -2117,7 +2161,11 @@ function collectArtifactTraversalExpansion(params: {
 
       for (const edge of nextEdges) {
         const entry = byId.get(edge.to);
-        if (entry && entry.activeStatus !== "superseded" && !seenMemoryIds.has(entry.id)) {
+        if (
+          entry &&
+          includeMemoryForContext(entry, params.taskMode) &&
+          !seenMemoryIds.has(entry.id)
+        ) {
           seenMemoryIds.add(entry.id);
           collected.push({
             entry,
@@ -2236,7 +2284,7 @@ function expandRelatedMemories(
       continue;
     }
     const related = byId.get(relation.targetMemoryId);
-    if (!related || related.activeStatus === "superseded") {
+    if (!related || !includeMemoryForContext(related, taskMode)) {
       continue;
     }
     seen.add(related.id);
@@ -2269,7 +2317,7 @@ function expandRelatedMemories(
           continue;
         }
         const artifactRelated = byId.get(artifactEdge.to);
-        if (!artifactRelated || artifactRelated.activeStatus === "superseded") {
+        if (!artifactRelated || !includeMemoryForContext(artifactRelated, taskMode)) {
           continue;
         }
         seen.add(artifactRelated.id);
@@ -2281,7 +2329,7 @@ function expandRelatedMemories(
       continue;
     }
     const related = byId.get(edge.to);
-    if (!related || related.activeStatus === "superseded") {
+    if (!related || !includeMemoryForContext(related, taskMode)) {
       continue;
     }
     seen.add(related.id);
@@ -2327,14 +2375,14 @@ export function retrieveMemoryContextPacket(
     retrievalItems.push(
       ...longTerm.map((item) => ({
         kind: "long-term" as const,
-        text: `[${item.category}] ${item.text}`,
-        reason: `relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}`,
+        text: formatMemoryWithState(item),
+        reason: `relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
         memoryId: item.id,
       })),
     );
     accessedLongTermIds.push(...longTerm.map((item) => item.id));
     sections.push(
-      `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
+      `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );
   }
 
@@ -2364,8 +2412,8 @@ export function retrieveMemoryContextPacket(
     retrievalItems.push(
       ...anchoredEntries.map((item) => ({
         kind: "long-term" as const,
-        text: `[${item.category}] ${item.text}`,
-        reason: `artifact anchor for ${item.artifactRefs[0] ?? "current scope"}`,
+        text: formatMemoryWithState(item),
+        reason: `artifact anchor for ${item.artifactRefs[0] ?? "current scope"}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
         memoryId: item.id,
       })),
     );
@@ -2385,14 +2433,14 @@ export function retrieveMemoryContextPacket(
     retrievalItems.push(
       ...artifactTraversal.map((item) => ({
         kind: "long-term" as const,
-        text: `[${item.entry.category}] ${item.entry.text}`,
-        reason: `artifact ${item.facet} traversal via ${item.via}`,
+        text: formatMemoryWithState(item.entry),
+        reason: `artifact ${item.facet} traversal via ${item.via}${describeMemoryStateDowngrade(item.entry).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item.entry).join(",")}` : ""}`,
         memoryId: item.entry.id,
       })),
     );
     accessedLongTermIds.push(...artifactTraversal.map((item) => item.entry.id));
     sections.push(
-      `Artifact traversal expansion:\n- ${artifactTraversal.map((item) => `[${item.entry.category}] ${item.entry.text}`).join("\n- ")}`,
+      `Artifact traversal expansion:\n- ${artifactTraversal.map((item) => formatMemoryWithState(item.entry)).join("\n- ")}`,
     );
   }
   const relatedExpansion = expandRelatedMemories(
@@ -2406,14 +2454,14 @@ export function retrieveMemoryContextPacket(
     retrievalItems.push(
       ...relatedExpansion.map((item) => ({
         kind: "long-term" as const,
-        text: `[${item.category}] ${item.text}`,
-        reason: `graph expansion via ${item.relations[0]?.type ?? "linked"} relation`,
+        text: formatMemoryWithState(item),
+        reason: `graph expansion via ${item.relations[0]?.type ?? "linked"} relation${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
         memoryId: item.id,
       })),
     );
     accessedLongTermIds.push(...relatedExpansion.map((item) => item.id));
     sections.push(
-      `Related memory expansion:\n- ${relatedExpansion.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
+      `Related memory expansion:\n- ${relatedExpansion.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
     );
   }
 

@@ -538,6 +538,59 @@ describe("memory system store", () => {
     expect(packet.accessedLongTermIds[0]).toBe("ltm-scoped");
   });
 
+  it("surfaces downgraded memory state in ranked retrieval output", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "state-aware-a",
+          messages: [
+            userMessage(
+              "Plan the replacement for the old memory-system workaround in src/context-engine/memory-system.ts.",
+            ),
+          ],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-superseded",
+            category: "strategy",
+            text: "Old memory-system workaround for src/context-engine/memory-system.ts before the permanent fix.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            activeStatus: "superseded",
+            contradictionCount: 1,
+            supersededById: "ltm-new",
+            strength: 0.84,
+          }),
+          longTermEntry({
+            id: "ltm-new",
+            category: "decision",
+            text: "Use the permanent memory-system path in src/context-engine/memory-system.ts instead of the workaround.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.95,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      {
+        messages: [
+          userMessage(
+            "Plan the replacement for the old memory-system workaround in src/context-engine/memory-system.ts.",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("downgraded: superseded, contradicted x1");
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.memoryId === "ltm-superseded" &&
+          item.reason.includes("downgraded=superseded,contradicted x1"),
+      ),
+    ).toBe(true);
+  });
+
   it("surfaces artifact-anchored constraints, patterns, and outcomes", () => {
     const packet = retrieveMemoryContextPacket(
       {
@@ -697,6 +750,9 @@ describe("memory system store", () => {
             category: "strategy",
             text: "Old workaround for memory-system carry-forward behavior before the permanent fix.",
             strength: 0.62,
+            activeStatus: "superseded",
+            contradictionCount: 1,
+            supersededById: "ltm-fix",
           }),
           longTermEntry({
             id: "ltm-direct-a",
@@ -738,7 +794,7 @@ describe("memory system store", () => {
               category: "strategy",
               summary: "Old workaround before permanent fix.",
               confidence: 0.82,
-              activeStatus: "active",
+              activeStatus: "superseded",
               updatedAt: Date.now(),
             },
             {
@@ -811,8 +867,9 @@ describe("memory system store", () => {
     expect(
       packet.retrievalItems.some(
         (item) =>
-          item.reason === "artifact outcome traversal via superseded_by" &&
-          item.memoryId === "ltm-old-workaround",
+          item.reason.includes(
+            "artifact outcome traversal via superseded_by downgraded=superseded,contradicted x1",
+          ) && item.memoryId === "ltm-old-workaround",
       ),
     ).toBe(true);
   });

@@ -389,6 +389,7 @@ export type AgenticQualityGateReport = {
   effectivenessPassed: boolean;
   failReasons: string[];
   clarificationClasses: string[];
+  clarificationProfile: "none" | "environment_variable" | "approval" | "external_input" | "mixed";
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -508,6 +509,18 @@ function mapClarificationReasonToQualityFailReason(reason?: string): string | un
       ? "diagnostics_clarification_approval"
       : reason === "missing_information:external_input"
         ? "diagnostics_clarification_external_input"
+        : undefined;
+}
+
+function mapClarificationReasonToProfile(
+  reason?: string,
+): AgenticQualityGateReport["clarificationProfile"] | undefined {
+  return reason === "missing_information:environment_variable"
+    ? "environment_variable"
+    : reason === "missing_information:approval"
+      ? "approval"
+      : reason === "missing_information:external_input"
+        ? "external_input"
         : undefined;
 }
 
@@ -5497,17 +5510,20 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
     const passed =
       envVarReport.failReasons.includes("diagnostics_clarification_environment_variable") &&
       envVarReport.clarificationClasses.includes("missing_information:environment_variable") &&
+      envVarReport.clarificationProfile === "environment_variable" &&
       approvalReport.failReasons.includes("diagnostics_clarification_approval") &&
       approvalReport.clarificationClasses.includes("missing_information:approval") &&
+      approvalReport.clarificationProfile === "approval" &&
       externalInputReport.failReasons.includes("diagnostics_clarification_external_input") &&
-      externalInputReport.clarificationClasses.includes("missing_information:external_input");
+      externalInputReport.clarificationClasses.includes("missing_information:external_input") &&
+      externalInputReport.clarificationProfile === "external_input";
     scenarios.push({
       id: "clarification_policy_quality_alignment",
       passed,
       summary: passed
-        ? "Release-facing quality policy can distinguish approval, env-var, and external-input clarification blockers."
+        ? "Release-facing quality policy can distinguish approval, env-var, and external-input clarification blockers and expose their dominant profile."
         : "Clarification blocker classes did not stay distinct when promoted into quality policy.",
-      details: `env=${envVarReport.failReasons.join("|")} approval=${approvalReport.failReasons.join("|")} external=${externalInputReport.failReasons.join("|")}`,
+      details: `env=${envVarReport.failReasons.join("|")}:${envVarReport.clarificationProfile} approval=${approvalReport.failReasons.join("|")}:${approvalReport.clarificationProfile} external=${externalInputReport.failReasons.join("|")}:${externalInputReport.clarificationProfile}`,
     });
   }
 
@@ -7327,6 +7343,18 @@ export function runAgenticQualityGate(params?: {
     diagnostics.clarificationReason ? [diagnostics.clarificationReason] : [],
     3,
   );
+  const clarificationProfiles = uniqueCompact(
+    clarificationClasses
+      .map((reason) => mapClarificationReasonToProfile(reason))
+      .filter((profile): profile is NonNullable<typeof profile> => Boolean(profile)),
+    3,
+  );
+  const clarificationProfile: AgenticQualityGateReport["clarificationProfile"] =
+    clarificationProfiles.length === 0
+      ? "none"
+      : clarificationProfiles.length === 1
+        ? (clarificationProfiles[0] as AgenticQualityGateReport["clarificationProfile"])
+        : "mixed";
   const clarificationFailReason =
     params?.failOnClarificationBlockers && diagnostics.retryClass === "clarify"
       ? (mapClarificationReasonToQualityFailReason(diagnostics.clarificationReason) ??
@@ -7410,6 +7438,7 @@ export function runAgenticQualityGate(params?: {
     effectivenessPassed,
     failReasons,
     clarificationClasses,
+    clarificationProfile,
     acceptance,
     soak,
     diagnostics,
@@ -7440,6 +7469,7 @@ export function formatAgenticQualityGateReport(
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
+      `clarification_profile=${report.clarificationProfile}`,
       `weakening_skills=${report.weakeningSkills.length > 0 ? report.weakeningSkills.join(",") : "none"}`,
       `recovering_skills=${report.recoveringSkills.length > 0 ? report.recoveringSkills.join(",") : "none"}`,
       `stabilized_skills=${report.stabilizedSkills.length > 0 ? report.stabilizedSkills.join(",") : "none"}`,
@@ -7471,6 +7501,7 @@ export function formatAgenticQualityGateReport(
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
     `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,
+    `- Clarification profile: ${report.clarificationProfile}`,
     "",
     "## Effectiveness",
     `- Passed: ${report.effectivenessPassed ? "yes" : "no"}`,

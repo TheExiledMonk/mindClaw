@@ -91,6 +91,7 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("agentic quality gate");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("recovering_skills=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("stabilized_skills=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("template_families=");
@@ -460,6 +461,7 @@ describe("agentic quality gate", () => {
     expect(report.passed).toBe(false);
     expect(report.diagnosticsPassed).toBe(false);
     expect(report.clarificationClasses).toContain("missing_information:approval");
+    expect(report.clarificationProfile).toBe("approval");
     expect(report.failReasons).toContain("diagnostics_clarification_approval");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "clarification_classes=missing_information:approval",
@@ -564,9 +566,13 @@ describe("agentic quality gate", () => {
     expect(report.passed).toBe(false);
     expect(report.diagnosticsPassed).toBe(false);
     expect(report.clarificationClasses).toContain("missing_information:external_input");
+    expect(report.clarificationProfile).toBe("external_input");
     expect(report.failReasons).toContain("diagnostics_clarification_external_input");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Clarification classes: missing_information:external_input",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification profile: external_input",
     );
   });
 

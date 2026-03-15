@@ -643,6 +643,13 @@ function deriveCrossLayerTrendPolicyStatus(
   return alignment === "aligned" ? "consistent" : "divergent";
 }
 
+function deriveAcceptanceTrendPolicyStatus(params: {
+  alignmentPassed?: boolean;
+  driftGuardPassed?: boolean;
+}): NonNullable<AgenticAcceptanceReport["clarificationTrendPolicyStatus"]> {
+  return params.alignmentPassed && params.driftGuardPassed ? "aligned_and_guarded" : "unknown";
+}
+
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   if (!memoryText) {
     return [];
@@ -5888,11 +5895,10 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
   const clarificationTrendPolicyDriftGuardScenario = scenarios.find(
     (scenario) => scenario.id === "clarification_trend_policy_drift_guard",
   );
-  const clarificationTrendPolicyStatus: AgenticAcceptanceReport["clarificationTrendPolicyStatus"] =
-    clarificationTrendPolicyAlignmentScenario?.passed &&
-    clarificationTrendPolicyDriftGuardScenario?.passed
-      ? "aligned_and_guarded"
-      : "unknown";
+  const clarificationTrendPolicyStatus = deriveAcceptanceTrendPolicyStatus({
+    alignmentPassed: clarificationTrendPolicyAlignmentScenario?.passed,
+    driftGuardPassed: clarificationTrendPolicyDriftGuardScenario?.passed,
+  });
   return {
     passed,
     totalScenarios: scenarios.length,

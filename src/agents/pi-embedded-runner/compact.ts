@@ -145,6 +145,13 @@ export type CompactEmbeddedPiSessionParams = {
   ownerNumbers?: string[];
   activeArtifacts?: string[];
   workspaceTags?: string[];
+  workspaceState?: {
+    workspaceName?: string;
+    sessionRelativePath?: string;
+    gitBranch?: string;
+    gitCommit?: string;
+    transcriptExists?: boolean;
+  };
 };
 
 type CompactionMessageMetrics = {

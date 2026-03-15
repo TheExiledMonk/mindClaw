@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
@@ -1195,6 +1198,51 @@ describe("buildAfterTurnRuntimeContext", () => {
       workspaceTags: expect.arrayContaining(["workspace", "tmp-workspace"]),
       activeArtifacts: expect.arrayContaining(["session.jsonl"]),
     });
+  });
+
+  it("includes workspace git and session state for memory runtime context", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-workspace-"));
+    const gitDir = path.join(workspaceDir, ".git");
+    await fs.mkdir(path.join(gitDir, "refs", "heads", "feature"), { recursive: true });
+    await fs.writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/feature/memory\n", "utf8");
+    await fs.writeFile(
+      path.join(gitDir, "refs", "heads", "feature", "memory"),
+      "abcdef0123456789abcdef0123456789abcdef01\n",
+      "utf8",
+    );
+    const sessionFile = path.join(workspaceDir, "sessions", "main.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir,
+      agentDir: path.join(workspaceDir, "agent"),
+      sessionFile,
+    });
+
+    expect(runtimeContext.workspaceState).toMatchObject({
+      workspaceName: path.basename(workspaceDir),
+      sessionRelativePath: path.join("sessions", "main.jsonl"),
+      gitBranch: "feature/memory",
+      gitCommit: "abcdef0",
+      transcriptExists: true,
+    });
+    expect(runtimeContext.workspaceTags).toContain("git-worktree");
+    expect(runtimeContext.activeArtifacts).toContain(path.join("sessions", "main.jsonl"));
   });
 });
 

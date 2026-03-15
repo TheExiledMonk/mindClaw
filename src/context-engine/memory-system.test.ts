@@ -1824,6 +1824,27 @@ describe("MemorySystemContextEngine", () => {
     }
   });
 
+  it("sanitizes fs-json store metadata when the persisted backend marker is invalid", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-metadata-"));
+    await fs.mkdir(path.join(tempDir, MEMORY_SYSTEM_DIRNAME), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "store-metadata.json"),
+      JSON.stringify({ backend: "broken", version: 99, updatedAt: "nope" }),
+      "utf8",
+    );
+
+    await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId: "agent:metadata-fs",
+      backendKind: "fs-json",
+    });
+
+    const metadata = JSON.parse(
+      await fs.readFile(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "store-metadata.json"), "utf8"),
+    ) as { backend?: string; version?: number };
+    expect(metadata).toMatchObject({ backend: "fs-json", version: 1 });
+  });
+
   it("persists contested and superseded revision history rows in sqlite-graph", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-revisions-"));
     const sessionId = "agent:sqlite-revisions";
@@ -1891,6 +1912,54 @@ describe("MemorySystemContextEngine", () => {
       expect(contested.count).toBeGreaterThan(0);
       expect(contestedAdjudications.count).toBeGreaterThan(0);
       expect(superseded.count).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("records sqlite-graph integrity checks in store metadata", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-integrity-"));
+    const sessionId = "agent:sqlite-integrity";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    await loadMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+    });
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(path.join(tempDir, MEMORY_SYSTEM_DIRNAME, "memory-store.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      const row = db.prepare("SELECT value FROM memory_store_metadata WHERE key = 'store'").get() as
+        | { value?: string }
+        | undefined;
+      const metadata = JSON.parse(row?.value ?? "{}") as {
+        backend?: string;
+        lastIntegrityCheckResult?: string;
+        lastIntegrityCheckAt?: number;
+      };
+      expect(metadata.backend).toBe("sqlite-graph");
+      expect(metadata.lastIntegrityCheckResult).toBe("ok");
+      expect(typeof metadata.lastIntegrityCheckAt).toBe("number");
     } finally {
       db.close();
     }

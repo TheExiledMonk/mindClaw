@@ -206,6 +206,8 @@ export type MemoryStoreMetadata = {
   backend: MemoryStoreBackendKind;
   version: 1;
   updatedAt: number;
+  lastIntegrityCheckAt?: number;
+  lastIntegrityCheckResult?: "ok";
 };
 
 export type MemoryCompileResult = MemoryStoreSnapshot & {
@@ -396,6 +398,33 @@ function defaultMemoryStoreMetadata(kind: MemoryStoreBackendKind = "fs-json"): M
     backend: kind,
     version: 1,
     updatedAt: Date.now(),
+  };
+}
+
+function sanitizeMemoryStoreMetadata(
+  value: unknown,
+  expectedBackend: MemoryStoreBackendKind,
+): MemoryStoreMetadata {
+  const candidate = value as Partial<MemoryStoreMetadata> | null | undefined;
+  return {
+    backend:
+      candidate?.backend === "fs-json" ||
+      candidate?.backend === "sqlite-doc" ||
+      candidate?.backend === "sqlite-graph"
+        ? candidate.backend
+        : expectedBackend,
+    version: 1,
+    updatedAt:
+      typeof candidate?.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+        ? candidate.updatedAt
+        : Date.now(),
+    lastIntegrityCheckAt:
+      typeof candidate?.lastIntegrityCheckAt === "number" &&
+      Number.isFinite(candidate.lastIntegrityCheckAt)
+        ? candidate.lastIntegrityCheckAt
+        : undefined,
+    lastIntegrityCheckResult:
+      candidate?.lastIntegrityCheckResult === "ok" ? candidate.lastIntegrityCheckResult : undefined,
   };
 }
 
@@ -1320,8 +1349,16 @@ function buildRuntimeScopeContext(params?: {
   sessionFile?: string;
 }): MemoryScopeContext {
   const runtime = params?.runtimeContext;
+  const workspaceState =
+    runtime?.workspaceState && typeof runtime.workspaceState === "object"
+      ? (runtime.workspaceState as Record<string, unknown>)
+      : undefined;
   const stringValue = (key: string): string | undefined => {
     const value = runtime?.[key];
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  };
+  const workspaceStateString = (key: string): string | undefined => {
+    const value = workspaceState?.[key];
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   };
   const stringArray = (key: string): string[] => {
@@ -1340,6 +1377,8 @@ function buildRuntimeScopeContext(params?: {
         stringValue("provider") ? `provider:${stringValue("provider")}` : "",
         stringValue("model") ? `model:${stringValue("model")}` : "",
         stringValue("messageProvider") ? `channel:${stringValue("messageProvider")}` : "",
+        workspaceStateString("gitBranch") ? `git-branch:${workspaceStateString("gitBranch")}` : "",
+        workspaceStateString("gitCommit") ? `git-commit:${workspaceStateString("gitCommit")}` : "",
         runtime?.bashElevated === true ? "bash-elevated" : "",
         ...stringArray("workspaceTags"),
       ].filter(Boolean),
@@ -1347,6 +1386,7 @@ function buildRuntimeScopeContext(params?: {
     artifactRefs: uniqueStrings([
       ...extractArtifactRefs(extraPrompt),
       ...stringArray("activeArtifacts"),
+      workspaceStateString("sessionRelativePath") ?? "",
       params?.sessionFile ? path.basename(params.sessionFile) : "",
     ]),
   };
@@ -4599,13 +4639,43 @@ export async function loadMemoryStoreSnapshot(params: {
     const db = new DatabaseSync(dbPath);
     try {
       ensureSqliteGraphStoreSchema(db);
+      const integrityRow = db.prepare("PRAGMA integrity_check(1)").get() as
+        | { integrity_check?: string }
+        | undefined;
+      if (integrityRow?.integrity_check && integrityRow.integrity_check !== "ok") {
+        throw new Error(`memory sqlite integrity check failed: ${integrityRow.integrity_check}`);
+      }
+      const metadata = sanitizeMemoryStoreMetadata(
+        (() => {
+          const row = db
+            .prepare("SELECT value FROM memory_store_metadata WHERE key = 'store'")
+            .get() as { value?: string } | undefined;
+          if (!row?.value) {
+            return defaultMemoryStoreMetadata("sqlite-graph");
+          }
+          try {
+            return JSON.parse(row.value) as MemoryStoreMetadata;
+          } catch {
+            return defaultMemoryStoreMetadata("sqlite-graph");
+          }
+        })(),
+        "sqlite-graph",
+      );
       db.prepare(
         `
           INSERT INTO memory_store_metadata (key, value)
           VALUES ('store', ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value
         `,
-      ).run(JSON.stringify(defaultMemoryStoreMetadata("sqlite-graph")));
+      ).run(
+        JSON.stringify({
+          ...metadata,
+          backend: "sqlite-graph",
+          updatedAt: Date.now(),
+          lastIntegrityCheckAt: Date.now(),
+          lastIntegrityCheckResult: "ok",
+        } satisfies MemoryStoreMetadata),
+      );
       const workingRow = db
         .prepare("SELECT json FROM working_memory WHERE session_id = ?")
         .get(params.sessionId) as { json?: string } | undefined;
@@ -4742,13 +4812,18 @@ export async function loadMemoryStoreSnapshot(params: {
   }
   const backend = resolveMemoryStoreBackend(params.backendKind);
   await ensureStoreDirs(paths);
-  await backend.writeJson(
-    paths.metadataFile,
+  const metadata = sanitizeMemoryStoreMetadata(
     await backend.readJson<MemoryStoreMetadata>(
       paths.metadataFile,
       defaultMemoryStoreMetadata(backend.kind),
     ),
+    backend.kind,
   );
+  await backend.writeJson(paths.metadataFile, {
+    ...metadata,
+    backend: backend.kind,
+    updatedAt: Date.now(),
+  } satisfies MemoryStoreMetadata);
   const workingMemory = await backend.readJson<WorkingMemorySnapshot>(paths.workingFile, {
     sessionId: params.sessionId,
     updatedAt: Date.now(),
@@ -4797,13 +4872,35 @@ export async function persistMemoryStoreSnapshot(params: {
     const db = new DatabaseSync(dbPath);
     try {
       ensureSqliteGraphStoreSchema(db);
+      const metadata = sanitizeMemoryStoreMetadata(
+        (() => {
+          const row = db
+            .prepare("SELECT value FROM memory_store_metadata WHERE key = 'store'")
+            .get() as { value?: string } | undefined;
+          if (!row?.value) {
+            return defaultMemoryStoreMetadata("sqlite-graph");
+          }
+          try {
+            return JSON.parse(row.value) as MemoryStoreMetadata;
+          } catch {
+            return defaultMemoryStoreMetadata("sqlite-graph");
+          }
+        })(),
+        "sqlite-graph",
+      );
       db.prepare(
         `
           INSERT INTO memory_store_metadata (key, value)
           VALUES ('store', ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value
         `,
-      ).run(JSON.stringify(defaultMemoryStoreMetadata("sqlite-graph")));
+      ).run(
+        JSON.stringify({
+          ...metadata,
+          backend: "sqlite-graph",
+          updatedAt: Date.now(),
+        } satisfies MemoryStoreMetadata),
+      );
       db.prepare(
         `
           INSERT INTO working_memory (session_id, json, updated_at)
@@ -4975,8 +5072,19 @@ export async function persistMemoryStoreSnapshot(params: {
   }
   const backend = resolveMemoryStoreBackend(params.backendKind);
   await ensureStoreDirs(paths);
+  const metadata = sanitizeMemoryStoreMetadata(
+    await backend.readJson<MemoryStoreMetadata>(
+      paths.metadataFile,
+      defaultMemoryStoreMetadata(backend.kind),
+    ),
+    backend.kind,
+  );
   await Promise.all([
-    backend.writeJson(paths.metadataFile, defaultMemoryStoreMetadata(backend.kind)),
+    backend.writeJson(paths.metadataFile, {
+      ...metadata,
+      backend: backend.kind,
+      updatedAt: Date.now(),
+    } satisfies MemoryStoreMetadata),
     backend.writeJson(paths.workingFile, params.workingMemory),
     backend.writeJson(paths.longTermFile, params.longTermMemory),
     backend.writeJson(paths.pendingFile, params.pendingSignificance),

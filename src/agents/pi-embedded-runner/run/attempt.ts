@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,8 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveCommitHash } from "../../../infra/git-commit.js";
+import { resolveGitHeadPath } from "../../../infra/git-root.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -1284,9 +1287,34 @@ export function buildAfterTurnRuntimeContext(params: {
   agentDir: string;
   sessionFile: string;
 }): Partial<CompactEmbeddedPiSessionParams> {
+  const resolveGitBranch = (workspaceDir: string): string | undefined => {
+    try {
+      const headPath = resolveGitHeadPath(workspaceDir);
+      if (!headPath) {
+        return undefined;
+      }
+      const head = fsSync.readFileSync(headPath, "utf-8").trim();
+      if (!head.startsWith("ref:")) {
+        return undefined;
+      }
+      const ref = head.replace(/^ref:\s*/i, "").trim();
+      const match = ref.match(/^refs\/heads\/(.+)$/);
+      return match?.[1]?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const workspaceState = {
+    workspaceName: path.basename(params.workspaceDir),
+    sessionRelativePath: path.relative(params.workspaceDir, params.sessionFile),
+    gitBranch: resolveGitBranch(params.workspaceDir),
+    gitCommit: resolveCommitHash({ cwd: params.workspaceDir }) ?? undefined,
+    transcriptExists: fsSync.existsSync(params.sessionFile),
+  };
   const activeArtifacts = [
     path.basename(params.sessionFile),
     params.sessionFile,
+    workspaceState.sessionRelativePath,
     params.attempt.extraSystemPrompt,
   ]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -1297,6 +1325,7 @@ export function buildAfterTurnRuntimeContext(params: {
     "workspace",
     params.workspaceDir.includes("/tmp") ? "tmp-workspace" : "",
     params.agentDir.includes("openclaw") ? "openclaw-agent-dir" : "",
+    workspaceState.gitBranch ? "git-worktree" : "",
   ].filter(Boolean);
   return {
     sessionKey: params.attempt.sessionKey,
@@ -1318,6 +1347,7 @@ export function buildAfterTurnRuntimeContext(params: {
     ownerNumbers: params.attempt.ownerNumbers,
     activeArtifacts,
     workspaceTags,
+    workspaceState,
   };
 }
 

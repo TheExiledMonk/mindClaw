@@ -618,6 +618,31 @@ function summarizeClarificationProfileTrends(
   return trendSignals;
 }
 
+function deriveClarificationTrendPolicy(
+  hasRisingClarificationTrend: boolean,
+  failOnClarificationTrend?: boolean,
+): AgenticQualityGateReport["clarificationTrendPolicy"] {
+  return !hasRisingClarificationTrend ? "none" : failOnClarificationTrend ? "blocking" : "observe";
+}
+
+function deriveClarificationTrendPolicyStatus(
+  policy: AgenticQualityGateReport["clarificationTrendPolicy"],
+): NonNullable<AgenticSoakReport["clarificationTrendPolicyStatus"]> {
+  return policy === "blocking" ? "blocking" : policy === "observe" ? "observe_only" : "none";
+}
+
+function deriveTrendPolicyPromotionStatus(
+  policy: AgenticQualityGateReport["clarificationTrendPolicy"],
+): NonNullable<AgenticSoakReport["trendPolicyPromotionStatus"]> {
+  return policy === "blocking" ? "gated_for_trend_watch" : "promotion_safe";
+}
+
+function deriveCrossLayerTrendPolicyStatus(
+  alignment: AgenticQualityGateReport["clarificationTrendPolicyAlignment"],
+): AgenticQualityGateReport["crossLayerTrendPolicyStatus"] {
+  return alignment === "aligned" ? "consistent" : "divergent";
+}
+
 function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   if (!memoryText) {
     return [];
@@ -7498,6 +7523,10 @@ export function runAgenticSoakSuite(params?: {
   const hasRisingClarificationTrend = clarificationTrendSignals.some((trend) =>
     trend.includes(":rising("),
   );
+  const clarificationTrendPolicy = deriveClarificationTrendPolicy(
+    hasRisingClarificationTrend,
+    params?.failOnClarificationTrend,
+  );
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -7507,20 +7536,9 @@ export function runAgenticSoakSuite(params?: {
     clarificationProfileCounts: clarificationSummary.counts,
     dominantClarificationProfile: clarificationSummary.dominantProfile,
     clarificationTrendSignals,
-    clarificationTrendPolicy: !hasRisingClarificationTrend
-      ? "none"
-      : params?.failOnClarificationTrend
-        ? "blocking"
-        : "observe",
-    clarificationTrendPolicyStatus: !hasRisingClarificationTrend
-      ? "none"
-      : params?.failOnClarificationTrend
-        ? "blocking"
-        : "observe_only",
-    trendPolicyPromotionStatus:
-      hasRisingClarificationTrend && params?.failOnClarificationTrend
-        ? "gated_for_trend_watch"
-        : "promotion_safe",
+    clarificationTrendPolicy,
+    clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
+    trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -7649,20 +7667,19 @@ export function runAgenticQualityGate(params?: {
       ? (mapClarificationTrendToQualityFailReason(risingClarificationTrend) ??
         "diagnostics_clarification_trend_rising")
       : undefined;
-  const clarificationTrendPolicy: AgenticQualityGateReport["clarificationTrendPolicy"] =
-    !risingClarificationTrend ? "none" : params?.failOnClarificationTrend ? "blocking" : "observe";
+  const clarificationTrendPolicy = deriveClarificationTrendPolicy(
+    Boolean(risingClarificationTrend),
+    params?.failOnClarificationTrend,
+  );
   const soakClarificationTrendPolicy: AgenticQualityGateReport["soakClarificationTrendPolicy"] =
     soak.clarificationTrendPolicy ?? "none";
   const clarificationTrendPolicyAlignment: AgenticQualityGateReport["clarificationTrendPolicyAlignment"] =
     soakClarificationTrendPolicy === clarificationTrendPolicy ? "aligned" : "drift";
-  const clarificationTrendPolicyStatus: AgenticQualityGateReport["clarificationTrendPolicyStatus"] =
-    clarificationTrendPolicy === "blocking"
-      ? "blocking"
-      : clarificationTrendPolicy === "observe"
-        ? "observe_only"
-        : "none";
-  const crossLayerTrendPolicyStatus: AgenticQualityGateReport["crossLayerTrendPolicyStatus"] =
-    clarificationTrendPolicyAlignment === "aligned" ? "consistent" : "divergent";
+  const clarificationTrendPolicyStatus =
+    deriveClarificationTrendPolicyStatus(clarificationTrendPolicy);
+  const crossLayerTrendPolicyStatus = deriveCrossLayerTrendPolicyStatus(
+    clarificationTrendPolicyAlignment,
+  );
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,

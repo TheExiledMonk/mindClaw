@@ -111,6 +111,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "cross_layer_trend_policy_status=",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "handoff_resumability_status=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_resume_barrier_profile=",
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -142,6 +148,12 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Cross-layer trend policy status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Handoff resumability status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Soak resume barrier profile:",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
@@ -213,6 +225,8 @@ describe("agentic quality gate", () => {
     expect(protectedReport.diagnostics.branchConventions.length).toBeGreaterThan(0);
     expect(protectedReport.diagnostics.permissionSignals.length).toBeGreaterThan(0);
     expect(protectedReport.protectedBranchGovernanceStatus).toBe("guarded");
+    expect(protectedReport.handoffResumabilityStatus).toBe("unknown");
+    expect(protectedReport.soakResumeBarrierProfile).toBe("none");
     expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
       "workspace_kind=project",
     );
@@ -225,6 +239,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
       "protected_branch_governance_status=guarded",
     );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "handoff_resumability_status=unknown",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "soak_resume_barrier_profile=none",
+    );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Workspace kind: project",
     );
@@ -236,6 +256,12 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Protected branch governance status: guarded",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Handoff resumability status: unknown",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Soak resume barrier profile: none",
     );
 
     const validationThinState = buildAgenticExecutionState({

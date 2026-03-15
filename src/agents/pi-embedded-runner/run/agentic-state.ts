@@ -432,6 +432,8 @@ export type AgenticQualityGateReport = {
   crossLayerTrendPolicyStatus: "consistent" | "divergent";
   protectedBranchGovernanceStatus: "unknown" | "guarded";
   validationReadinessStatus: "unknown" | "observed";
+  handoffResumabilityStatus: "unknown" | "guarded_resume_paths";
+  soakResumeBarrierProfile: AgenticHandoffReport["resumeBarrierProfile"];
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -7896,6 +7898,8 @@ export function runAgenticQualityGate(params?: {
     clarificationTrendPolicyAlignment,
   );
   const qualityEnvironmentRollups = deriveQualityEnvironmentRollups(diagnostics);
+  const handoffResumabilityStatus = acceptance.handoffResumabilityStatus ?? "unknown";
+  const soakResumeBarrierProfile = soak.dominantResumeBarrierProfile ?? "none";
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7996,6 +8000,8 @@ export function runAgenticQualityGate(params?: {
     crossLayerTrendPolicyStatus,
     protectedBranchGovernanceStatus: qualityEnvironmentRollups.protectedBranchGovernanceStatus,
     validationReadinessStatus: qualityEnvironmentRollups.validationReadinessStatus,
+    handoffResumabilityStatus,
+    soakResumeBarrierProfile,
     acceptance,
     soak,
     diagnostics,
@@ -8042,6 +8048,8 @@ export function formatAgenticQualityGateReport(
       `permission_signals=${report.diagnostics.permissionSignals.length > 0 ? report.diagnostics.permissionSignals.join(",") : "none"}`,
       `protected_branch_governance_status=${report.protectedBranchGovernanceStatus}`,
       `validation_readiness_status=${report.validationReadinessStatus}`,
+      `handoff_resumability_status=${report.handoffResumabilityStatus}`,
+      `soak_resume_barrier_profile=${report.soakResumeBarrierProfile}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
       `clarification_profile=${report.clarificationProfile}`,
@@ -8091,6 +8099,8 @@ export function formatAgenticQualityGateReport(
     `- Permission signals: ${report.diagnostics.permissionSignals.length > 0 ? report.diagnostics.permissionSignals.join(", ") : "none"}`,
     `- Protected branch governance status: ${report.protectedBranchGovernanceStatus}`,
     `- Validation readiness status: ${report.validationReadinessStatus}`,
+    `- Handoff resumability status: ${report.handoffResumabilityStatus}`,
+    `- Soak resume barrier profile: ${report.soakResumeBarrierProfile}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
     `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,

@@ -3274,6 +3274,9 @@ describe("MemorySystemContextEngine", () => {
     });
 
     expect(report.agenticTrends?.stabilizedSkills).toContain("diagnostics-repair@debugging/node");
+    expect(report.recommendations).toContain(
+      "promote stabilized scoped skills for stable reuse or extend-existing workflow decisions",
+    );
     const summary = formatMemoryDiagnosticsReport(report, "summary");
     const markdown = formatMemoryDiagnosticsReport(report, "markdown");
     expect(summary).toContain("agentic_stabilized_skills:");

@@ -76,9 +76,8 @@ describe("agentic quality gate", () => {
   it("formats the quality gate report in summary and markdown forms", () => {
     const report = runAgenticQualityGate({
       memoryTrend: {
-        trend: "watch",
+        trend: "stable",
         effectiveSkills: ["acceptance-report@debugging/node"],
-        weakeningSkills: ["diagnostics-repair@debugging/node"],
         stabilizedSkills: ["release-checks@debugging/node"],
       },
     });
@@ -86,11 +85,16 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("recovering_skills=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("stabilized_skills=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("recommendations=");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "# Agentic Quality Gate Report",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Diagnostics");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Effectiveness");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Recommendations:");
+    expect(report.recommendations).toContain(
+      "Promote stabilized scoped skills for stable reuse or extend-existing decisions.",
+    );
   });
 });

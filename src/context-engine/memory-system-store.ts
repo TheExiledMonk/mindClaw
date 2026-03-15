@@ -8337,6 +8337,11 @@ export async function generateMemoryDiagnosticsReport(params: {
           "confirm recovering scoped skills stay stable before promoting the recovered workflow family",
         ]
       : []),
+    ...(agenticTrends?.stabilizedSkills.length &&
+    !agenticTrends?.recoveringSkills.length &&
+    !agenticTrends?.weakeningSkills.length
+      ? ["promote stabilized scoped skills for stable reuse or extend-existing workflow decisions"]
+      : []),
   ]);
   const summary = clipText(
     [

@@ -58,6 +58,13 @@ export type PermanentNodeRelation =
   | "relevant_to"
   | "superseded_by"
   | "supports";
+export type MemoryRelationType =
+  | "derived_from"
+  | "relevant_to"
+  | "superseded_by"
+  | "contradicts"
+  | "confirmed_by"
+  | "linked_to";
 
 export type MemoryProvenanceRecord = {
   kind: "message" | "compaction" | "derived";
@@ -66,10 +73,17 @@ export type MemoryProvenanceRecord = {
   derivedFromMemoryIds?: string[];
 };
 
+export type MemoryRelation = {
+  type: MemoryRelationType;
+  targetMemoryId: string;
+  weight: number;
+};
+
 export type WorkingMemorySnapshot = {
   sessionId: string;
   updatedAt: number;
   rollingSummary: string;
+  carryForwardSummary?: string;
   activeFacts: string[];
   activeGoals: string[];
   openLoops: string[];
@@ -97,6 +111,7 @@ export type LongTermMemoryEntry = {
   lastConfirmedAt?: number;
   contradictionCount: number;
   relatedMemoryIds: string[];
+  relations: MemoryRelation[];
   supersededById?: string;
   versionScope?: string;
   installProfileScope?: string;
@@ -130,6 +145,14 @@ export type MemoryStoreSnapshot = {
 
 export type MemoryCompileResult = MemoryStoreSnapshot & {
   compilerNotes: string[];
+  review: MemoryReviewResult;
+};
+
+export type MemoryReviewResult = {
+  carryForwardSummary?: string;
+  archivedMemoryIds: string[];
+  staleMemoryIds: string[];
+  reviewedPendingIds: string[];
 };
 
 export type MemoryRetrievalItem = {
@@ -235,6 +258,7 @@ function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
     evidence: [...entry.evidence],
     provenance: entry.provenance.map((item) => ({ ...item, derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])] })),
     relatedMemoryIds: [...entry.relatedMemoryIds],
+    relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
   };
 }
 
@@ -244,7 +268,22 @@ function clonePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
     evidence: [...entry.evidence],
     provenance: entry.provenance.map((item) => ({ ...item, derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])] })),
     relatedMemoryIds: [...entry.relatedMemoryIds],
+    relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
   };
+}
+
+function mergeRelations(existing: MemoryRelation[], incoming: MemoryRelation[]): MemoryRelation[] {
+  const merged = new Map<string, MemoryRelation>();
+  for (const relation of [...existing, ...incoming]) {
+    const key = `${relation.type}:${relation.targetMemoryId}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...relation });
+      continue;
+    }
+    current.weight = Math.max(current.weight, relation.weight);
+  }
+  return [...merged.values()].sort((a, b) => b.weight - a.weight).slice(0, MAX_WORKING_ITEMS);
 }
 
 function createProvenanceRecord(
@@ -382,6 +421,7 @@ export function buildWorkingMemorySnapshot(params: {
     sessionId: params.sessionId,
     updatedAt: Date.now(),
     rollingSummary,
+    carryForwardSummary: params.previous?.carryForwardSummary,
     activeFacts,
     activeGoals,
     openLoops,
@@ -512,6 +552,7 @@ export function deriveLongTermMemoryCandidates(params: {
       lastConfirmedAt: Date.now(),
       contradictionCount: 0,
       relatedMemoryIds: [],
+      relations: [],
       updatedAt: Date.now(),
     };
 
@@ -546,6 +587,7 @@ export function deriveLongTermMemoryCandidates(params: {
       lastConfirmedAt: Date.now(),
       contradictionCount: 0,
       relatedMemoryIds: [],
+      relations: [],
       updatedAt: Date.now(),
     });
   }
@@ -580,6 +622,7 @@ export function mergeLongTermMemory(
     current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
+    current.relations = mergeRelations(current.relations, item.relations);
     current.lastConfirmedAt = Date.now();
     current.trend = "rising";
     current.importanceClass =
@@ -627,6 +670,7 @@ export function mergePendingSignificance(
     current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
+    current.relations = mergeRelations(current.relations, item.relations);
     current.lastConfirmedAt = Date.now();
   }
   return [...byText.values()]
@@ -994,11 +1038,37 @@ function buildPatternMemoryEntries(entries: LongTermMemoryEntry[]): LongTermMemo
       lastConfirmedAt: Date.now(),
       contradictionCount: 0,
       relatedMemoryIds: deduped.map((entry) => entry.id),
+      relations: deduped.map((entry) => ({
+        type: "derived_from" as const,
+        targetMemoryId: entry.id,
+        weight: 0.88,
+      })),
       updatedAt: Date.now(),
     });
   }
 
   return patterns;
+}
+
+function annotateRelations(entries: LongTermMemoryEntry[]): LongTermMemoryEntry[] {
+  const next = entries.map(cloneLongTermEntry);
+  for (let i = 0; i < next.length; i += 1) {
+    for (let j = i + 1; j < next.length; j += 1) {
+      const a = next[i];
+      const b = next[j];
+      const overlap = computeOverlapScore(a.text, new Set(tokenize(b.text)));
+      if (overlap < 3) {
+        continue;
+      }
+      const relationType = isContradictoryPair(a, b) ? "contradicts" : "relevant_to";
+      const weight = Math.min(0.95, 0.45 + overlap * 0.08);
+      a.relations = mergeRelations(a.relations, [{ type: relationType, targetMemoryId: b.id, weight }]);
+      b.relations = mergeRelations(b.relations, [{ type: relationType, targetMemoryId: a.id, weight }]);
+      a.relatedMemoryIds = uniqueIds([...a.relatedMemoryIds, b.id]);
+      b.relatedMemoryIds = uniqueIds([...b.relatedMemoryIds, a.id]);
+    }
+  }
+  return next;
 }
 
 function applySupersession(entries: LongTermMemoryEntry[]): {
@@ -1031,11 +1101,55 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
         createProvenanceRecord("derived", `superseded by ${newer.text}`, [newer.id]),
       ]);
       older.relatedMemoryIds = uniqueIds([...older.relatedMemoryIds, newer.id]);
+      older.relations = mergeRelations(older.relations, [
+        { type: "superseded_by", targetMemoryId: newer.id, weight: 0.96 },
+      ]);
+      newer.relations = mergeRelations(newer.relations, [
+        { type: "confirmed_by", targetMemoryId: older.id, weight: 0.62 },
+      ]);
       supersededCount += 1;
     }
   }
 
   return { entries: next, supersededCount };
+}
+
+function reviewMemoryState(params: {
+  workingMemory: WorkingMemorySnapshot;
+  longTermMemory: LongTermMemoryEntry[];
+  pendingSignificance: PendingMemoryEntry[];
+}): MemoryReviewResult {
+  const archivedMemoryIds = params.longTermMemory
+    .filter(
+      (entry) =>
+        entry.activeStatus === "superseded" &&
+        entry.compressionState === "latent" &&
+        entry.accessCount === 0,
+    )
+    .map((entry) => entry.id);
+  const staleMemoryIds = params.longTermMemory
+    .filter((entry) => entry.activeStatus === "stale" || entry.compressionState === "latent")
+    .map((entry) => entry.id)
+    .slice(0, MAX_WORKING_ITEMS);
+  const reviewedPendingIds = params.pendingSignificance.map((entry) => entry.id).slice(0, MAX_WORKING_ITEMS);
+  const carryForwardSummary = clipText(
+    [
+      params.workingMemory.rollingSummary,
+      params.workingMemory.activeGoals[0] ? `Top goal: ${params.workingMemory.activeGoals[0]}` : "",
+      params.workingMemory.openLoops[0] ? `Open loop: ${params.workingMemory.openLoops[0]}` : "",
+      params.pendingSignificance[0] ? `Pending review: ${params.pendingSignificance[0].text}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | "),
+    320,
+  );
+
+  return {
+    carryForwardSummary: carryForwardSummary || undefined,
+    archivedMemoryIds,
+    staleMemoryIds,
+    reviewedPendingIds,
+  };
 }
 
 export function mergePermanentMemoryTree(
@@ -1127,9 +1241,19 @@ export function compileMemoryState(params: {
     ]),
     params.messages,
   );
-  const supersession = applySupersession(lifecycle.entries);
+  const related = annotateRelations(lifecycle.entries);
+  const supersession = applySupersession(related);
   const nextLongTerm = supersession.entries;
   const nextPending = promotedPending.remaining;
+  const review = reviewMemoryState({
+    workingMemory: nextWorkingMemory,
+    longTermMemory: nextLongTerm,
+    pendingSignificance: nextPending,
+  });
+  const reviewedWorkingMemory: WorkingMemorySnapshot = {
+    ...nextWorkingMemory,
+    carryForwardSummary: review.carryForwardSummary,
+  };
   const nextPermanent = mergePermanentMemoryTree(previous?.permanentMemory, [
     ...candidates.durable,
     ...promotedPending.durable,
@@ -1161,13 +1285,17 @@ export function compileMemoryState(params: {
   if (nextWorkingMemory.activeGoals.length > 0) {
     compilerNotes.push("refreshed active-goal working set");
   }
+  if (review.carryForwardSummary) {
+    compilerNotes.push("prepared next-session carry-forward summary");
+  }
 
   return {
-    workingMemory: nextWorkingMemory,
+    workingMemory: reviewedWorkingMemory,
     longTermMemory: nextLongTerm,
     pendingSignificance: nextPending,
     permanentMemory: nextPermanent,
     compilerNotes,
+    review,
   };
 }
 
@@ -1260,6 +1388,34 @@ function rankLongTermEntries(
   });
 }
 
+function expandRelatedMemories(
+  selected: LongTermMemoryEntry[],
+  allEntries: LongTermMemoryEntry[],
+): LongTermMemoryEntry[] {
+  const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
+  const expanded: LongTermMemoryEntry[] = [];
+  const seen = new Set<string>(selected.map((entry) => entry.id));
+
+  for (const entry of selected) {
+    for (const relation of entry.relations) {
+      if (relation.weight < 0.5 || seen.has(relation.targetMemoryId)) {
+        continue;
+      }
+      const related = byId.get(relation.targetMemoryId);
+      if (!related || related.activeStatus === "superseded") {
+        continue;
+      }
+      seen.add(related.id);
+      expanded.push(related);
+      if (expanded.length >= MAX_PACKET_ITEMS) {
+        return expanded;
+      }
+    }
+  }
+
+  return expanded;
+}
+
 export function retrieveMemoryContextPacket(
   snapshot: MemoryStoreSnapshot,
   params?: { messages?: AgentMessage[] },
@@ -1300,6 +1456,21 @@ export function retrieveMemoryContextPacket(
     accessedLongTermIds.push(...longTerm.map((item) => item.id));
     sections.push(
       `Relevant long-term facts and patterns:\n- ${longTerm.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
+    );
+  }
+  const relatedExpansion = expandRelatedMemories(longTerm, snapshot.longTermMemory);
+  if (relatedExpansion.length > 0) {
+    retrievalItems.push(
+      ...relatedExpansion.map((item) => ({
+        kind: "long-term" as const,
+        text: `[${item.category}] ${item.text}`,
+        reason: `graph expansion via ${item.relations[0]?.type ?? "linked"} relation`,
+        memoryId: item.id,
+      })),
+    );
+    accessedLongTermIds.push(...relatedExpansion.map((item) => item.id));
+    sections.push(
+      `Related memory expansion:\n- ${relatedExpansion.map((item) => `[${item.category}] ${item.text}`).join("\n- ")}`,
     );
   }
 
@@ -1351,6 +1522,11 @@ export function retrieveMemoryContextPacket(
   if (snapshot.workingMemory.lastCompactionSummary) {
     sections.push(
       `Relevant recent context:\n- ${clipText(snapshot.workingMemory.lastCompactionSummary, 220)}`,
+    );
+  }
+  if (snapshot.workingMemory.carryForwardSummary) {
+    sections.push(
+      `Session continuity output:\n- ${clipText(snapshot.workingMemory.carryForwardSummary, 220)}`,
     );
   }
 
@@ -1434,6 +1610,7 @@ function sanitizeLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry 
     lastConfirmedAt: entry.lastConfirmedAt ?? entry.updatedAt ?? Date.now(),
     contradictionCount: entry.contradictionCount ?? 0,
     relatedMemoryIds: [...(entry.relatedMemoryIds ?? [])],
+    relations: (entry.relations ?? []).map((relation) => ({ ...relation })),
     updatedAt: entry.updatedAt ?? Date.now(),
   };
 }
@@ -1469,6 +1646,7 @@ export async function loadMemoryStoreSnapshot(params: {
     sessionId: params.sessionId,
     updatedAt: Date.now(),
     rollingSummary: "",
+    carryForwardSummary: "",
     activeFacts: [],
     activeGoals: [],
     openLoops: [],

@@ -56,6 +56,7 @@ function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMe
     lastConfirmedAt: now,
     contradictionCount: 0,
     relatedMemoryIds: [],
+    relations: [],
     updatedAt: now,
     ...overrides,
   };
@@ -161,7 +162,7 @@ describe("memory system store", () => {
   it("compiler reconsolidates compaction summaries into long-term and permanent memory", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",
-      messages: [],
+      messages: [userMessage("Next session continue with memory-system migration validation.")],
       compactionSummary:
         "We decided to use memory-system as the active context engine and preserve repo tag v2026.3.13-1 as the migration baseline.",
     });
@@ -171,6 +172,7 @@ describe("memory system store", () => {
       compiled.permanentMemory.children.some((child) => child.label === "projects"),
     ).toBe(true);
     expect(Array.isArray(compiled.pendingSignificance)).toBe(true);
+    expect(compiled.review.carryForwardSummary).toBeTruthy();
   });
 
   it("promotes recurring pending-significance memories into durable long-term memory", () => {
@@ -278,6 +280,58 @@ describe("memory system store", () => {
     expect(packet.text).toContain("Retrieval audit");
   });
 
+  it("expands retrieval through related memories and includes continuity output", () => {
+    const workingMemory = buildWorkingMemorySnapshot({
+      sessionId: "session-a",
+      messages: [userMessage("Continue the memory-system context assembly work next session.")],
+    });
+    workingMemory.carryForwardSummary =
+      "Continue memory-system context assembly work, preserve unresolved review items, and check linked patterns.";
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory,
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-primary",
+            category: "strategy",
+            text: "Memory-system context assembly should preserve unresolved review items.",
+            relations: [{ type: "relevant_to", targetMemoryId: "ltm-related", weight: 0.82 }],
+          }),
+          longTermEntry({
+            id: "ltm-ranked",
+            category: "decision",
+            text: "Continue memory-system context assembly work next session and preserve the migration plan.",
+            strength: 0.91,
+          }),
+          longTermEntry({
+            id: "ltm-ranked-2",
+            category: "fact",
+            text: "The current migration plan keeps memory-system as the default context engine for the next session.",
+            strength: 0.89,
+          }),
+          longTermEntry({
+            id: "ltm-ranked-3",
+            category: "strategy",
+            text: "Next session should continue the migration plan and preserve context-engine continuity checks.",
+            strength: 0.88,
+          }),
+          longTermEntry({
+            id: "ltm-related",
+            category: "pattern",
+            text: "Linked pattern memory for archived support signals with low direct lexical overlap.",
+          }),
+        ],
+        pendingSignificance: [],
+        permanentMemory: permanentRoot(),
+      },
+      { messages: [userMessage("Continue memory-system context assembly and linked pattern review.")] },
+    );
+
+    expect(packet.text).toContain("Related memory expansion");
+    expect(packet.text).toContain("Session continuity output");
+    expect(packet.accessedLongTermIds).toContain("ltm-related");
+  });
+
   it("extracts generalized pattern memories and marks superseded memories", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",
@@ -309,6 +363,11 @@ describe("memory system store", () => {
       "superseded",
     );
     expect(compiled.compilerNotes.some((note) => note.includes("generalized pattern"))).toBe(true);
+    expect(
+      compiled.longTermMemory.find((entry) => entry.id === "ltm-old")?.relations.some(
+        (relation) => relation.type === "superseded_by",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -338,6 +397,7 @@ describe("MemorySystemContextEngine", () => {
       sessionId: "agent:main",
     });
     expect(snapshot.workingMemory.activeGoals.length).toBeGreaterThan(0);
+    expect(snapshot.workingMemory.carryForwardSummary).toBeTruthy();
     expect(snapshot.longTermMemory.length).toBeGreaterThan(0);
     expect(snapshot.permanentMemory.children.length).toBeGreaterThan(0);
 

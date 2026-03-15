@@ -752,6 +752,10 @@ function buildOrchestrationState(params: {
   const memoryRecommendedSkills = uniqueCompact(params.memoryRecommendedSkills ?? [], 6);
   const memoryWeightedSkills = params.memoryWeightedSkills ?? new Map<string, number>();
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
+  const currentLikelySkill = likelySkills[0];
+  const currentLikelyMemoryWeight = currentLikelySkill
+    ? (memoryWeightedSkills.get(currentLikelySkill) ?? 0)
+    : 0;
   const toolNames = new Set((params.toolSignals ?? []).map((signal) => signal.toolName));
   const preferredEnv = inferPreferredSkillEnvironment(params.objectiveText ?? "", params.taskMode);
   const currentExecutionEnvs = inferCurrentExecutionEnvironments({
@@ -804,6 +808,13 @@ function buildOrchestrationState(params: {
         if (alternativeSkills.includes(skill.name)) {
           score += 2;
           reasons.push("promoted-fallback");
+        }
+        if (
+          alternativeSkills.includes(skill.name) &&
+          (memoryWeightedSkills.get(skill.name) ?? 0) > currentLikelyMemoryWeight
+        ) {
+          score += 2.5;
+          reasons.push("better-memory-backed-fallback");
         }
       }
       if (
@@ -960,6 +971,33 @@ function buildFailureLearningState(params: {
   };
 }
 
+function reconcilePlannerStateWithOrchestration(params: {
+  plannerState: AgenticPlannerState;
+  orchestrationState: AgenticOrchestrationState;
+  likelySkills?: string[];
+}): AgenticPlannerState {
+  const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
+  if (params.plannerState.retryClass !== "skill_fallback") {
+    return params.plannerState;
+  }
+  const rankedAlternatives = params.orchestrationState.rankedSkills.filter(
+    (skill) => !likelySkills.includes(skill),
+  );
+  if (rankedAlternatives.length === 0) {
+    return params.plannerState;
+  }
+  const suggestedSkill = rankedAlternatives[0];
+  const nextAction = params.plannerState.nextAction?.includes("fallback workflow using")
+    ? `Switch to a fallback workflow using ${suggestedSkill} before retrying. Consider alternative skills: ${rankedAlternatives.slice(0, 3).join(", ")}.`
+    : params.plannerState.nextAction;
+  return {
+    ...params.plannerState,
+    suggestedSkill,
+    alternativeSkills: rankedAlternatives,
+    nextAction,
+  };
+}
+
 export function buildAgenticExecutionState(params: {
   messages: AgentMessage[];
   activeArtifacts?: string[];
@@ -1094,11 +1132,16 @@ export function buildAgenticExecutionState(params: {
     plannerState,
     orchestrationState,
   });
+  const reconciledPlannerState = reconcilePlannerStateWithOrchestration({
+    plannerState,
+    orchestrationState,
+    likelySkills: params.likelySkills,
+  });
 
   return {
     taskState,
     verificationState,
-    plannerState,
+    plannerState: reconciledPlannerState,
     governanceState,
     orchestrationState,
     environmentState,

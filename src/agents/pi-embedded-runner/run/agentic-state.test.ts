@@ -252,6 +252,45 @@ describe("agentic-state", () => {
     ]);
   });
 
+  it("uses memory-weighted orchestration to choose the fallback skill", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the diagnostics workflow and switch to the strongest remembered reporting path if needed.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Validation failed again for the diagnostics workflow.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report", "release-checks"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "acceptance-report", primaryEnv: "node" },
+        { name: "release-checks", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Recommended procedural skills:",
+        "- memory-diagnostics",
+        "Procedural guidance:",
+        "- Procedural workflow for planning work: primary skill memory-diagnostics: with outcome failed: failure pattern near_miss",
+        "- Procedural workflow for planning work: primary skill acceptance-report: with outcome verified: failure pattern clean_success",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.plannerState.retryClass).toBe("skill_fallback");
+    expect(state.plannerState.suggestedSkill).toBe("acceptance-report");
+    expect(state.plannerState.alternativeSkills[0]).toBe("acceptance-report");
+    expect(state.plannerState.nextAction).toContain("acceptance-report");
+  });
+
   it("escalates environment mismatches instead of recommending normal retries", () => {
     const state = buildAgenticExecutionState({
       messages: [msg("user", "Run the deployment fix and keep the workflow moving.")],

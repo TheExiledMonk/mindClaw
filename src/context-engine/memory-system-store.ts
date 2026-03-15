@@ -2751,6 +2751,7 @@ function rankLongTermEntries(
   queryTokens: Set<string>,
   taskMode: MemoryTaskMode,
   scopeContext?: MemoryScopeContext,
+  adjudications?: PersistedMemoryAdjudication[],
 ): LongTermMemoryEntry[] {
   const taskBonus = (entry: LongTermMemoryEntry): number => {
     if (taskMode === "coding" && (entry.category === "strategy" || entry.category === "decision")) {
@@ -2805,6 +2806,24 @@ function rankLongTermEntries(
       };
       const contradictionPenalty = (entry: LongTermMemoryEntry): number =>
         entry.contradictionCount * 1.2;
+      const adjudicationBonus = (entry: LongTermMemoryEntry): number => {
+        const adjudication = adjudications?.find(
+          (item) => item.conceptId === getEntryConceptId(entry),
+        );
+        if (!adjudication) {
+          return 0;
+        }
+        if (adjudication.winningMemoryId === entry.id && adjudication.status === "authoritative") {
+          return 2.5;
+        }
+        if (adjudication.status === "contested") {
+          return -1.5;
+        }
+        if (adjudication.status === "superseded") {
+          return -2;
+        }
+        return 0;
+      };
       const aScore =
         computeOverlapScore(a.text, queryTokens) +
         a.strength * 10 +
@@ -2812,7 +2831,8 @@ function rankLongTermEntries(
         taskBonus(a) -
         statePenalty(a) -
         contradictionPenalty(a) +
-        scopeBonus(a);
+        scopeBonus(a) +
+        adjudicationBonus(a);
       const bScore =
         computeOverlapScore(b.text, queryTokens) +
         b.strength * 10 +
@@ -2820,7 +2840,8 @@ function rankLongTermEntries(
         taskBonus(b) -
         statePenalty(b) -
         contradictionPenalty(b) +
-        scopeBonus(b);
+        scopeBonus(b) +
+        adjudicationBonus(b);
       return bScore - aScore;
     });
   const seenConcepts = new Set<string>();
@@ -3115,6 +3136,7 @@ function expandRelatedMemories(
   taskMode: MemoryTaskMode,
   scopeContext?: MemoryScopeContext,
   graph?: MemoryGraphSnapshot,
+  adjudications?: PersistedMemoryAdjudication[],
 ): LongTermMemoryEntry[] {
   const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
   const graphNodeById = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
@@ -3231,6 +3253,16 @@ function expandRelatedMemories(
         if (!artifactRelated || !includeMemoryForContext(artifactRelated, taskMode)) {
           continue;
         }
+        const adjudication = adjudications?.find(
+          (item) => item.conceptId === getEntryConceptId(artifactRelated),
+        );
+        if (
+          adjudication?.status === "contested" &&
+          taskMode !== "debugging" &&
+          taskMode !== "support"
+        ) {
+          continue;
+        }
         seen.add(artifactRelated.id);
         expanded.push(artifactRelated);
         if (expanded.length >= MAX_PACKET_ITEMS) {
@@ -3241,6 +3273,16 @@ function expandRelatedMemories(
     }
     const related = byId.get(edge.to);
     if (!related || !includeMemoryForContext(related, taskMode)) {
+      continue;
+    }
+    const adjudication = adjudications?.find(
+      (item) => item.conceptId === getEntryConceptId(related),
+    );
+    if (
+      adjudication?.status === "contested" &&
+      taskMode !== "debugging" &&
+      taskMode !== "support"
+    ) {
       continue;
     }
     seen.add(related.id);
@@ -3266,6 +3308,11 @@ export function retrieveMemoryContextPacket(
   const queryTokens = new Set(tokenize(currentText));
   const taskMode = detectTaskMode(params?.messages ?? [], snapshot.workingMemory);
   const scopeContext = buildMemoryScopeContext(currentText);
+  const adjudications = buildPersistedMemoryAdjudications({
+    sessionId: snapshot.workingMemory.sessionId || "runtime",
+    entries: snapshot.longTermMemory,
+    revisions: collectPersistedMemoryRevisions(snapshot.longTermMemory),
+  });
   const retrievalItems: MemoryRetrievalItem[] = [];
   const sections: string[] = [];
   const accessedLongTermIds: string[] = [];
@@ -3282,16 +3329,22 @@ export function retrieveMemoryContextPacket(
     queryTokens,
     taskMode,
     scopeContext,
+    adjudications,
   ).slice(0, MAX_PACKET_ITEMS);
   if (longTerm.length > 0) {
     retrievalItems.push(
-      ...longTerm.map((item) => ({
-        kind: "long-term" as const,
-        text: formatMemoryWithState(item),
-        reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
-        memoryId: item.id,
-        conceptId: getEntryConceptId(item),
-      })),
+      ...longTerm.map((item) => {
+        const adjudication = adjudications.find(
+          (entry) => entry.conceptId === getEntryConceptId(item),
+        );
+        return {
+          kind: "long-term" as const,
+          text: formatMemoryWithState(item),
+          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+          memoryId: item.id,
+          conceptId: getEntryConceptId(item),
+        };
+      }),
     );
     accessedLongTermIds.push(...longTerm.map((item) => item.id));
     accessedConceptIds.push(...longTerm.map((item) => getEntryConceptId(item)));
@@ -3367,6 +3420,7 @@ export function retrieveMemoryContextPacket(
     taskMode,
     scopeContext,
     snapshot.graph,
+    adjudications,
   );
   if (relatedExpansion.length > 0) {
     retrievalItems.push(
@@ -3847,6 +3901,7 @@ type PersistedMemoryAdjudication = {
   sessionId: string;
   conceptId: string;
   status: MemoryAdjudicationStatus;
+  resolutionKind: "winner" | "contested" | "retired";
   rationale: string;
   winningMemoryId?: string;
   losingMemoryIds: string[];
@@ -4009,12 +4064,15 @@ function buildPersistedMemoryAdjudications(params: {
       .filter((entry) => entry.id !== winner?.id)
       .map((entry) => entry.id);
     let status: MemoryAdjudicationStatus = winner?.adjudicationStatus ?? "authoritative";
+    let resolutionKind: PersistedMemoryAdjudication["resolutionKind"] = "winner";
     let rationale = "single authoritative concept state";
     if (history.some((revision) => revision.adjudicationStatus === "contested")) {
       status = "contested";
+      resolutionKind = "contested";
       rationale = "concept revision history contains contested evidence";
     } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
       status = winner?.activeStatus === "superseded" ? "superseded" : status;
+      resolutionKind = winner?.activeStatus === "superseded" ? "retired" : "winner";
       rationale = "concept includes superseded observations";
     } else if (history.some((revision) => revision.revisionKind === "updated")) {
       rationale = "concept resolved through updated revision history";
@@ -4026,6 +4084,7 @@ function buildPersistedMemoryAdjudications(params: {
       sessionId: params.sessionId,
       conceptId,
       status,
+      resolutionKind,
       rationale,
       winningMemoryId: winner?.id,
       losingMemoryIds,

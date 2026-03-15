@@ -488,6 +488,50 @@ describe("memory system store", () => {
     expect(packet.accessedConceptIds).toHaveLength(1);
   });
 
+  it("surfaces adjudication rationale in concept-ranked retrieval", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "adjudication-ranked-a",
+          messages: [userMessage("Plan the permanent memory-system path rollout.")],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-adj-winner",
+            conceptKey: "concept::constraint::memory-path",
+            canonicalText: "use permanent memory-system path",
+            conceptAliases: ["Use the permanent memory-system path."],
+            text: "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+            confidence: 0.95,
+            strength: 0.95,
+            revisionCount: 2,
+            lastRevisionKind: "updated",
+          }),
+          longTermEntry({
+            id: "ltm-adj-loser",
+            conceptKey: "concept::constraint::memory-path",
+            canonicalText: "use permanent memory-system path",
+            conceptAliases: ["Use the permanent memory-system path."],
+            text: "Use the permanent path for memory-system integration.",
+            confidence: 0.74,
+            strength: 0.7,
+            revisionCount: 1,
+            lastRevisionKind: "reasserted",
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      { messages: [userMessage("Plan the permanent memory-system path rollout.")] },
+    );
+
+    const ranked = packet.retrievalItems.find(
+      (item) => item.kind === "long-term" && item.memoryId === "ltm-adj-winner",
+    );
+    expect(ranked?.reason).toContain("adjudication=authoritative:winner");
+  });
+
   it("expands retrieval through related memories and includes continuity output", () => {
     const workingMemory = buildWorkingMemorySnapshot({
       sessionId: "session-a",

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildAgenticExecutionState } from "../agents/pi-embedded-runner/run/agentic-state.js";
 import { requireNodeSqlite } from "../memory/sqlite.js";
 import {
   buildMemoryContextPacket,
@@ -2695,6 +2696,26 @@ describe("MemorySystemContextEngine", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("includes failure-derived consolidation guidance coverage in the memory acceptance suite", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-acceptance-failure-consolidation-"),
+    );
+
+    const report = await runMemoryAcceptanceSuite({
+      workspaceDir: tempDir,
+      sessionIdPrefix: "failure-consolidation",
+      backendKinds: ["fs-json"],
+    });
+
+    const scenario = report.scenarios.find(
+      (entry: MemoryAcceptanceScenarioResult) =>
+        entry.scenario === "agentic_failure_derived_consolidation_guidance",
+    );
+    expect(scenario?.passed).toBe(true);
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("surfaces agentic trend summaries in memory diagnostics", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-agentic-trends-"));
     const sessionId = "agent:agentic-trends";
@@ -4234,6 +4255,200 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("family=verification");
     expect(packet.text).toContain("template_candidate=true");
     expect(packet.text).toContain("durable=true");
+  });
+
+  it("uses retrieved failure-derived merge guidance to steer later replanning", () => {
+    const sessionId = "agent:failure-derived-merge-replan";
+    const mergeFirst = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Merge the overlapping diagnostics siblings after repeated blocked attempts."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "diagnostics-report"],
+          likelySkills: ["memory-diagnostics", "diagnostics-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/memory-diagnostics-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "partial",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: ["memory-diagnostics", "diagnostics-report"],
+          skillFamilies: ["diagnostics"],
+          mergeCandidate: true,
+          mergeSkills: ["memory-diagnostics", "diagnostics-report"],
+          nearMissCandidate: true,
+          retryClass: "skill_fallback",
+          shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "diagnostics-report",
+          fallbackSkills: ["memory-diagnostics"],
+          skillChain: ["diagnostics-report", "memory-diagnostics"],
+          workflowSteps: [
+            { skill: "diagnostics-report", role: "primary" },
+            { skill: "memory-diagnostics", role: "fallback" },
+          ],
+          rankedSkills: ["diagnostics-report", "memory-diagnostics"],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: true,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "blocked_path",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Merge overlapping diagnostics siblings into one reusable workflow.",
+        },
+      } as never,
+    });
+    const mergeSecond = structuredClone(mergeFirst);
+    for (const entry of mergeFirst.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of mergeSecond.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    mergeFirst.longTermMemory.push(...mergeSecond.longTermMemory);
+    mergeFirst.pendingSignificance.push(...mergeSecond.pendingSignificance);
+
+    const packet = retrieveMemoryContextPacket(mergeFirst, {
+      messages: [userMessage("Fix the diagnostics workflow and pick the strongest sibling path.")],
+    });
+    const state = buildAgenticExecutionState({
+      messages: [userMessage("Fix the diagnostics workflow and pick the strongest sibling path.")],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Diagnostics validation failed again for the current path.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: packet.text,
+    });
+
+    expect(packet.text).toContain("merge_candidate=true");
+    expect(state.plannerState.suggestedSkill).toBe("diagnostics-report");
+    expect(state.orchestrationState.primarySkill).toBe("diagnostics-report");
+    expect(state.orchestrationState.mergeCandidate).toBe(true);
+  });
+
+  it("uses retrieved failure-derived template guidance to avoid escalating into a new fork", () => {
+    const sessionId = "agent:failure-derived-template-replan";
+    const templateFirst = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage("Keep the acceptance workflow reusable instead of spawning another fork."),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["acceptance-report"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: [],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/acceptance-report.ts"],
+          outcome: "failed",
+          goalSatisfaction: "partial",
+          taskMode: "debugging",
+          planSteps: [],
+          templateCandidate: true,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: [],
+          skillFamilies: ["verification"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: true,
+          retryClass: "same_path_retry",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "acceptance-report",
+          fallbackSkills: [],
+          skillChain: ["acceptance-report"],
+          workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+          rankedSkills: ["acceptance-report"],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "near_miss",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Parameterize the acceptance workflow instead of creating another fork.",
+        },
+      } as never,
+    });
+    const templateSecond = structuredClone(templateFirst);
+    for (const entry of templateFirst.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of templateSecond.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    templateFirst.longTermMemory.push(...templateSecond.longTermMemory);
+    templateFirst.pendingSignificance.push(...templateSecond.pendingSignificance);
+
+    const packet = retrieveMemoryContextPacket(templateFirst, {
+      messages: [
+        userMessage("Fix the acceptance workflow without creating another specialized fork."),
+      ],
+    });
+    const state = buildAgenticExecutionState({
+      messages: [
+        userMessage("Fix the acceptance workflow without creating another specialized fork."),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Acceptance workflow validation nearly worked but still needs refinement.",
+        },
+      ],
+      availableSkills: ["acceptance-report"],
+      likelySkills: ["acceptance-report"],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+      memorySystemPromptAddition: packet.text,
+    });
+
+    expect(packet.text).toContain("template_candidate=true");
+    expect(state.plannerState.shouldEscalate).toBe(false);
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
   });
 
   it("injects skill effectiveness guidance into retrieved memory packets", () => {

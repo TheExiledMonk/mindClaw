@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { buildAgenticExecutionState } from "../agents/pi-embedded-runner/run/agentic-state.js";
 import { requireNodeSqlite } from "../memory/sqlite.js";
 import type { ContextEngineRuntimeContext } from "./types.js";
 
@@ -348,7 +349,8 @@ export type MemoryAcceptanceScenarioResult = {
     | "scope_matrix_resilience"
     | "rivalry_governance"
     | "multi_tenant_release_handoff"
-    | "agentic_stable_promotion";
+    | "agentic_stable_promotion"
+    | "agentic_failure_derived_consolidation_guidance";
   passed: boolean;
   summary: string;
   details: string[];
@@ -8572,6 +8574,222 @@ export async function runMemoryAcceptanceSuite(params: {
     details: [
       ...(stablePromotionReport.agenticTrends?.stabilizedSkills ?? []),
       ...stablePromotionReport.recommendations,
+    ],
+  });
+
+  const failureDerivedSessionId = `${sessionIdPrefix}:agentic-failure-derived-consolidation`;
+  const templateFailureFirst = compileMemoryState({
+    sessionId: failureDerivedSessionId,
+    messages: [
+      userMessageForSuite(
+        "Keep the acceptance workflow reusable instead of spawning another fork after the current path nearly worked.",
+      ),
+    ],
+    runtimeContext: {
+      proceduralExecution: {
+        version: 1,
+        availableSkills: ["acceptance-report"],
+        likelySkills: ["acceptance-report"],
+        alternativeSkills: [],
+        toolChain: ["read", "exec"],
+        changedArtifacts: ["scripts/acceptance-report.ts"],
+        outcome: "failed",
+        goalSatisfaction: "partial",
+        taskMode: "debugging",
+        planSteps: [],
+        templateCandidate: true,
+        consolidationCandidate: true,
+        consolidationAction: "generalize_existing",
+        overlappingSkills: [],
+        skillFamilies: ["verification"],
+        mergeCandidate: false,
+        mergeSkills: [],
+        nearMissCandidate: true,
+        retryClass: "same_path_retry",
+        shouldEscalate: false,
+        autonomyMode: "continue",
+        riskLevel: "medium",
+        governanceReasons: [],
+        primarySkill: "acceptance-report",
+        fallbackSkills: [],
+        skillChain: ["acceptance-report"],
+        workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+        rankedSkills: ["acceptance-report"],
+        effectiveSkills: [],
+        effectiveFamilies: [],
+        promotedSkills: [],
+        stabilityState: "neutral",
+        stabilitySkills: [],
+        prerequisiteWarnings: [],
+        capabilityGaps: [],
+        hasViableFallback: true,
+        multiSkillCandidate: false,
+        chainedWorkflow: false,
+        workspaceKind: "project",
+        capabilitySignals: ["can_execute_commands"],
+        preferredValidationTools: ["exec"],
+        skillEnvironments: ["node"],
+        failurePattern: "near_miss",
+        learnFromFailure: true,
+        failureReasons: ["verification_failure"],
+        nextImprovement: "Parameterize the acceptance workflow instead of creating another fork.",
+      },
+    } as never,
+  });
+  const templateFailureSecond = structuredClone(templateFailureFirst);
+  const mergeFailureFirst = compileMemoryState({
+    sessionId: failureDerivedSessionId,
+    messages: [
+      userMessageForSuite(
+        "Merge the overlapping diagnostics siblings instead of keeping parallel forks after repeated blocked attempts.",
+      ),
+    ],
+    runtimeContext: {
+      proceduralExecution: {
+        version: 1,
+        availableSkills: ["memory-diagnostics", "diagnostics-report"],
+        likelySkills: ["memory-diagnostics", "diagnostics-report"],
+        alternativeSkills: [],
+        toolChain: ["read", "exec"],
+        changedArtifacts: ["scripts/memory-diagnostics-report.ts"],
+        outcome: "failed",
+        goalSatisfaction: "partial",
+        taskMode: "debugging",
+        planSteps: [],
+        templateCandidate: false,
+        consolidationCandidate: true,
+        consolidationAction: "generalize_existing",
+        overlappingSkills: ["memory-diagnostics", "diagnostics-report"],
+        skillFamilies: ["diagnostics"],
+        mergeCandidate: true,
+        mergeSkills: ["memory-diagnostics", "diagnostics-report"],
+        nearMissCandidate: true,
+        retryClass: "skill_fallback",
+        shouldEscalate: false,
+        autonomyMode: "fallback",
+        riskLevel: "medium",
+        governanceReasons: [],
+        primarySkill: "diagnostics-report",
+        fallbackSkills: ["memory-diagnostics"],
+        skillChain: ["diagnostics-report", "memory-diagnostics"],
+        workflowSteps: [
+          { skill: "diagnostics-report", role: "primary" },
+          { skill: "memory-diagnostics", role: "fallback" },
+        ],
+        rankedSkills: ["diagnostics-report", "memory-diagnostics"],
+        effectiveSkills: [],
+        effectiveFamilies: [],
+        promotedSkills: [],
+        stabilityState: "neutral",
+        stabilitySkills: [],
+        prerequisiteWarnings: [],
+        capabilityGaps: [],
+        hasViableFallback: true,
+        multiSkillCandidate: true,
+        chainedWorkflow: false,
+        workspaceKind: "project",
+        capabilitySignals: ["can_execute_commands"],
+        preferredValidationTools: ["exec"],
+        skillEnvironments: ["node"],
+        failurePattern: "blocked_path",
+        learnFromFailure: true,
+        failureReasons: ["verification_failure"],
+        nextImprovement: "Merge overlapping diagnostics siblings into one reusable workflow.",
+      },
+    } as never,
+  });
+  const mergeFailureSecond = structuredClone(mergeFailureFirst);
+  for (const entry of templateFailureFirst.longTermMemory) {
+    entry.updatedAt = 1_000;
+  }
+  for (const entry of templateFailureSecond.longTermMemory) {
+    entry.updatedAt = 2_000;
+  }
+  for (const entry of mergeFailureFirst.longTermMemory) {
+    entry.updatedAt = 3_000;
+  }
+  for (const entry of mergeFailureSecond.longTermMemory) {
+    entry.updatedAt = 4_000;
+  }
+  templateFailureFirst.longTermMemory.push(
+    ...templateFailureSecond.longTermMemory,
+    ...mergeFailureFirst.longTermMemory,
+    ...mergeFailureSecond.longTermMemory,
+  );
+  templateFailureFirst.pendingSignificance.push(
+    ...templateFailureSecond.pendingSignificance,
+    ...mergeFailureFirst.pendingSignificance,
+    ...mergeFailureSecond.pendingSignificance,
+  );
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: failureDerivedSessionId,
+    backendKind: "fs-json",
+    workingMemory: templateFailureFirst.workingMemory,
+    longTermMemory: templateFailureFirst.longTermMemory,
+    pendingSignificance: templateFailureFirst.pendingSignificance,
+    permanentMemory: templateFailureFirst.permanentMemory,
+    graph: templateFailureFirst.graph,
+  });
+  const failureDerivedPacket = retrieveMemoryContextPacket(templateFailureFirst, {
+    messages: [
+      userMessageForSuite(
+        "Fix the diagnostics workflow, merge sibling forks when overlap evidence is durable, and keep reusable reporting workflows template-ready.",
+      ),
+    ],
+  });
+  const failureDerivedPacketText = failureDerivedPacket.text ?? "";
+  const mergePlanningState = buildAgenticExecutionState({
+    messages: [
+      userMessageForSuite(
+        "Fix the diagnostics workflow and switch to the strongest sibling path if the current one keeps failing.",
+      ),
+    ],
+    toolSignals: [
+      {
+        toolName: "exec",
+        status: "error",
+        summary: "Diagnostics validation failed again for the current path.",
+      },
+    ],
+    availableSkills: ["memory-diagnostics", "diagnostics-report"],
+    likelySkills: ["memory-diagnostics"],
+    availableSkillInfo: [
+      { name: "memory-diagnostics", primaryEnv: "node" },
+      { name: "diagnostics-report", primaryEnv: "node" },
+    ],
+    memorySystemPromptAddition: failureDerivedPacketText,
+  });
+  const templatePlanningState = buildAgenticExecutionState({
+    messages: [
+      userMessageForSuite("Fix the acceptance workflow without creating another specialized fork."),
+    ],
+    toolSignals: [
+      {
+        toolName: "exec",
+        status: "error",
+        summary: "Acceptance workflow validation nearly worked but still needs refinement.",
+      },
+    ],
+    availableSkills: ["acceptance-report"],
+    likelySkills: ["acceptance-report"],
+    availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+    memorySystemPromptAddition: failureDerivedPacketText,
+  });
+  scenarios.push({
+    scenario: "agentic_failure_derived_consolidation_guidance",
+    passed:
+      failureDerivedPacketText.includes("template_candidate=true durable=true") &&
+      failureDerivedPacketText.includes("merge_candidate=true") &&
+      mergePlanningState.plannerState.suggestedSkill === "diagnostics-report" &&
+      mergePlanningState.orchestrationState.mergeCandidate &&
+      !templatePlanningState.plannerState.shouldEscalate &&
+      templatePlanningState.orchestrationState.consolidationAction === "generalize_existing",
+    summary: `merge_suggested=${mergePlanningState.plannerState.suggestedSkill ?? "none"} template_retry=${templatePlanningState.plannerState.retryClass} template_escalate=${templatePlanningState.plannerState.shouldEscalate}`,
+    details: [
+      clipText(failureDerivedPacketText, 180),
+      mergePlanningState.plannerState.nextAction ?? "no-merge-action",
+      templatePlanningState.plannerState.nextAction ?? "no-template-action",
     ],
   });
 

@@ -2960,7 +2960,10 @@ function deriveRuntimeSignalCandidates(params: {
           primarySkill?: unknown;
           fallbackSkills?: unknown;
           skillChain?: unknown;
+          rankedSkills?: unknown;
+          prerequisiteWarnings?: unknown;
           capabilityGaps?: unknown;
+          multiSkillCandidate?: unknown;
           workspaceKind?: unknown;
           capabilitySignals?: unknown;
           preferredValidationTools?: unknown;
@@ -3091,6 +3094,21 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const rankedSkills = uniqueStrings(
+      Array.isArray(proceduralExecution.rankedSkills)
+        ? proceduralExecution.rankedSkills.filter(
+            (skill): skill is string => typeof skill === "string" && skill.trim().length > 0,
+          )
+        : [],
+    );
+    const prerequisiteWarnings = uniqueStrings(
+      Array.isArray(proceduralExecution.prerequisiteWarnings)
+        ? proceduralExecution.prerequisiteWarnings.filter(
+            (warning): warning is string =>
+              typeof warning === "string" && warning.trim().length > 0,
+          )
+        : [],
+    );
     const capabilityGaps = uniqueStrings(
       Array.isArray(proceduralExecution.capabilityGaps)
         ? proceduralExecution.capabilityGaps.filter(
@@ -3098,6 +3116,7 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const multiSkillCandidate = proceduralExecution.multiSkillCandidate === true;
     const workspaceKind =
       proceduralExecution.workspaceKind === "project" ||
       proceduralExecution.workspaceKind === "temporary" ||
@@ -3147,7 +3166,10 @@ function deriveRuntimeSignalCandidates(params: {
       primarySkill ? `primary_skill=${primarySkill}` : "",
       fallbackSkills.length > 0 ? `fallback_skills=${fallbackSkills.join(",")}` : "",
       skillChain.length > 0 ? `skill_chain=${skillChain.join(",")}` : "",
+      rankedSkills.length > 0 ? `ranked_skills=${rankedSkills.join(",")}` : "",
+      prerequisiteWarnings.length > 0 ? `skill_prereqs=${prerequisiteWarnings.join(",")}` : "",
       capabilityGaps.length > 0 ? `capability_gaps=${capabilityGaps.join(",")}` : "",
+      multiSkillCandidate ? "multi_skill_candidate=true" : "",
       `workspace_kind=${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities=${capabilitySignals.join(",")}` : "",
       preferredValidationTools.length > 0
@@ -3170,7 +3192,12 @@ function deriveRuntimeSignalCandidates(params: {
       alternativeSkills.length > 0 ? `fallback skills ${alternativeSkills.join(", ")}` : "",
       primarySkill ? `primary skill ${primarySkill}` : "",
       fallbackSkills.length > 0 ? `fallback chain ${fallbackSkills.join(" -> ")}` : "",
+      rankedSkills.length > 0 ? `ranked skills ${rankedSkills.join(" > ")}` : "",
+      prerequisiteWarnings.length > 0
+        ? `skill prerequisites ${prerequisiteWarnings.join(", ")}`
+        : "",
       capabilityGaps.length > 0 ? `capability gaps ${capabilityGaps.join(", ")}` : "",
+      multiSkillCandidate ? "multi-skill orchestration candidate" : "",
       `workspace ${workspaceKind}`,
       capabilitySignals.length > 0 ? `capabilities ${capabilitySignals.join(", ")}` : "",
       preferredValidationTools.length > 0
@@ -3207,6 +3234,9 @@ function deriveRuntimeSignalCandidates(params: {
         ...(toolChain.map((tool) => `tool:${tool}`) ?? []),
         ...(alternativeSkills.map((skill) => `skill:${skill}`) ?? []),
         ...(fallbackSkills.map((skill) => `skill:${skill}`) ?? []),
+        ...(rankedSkills.map((skill, index) => `procedural:ranked-skill:${index + 1}:${skill}`) ??
+          []),
+        ...(prerequisiteWarnings.map((warning) => `procedural:prereq:${warning}`) ?? []),
         ...(capabilityGaps.map((gap) => `procedural:capability-gap:${gap}`) ?? []),
         ...(capabilitySignals.map((signal) => `procedural:capability:${signal}`) ?? []),
         ...(preferredValidationTools.map((tool) => `procedural:validation-tool:${tool}`) ?? []),
@@ -3216,6 +3246,7 @@ function deriveRuntimeSignalCandidates(params: {
         `procedural:failure-pattern:${failurePattern}`,
         suggestedSkill ? `procedural:suggested-skill:${suggestedSkill}` : "",
         shouldEscalate ? `procedural:escalate:${escalationReason ?? "unknown"}` : "",
+        multiSkillCandidate ? "procedural:multi-skill-candidate" : "",
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",
         proceduralExecution.consolidationCandidate === true
           ? "procedural:consolidation-candidate"
@@ -5677,7 +5708,18 @@ function recommendProceduralSkillsFromEntries(entries: LongTermMemoryEntry[]): s
         continue;
       }
       const suggestedBoost = tags.includes(`procedural:suggested-skill:${skill}`) ? 0.75 : 0;
-      const score = baseWeight + suggestedBoost + entry.strength * 0.35 + entry.confidence * 0.25;
+      const rankTag = tags.find(
+        (candidate) =>
+          candidate.startsWith("procedural:ranked-skill:") && candidate.endsWith(`:${skill}`),
+      );
+      const rankBoost = rankTag
+        ? Math.max(
+            0,
+            0.9 - 0.2 * Math.max(0, Number.parseInt(rankTag.split(":")[2] ?? "9", 10) - 1),
+          )
+        : 0;
+      const score =
+        baseWeight + suggestedBoost + rankBoost + entry.strength * 0.35 + entry.confidence * 0.25;
       weights.set(skill, (weights.get(skill) ?? 0) + score);
     }
   }

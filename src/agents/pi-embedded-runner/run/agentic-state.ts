@@ -102,7 +102,10 @@ export type AgenticOrchestrationState = {
   primarySkill?: string;
   fallbackSkills: string[];
   skillChain: string[];
+  rankedSkills: string[];
+  prerequisiteWarnings: string[];
   capabilityGaps: string[];
+  multiSkillCandidate: boolean;
   rationale?: string;
 };
 
@@ -146,7 +149,10 @@ export type ProceduralExecutionRecord = {
   primarySkill?: string;
   fallbackSkills: string[];
   skillChain: string[];
+  rankedSkills: string[];
+  prerequisiteWarnings: string[];
   capabilityGaps: string[];
+  multiSkillCandidate: boolean;
   workspaceKind: "project" | "temporary" | "unknown";
   capabilitySignals: string[];
   preferredValidationTools: string[];
@@ -600,19 +606,145 @@ function buildGovernanceState(params: {
   };
 }
 
+function inferPreferredSkillEnvironment(
+  text: string,
+  taskMode: AgenticTaskMode,
+): string | undefined {
+  if (/\b(node|typescript|javascript|pnpm|npm|vitest|tsx|tsconfig)\b/i.test(text)) {
+    return "node";
+  }
+  if (/\b(python|pytest|pip|poetry)\b/i.test(text)) {
+    return "python";
+  }
+  if (/\b(rust|cargo)\b/i.test(text)) {
+    return "rust";
+  }
+  if (/\b(go|golang)\b/i.test(text)) {
+    return "go";
+  }
+  return taskMode === "coding" || taskMode === "debugging" ? "node" : undefined;
+}
+
+function inferCurrentExecutionEnvironments(params: {
+  preferredEnv?: string;
+  taskMode: AgenticTaskMode;
+  toolSignals?: ToolSignal[];
+  availableSkills?: SkillInfo[];
+}): string[] {
+  const environments = new Set<string>();
+  if (params.preferredEnv) {
+    environments.add(params.preferredEnv);
+  }
+  if ((params.toolSignals ?? []).some((signal) => signal.toolName === "exec")) {
+    if (params.taskMode === "coding" || params.taskMode === "debugging") {
+      environments.add("node");
+    }
+    if (params.taskMode === "operations") {
+      environments.add("shell");
+    }
+  }
+  for (const skill of params.availableSkills ?? []) {
+    if (skill.primaryEnv && environments.has(skill.primaryEnv)) {
+      environments.add(skill.primaryEnv);
+    }
+  }
+  return [...environments];
+}
+
 function buildOrchestrationState(params: {
   taskMode: AgenticTaskMode;
+  objectiveText?: string;
   availableSkills?: SkillInfo[];
   likelySkills?: string[];
   alternativeSkills?: string[];
   toolSignals?: ToolSignal[];
+  plannerState?: AgenticPlannerState;
 }): AgenticOrchestrationState {
   const availableSkills = params.availableSkills ?? [];
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const toolNames = new Set((params.toolSignals ?? []).map((signal) => signal.toolName));
-  const primarySkill = likelySkills[0] ?? availableSkills[0]?.name;
-  const fallbackSkills = alternativeSkills.filter((skill) => skill !== primarySkill).slice(0, 4);
+  const preferredEnv = inferPreferredSkillEnvironment(params.objectiveText ?? "", params.taskMode);
+  const currentExecutionEnvs = inferCurrentExecutionEnvironments({
+    preferredEnv,
+    taskMode: params.taskMode,
+    toolSignals: params.toolSignals,
+    availableSkills,
+  });
+  const rankedSkills = availableSkills
+    .map((skill) => {
+      let score = 0;
+      const reasons: string[] = [];
+      if (likelySkills.includes(skill.name)) {
+        score += 4;
+        reasons.push("objective-match");
+      }
+      if (alternativeSkills.includes(skill.name)) {
+        score += 1.5;
+        reasons.push("fallback-option");
+      }
+      if (preferredEnv && skill.primaryEnv === preferredEnv) {
+        score += 1.5;
+        reasons.push(`env:${preferredEnv}`);
+      } else if (preferredEnv && skill.primaryEnv && skill.primaryEnv !== preferredEnv) {
+        score -= 0.5;
+        reasons.push(`weaker-env:${skill.primaryEnv}`);
+      }
+      const requiredEnv = uniqueCompact(skill.requiredEnv ?? [], 6);
+      const requiredEnvMatches = requiredEnv.filter((env) => currentExecutionEnvs.includes(env));
+      if (requiredEnv.length > 0 && requiredEnvMatches.length > 0) {
+        score += 1.25;
+        reasons.push(`requires:${requiredEnvMatches.join("|")}`);
+      } else if (requiredEnv.length > 0) {
+        score -= 2;
+        reasons.push(`missing-env:${requiredEnv.join("|")}`);
+      }
+      if (params.plannerState?.retryClass === "skill_fallback") {
+        if (skill.name === likelySkills[0]) {
+          score -= 2;
+          reasons.push("downgraded-after-near-miss");
+        }
+        if (alternativeSkills.includes(skill.name)) {
+          score += 2;
+          reasons.push("promoted-fallback");
+        }
+      }
+      if (
+        params.plannerState?.escalationReason === "environment_mismatch" &&
+        skill.name === likelySkills[0]
+      ) {
+        score -= 3;
+        reasons.push("env-mismatch");
+      }
+      if (
+        params.plannerState?.retryClass === "same_path_retry" &&
+        params.plannerState.status === "needs_replan" &&
+        skill.name === likelySkills[0]
+      ) {
+        score -= 1;
+        reasons.push("same-path-replan");
+      }
+      return { skill: skill.name, score, reasons };
+    })
+    .toSorted((a, b) => b.score - a.score || a.skill.localeCompare(b.skill))
+    .map((entry) => entry.skill);
+  const rankedSet = new Set(rankedSkills);
+  const prerequisiteWarnings = uniqueCompact(
+    availableSkills.flatMap((skill) => {
+      const requiredEnv = uniqueCompact(skill.requiredEnv ?? [], 6);
+      if (
+        requiredEnv.length === 0 ||
+        requiredEnv.some((env) => currentExecutionEnvs.includes(env)) ||
+        (!rankedSet.has(skill.name) && !likelySkills.includes(skill.name))
+      ) {
+        return [];
+      }
+      return [`${skill.name}:missing-env:${requiredEnv.join("|")}`];
+    }),
+    8,
+  );
+  const primarySkill = rankedSkills[0] ?? likelySkills[0] ?? availableSkills[0]?.name;
+  const fallbackSkills = rankedSkills.filter((skill) => skill !== primarySkill).slice(0, 4);
   const skillChain = uniqueCompact(
     [primarySkill, ...fallbackSkills].filter((value): value is string => Boolean(value)),
     4,
@@ -633,8 +765,14 @@ function buildOrchestrationState(params: {
     ],
     5,
   );
+  const multiSkillCandidate =
+    skillChain.length > 1 &&
+    (params.plannerState?.retryClass === "skill_fallback" ||
+      prerequisiteWarnings.length > 0 ||
+      params.taskMode === "planning" ||
+      params.taskMode === "operations");
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}.`
+    ? `Prefer ${primarySkill}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -643,7 +781,10 @@ function buildOrchestrationState(params: {
     primarySkill,
     fallbackSkills,
     skillChain,
+    rankedSkills,
+    prerequisiteWarnings,
     capabilityGaps,
+    multiSkillCandidate,
     rationale,
   };
 }
@@ -825,18 +966,24 @@ export function buildAgenticExecutionState(params: {
     verificationState,
     plannerState,
   });
+  const availableSkillInfo =
+    params.availableSkillInfo && params.availableSkillInfo.length > 0
+      ? params.availableSkillInfo
+      : (params.availableSkills ?? []).map((skill) => ({ name: skill }));
   const orchestrationState = buildOrchestrationState({
     taskMode: taskState.taskMode,
-    availableSkills: params.availableSkillInfo,
+    objectiveText: taskState.objective,
+    availableSkills: availableSkillInfo,
     likelySkills: params.likelySkills,
     alternativeSkills: plannerState.alternativeSkills,
     toolSignals: params.toolSignals,
+    plannerState,
   });
   const environmentState = buildEnvironmentState({
     workspaceTags: params.workspaceTags,
     workspaceState: params.workspaceState,
     toolSignals: params.toolSignals,
-    availableSkills: params.availableSkillInfo,
+    availableSkills: availableSkillInfo,
   });
   const failureLearningState = buildFailureLearningState({
     verificationState,
@@ -888,6 +1035,14 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.orchestrationState.capabilityGaps.length > 0
       ? `Capability gaps: ${state.orchestrationState.capabilityGaps.join(", ")}`
       : undefined;
+  const rankedSkillsGuidance =
+    state.orchestrationState.rankedSkills.length > 0
+      ? `Ranked skills: ${state.orchestrationState.rankedSkills.join(" > ")}`
+      : undefined;
+  const prerequisiteGuidance =
+    state.orchestrationState.prerequisiteWarnings.length > 0
+      ? `Skill prerequisites: ${state.orchestrationState.prerequisiteWarnings.join(", ")}`
+      : undefined;
   const environmentGuidance = `Environment: ${state.environmentState.workspaceKind}${state.environmentState.gitBranch ? ` branch=${state.environmentState.gitBranch}` : ""}`;
   const capabilitySignalsGuidance =
     state.environmentState.capabilitySignals.length > 0
@@ -915,6 +1070,8 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     governanceReasons,
     orchestrationGuidance,
     fallbackChainGuidance,
+    rankedSkillsGuidance,
+    prerequisiteGuidance,
     capabilityGapGuidance,
     environmentGuidance,
     capabilitySignalsGuidance,
@@ -981,6 +1138,15 @@ export function buildProceduralExecutionRecord(params: {
           ),
           4,
         );
+  const resolvedRankedSkills =
+    params.orchestrationState.rankedSkills.length > 0
+      ? params.orchestrationState.rankedSkills
+      : uniqueCompact(
+          [resolvedPrimarySkill, ...resolvedFallbackSkills].filter((value): value is string =>
+            Boolean(value),
+          ),
+          6,
+        );
   if (nearMissCandidate && alternativeSkills.length > 0) {
     nextImprovement = `Capture why the primary path fell short and compare it with alternative skills such as ${alternativeSkills.slice(0, 3).join(", ")}.`;
   } else if (params.plannerState.shouldEscalate) {
@@ -1022,7 +1188,10 @@ export function buildProceduralExecutionRecord(params: {
     primarySkill: resolvedPrimarySkill,
     fallbackSkills: resolvedFallbackSkills,
     skillChain: resolvedSkillChain,
+    rankedSkills: resolvedRankedSkills,
+    prerequisiteWarnings: params.orchestrationState.prerequisiteWarnings,
     capabilityGaps: params.orchestrationState.capabilityGaps,
+    multiSkillCandidate: params.orchestrationState.multiSkillCandidate,
     workspaceKind: params.environmentState.workspaceKind,
     capabilitySignals: params.environmentState.capabilitySignals,
     preferredValidationTools: params.environmentState.preferredValidationTools,

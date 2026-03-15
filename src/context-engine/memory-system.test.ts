@@ -2372,7 +2372,10 @@ describe("MemorySystemContextEngine", () => {
           primarySkill: "memory-diagnostics",
           fallbackSkills: ["acceptance-report"],
           skillChain: ["memory-diagnostics", "acceptance-report"],
+          rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          prerequisiteWarnings: ["acceptance-report:missing-env:docker"],
           capabilityGaps: [],
+          multiSkillCandidate: true,
           workspaceKind: "project",
           capabilitySignals: ["can_execute_commands", "can_read_files", "git_worktree"],
           preferredValidationTools: ["exec"],
@@ -2396,6 +2399,10 @@ describe("MemorySystemContextEngine", () => {
           (entry.environmentTags ?? []).includes("procedural:retry:skill_fallback") &&
           (entry.environmentTags ?? []).includes("procedural:primary-skill:memory-diagnostics") &&
           (entry.environmentTags ?? []).includes("procedural:failure-pattern:near_miss") &&
+          (entry.environmentTags ?? []).includes("procedural:ranked-skill:1:acceptance-report") &&
+          (entry.environmentTags ?? []).includes(
+            "procedural:prereq:acceptance-report:missing-env:docker",
+          ) &&
           entry.artifactRefs.includes("src/context-engine/memory-system.ts"),
       ),
     ).toBe(true);

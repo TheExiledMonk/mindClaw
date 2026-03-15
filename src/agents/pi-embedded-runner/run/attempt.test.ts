@@ -1321,6 +1321,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(runtimeContext.orchestrationState).toMatchObject({
       primarySkill: "typescript-build-fix",
       skillChain: expect.arrayContaining(["typescript-build-fix"]),
+      rankedSkills: expect.arrayContaining(["typescript-build-fix"]),
     });
     expect(runtimeContext.environmentState).toMatchObject({
       workspaceKind: "temporary",
@@ -1393,8 +1394,9 @@ describe("buildAfterTurnRuntimeContext", () => {
       riskLevel: "medium",
     });
     expect(runtimeContext.orchestrationState).toMatchObject({
-      primarySkill: "memory-diagnostics",
-      fallbackSkills: expect.arrayContaining(["acceptance-report"]),
+      primarySkill: "acceptance-report",
+      fallbackSkills: expect.arrayContaining(["memory-diagnostics"]),
+      rankedSkills: expect.arrayContaining(["acceptance-report", "memory-diagnostics"]),
     });
     expect(runtimeContext.failureLearningState).toMatchObject({
       failurePattern: "near_miss",
@@ -1406,8 +1408,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       suggestedSkill: "acceptance-report",
       shouldEscalate: false,
       autonomyMode: "fallback",
-      primarySkill: "memory-diagnostics",
-      fallbackSkills: expect.arrayContaining(["acceptance-report"]),
+      primarySkill: "acceptance-report",
+      fallbackSkills: expect.arrayContaining(["memory-diagnostics"]),
       failurePattern: "near_miss",
     });
   });

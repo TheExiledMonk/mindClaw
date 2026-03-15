@@ -140,16 +140,54 @@ describe("agentic-state", () => {
     expect(state.plannerState.retryClass).toBe("skill_fallback");
     expect(state.plannerState.suggestedSkill).toBe("acceptance-report");
     expect(state.governanceState.autonomyMode).toBe("fallback");
-    expect(state.orchestrationState.primarySkill).toBe("memory-diagnostics");
+    expect(state.orchestrationState.primarySkill).toBe("acceptance-report");
+    expect(state.orchestrationState.rankedSkills[0]).toBe("acceptance-report");
     expect(state.orchestrationState.fallbackSkills).toEqual(
-      expect.arrayContaining(["acceptance-report", "release-checks"]),
+      expect.arrayContaining(["memory-diagnostics", "release-checks"]),
     );
     expect(buildAgenticSystemPromptAddition(state)).toContain(
       "Fallback skills to consider: acceptance-report, release-checks",
     );
     expect(buildAgenticSystemPromptAddition(state)).toContain("Autonomy mode: fallback");
-    expect(buildAgenticSystemPromptAddition(state)).toContain("Primary skill: memory-diagnostics");
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Primary skill: acceptance-report");
     expect(state.failureLearningState.failurePattern).toBe("near_miss");
+  });
+
+  it("ranks environment-matched skills first and flags missing prerequisites", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Implement the Python migration helper and keep the docker-only deployment skill as a fallback.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary: "Ran pytest successfully for the migration helper.",
+        },
+      ],
+      availableSkills: ["python-migration", "docker-release"],
+      likelySkills: ["python-migration"],
+      availableSkillInfo: [
+        { name: "python-migration", primaryEnv: "python", requiredEnv: ["python"] },
+        { name: "docker-release", primaryEnv: "node", requiredEnv: ["docker"] },
+      ],
+    });
+
+    expect(state.orchestrationState.primarySkill).toBe("python-migration");
+    expect(state.orchestrationState.rankedSkills).toEqual(["python-migration", "docker-release"]);
+    expect(state.orchestrationState.prerequisiteWarnings).toContain(
+      "docker-release:missing-env:docker",
+    );
+    expect(state.orchestrationState.multiSkillCandidate).toBe(true);
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Ranked skills: python-migration > docker-release",
+    );
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Skill prerequisites: docker-release:missing-env:docker",
+    );
   });
 
   it("escalates environment mismatches instead of recommending normal retries", () => {
@@ -314,6 +352,7 @@ describe("agentic-state", () => {
     expect(record.shouldEscalate).toBe(false);
     expect(record.autonomyMode).toBe("continue");
     expect(record.skillChain).toEqual(expect.arrayContaining(["memory-diagnostics"]));
+    expect(record.rankedSkills).toEqual(expect.arrayContaining(["memory-diagnostics"]));
     expect(record.workspaceKind).toBe("unknown");
     expect(record.failurePattern).toBe("near_miss");
   });
@@ -362,8 +401,9 @@ describe("agentic-state", () => {
     expect(record.suggestedSkill).toBe("acceptance-report");
     expect(record.shouldEscalate).toBe(false);
     expect(record.autonomyMode).toBe("fallback");
-    expect(record.primarySkill).toBe("memory-diagnostics");
-    expect(record.fallbackSkills).toEqual(expect.arrayContaining(["acceptance-report"]));
+    expect(record.primarySkill).toBe("acceptance-report");
+    expect(record.fallbackSkills).toEqual(expect.arrayContaining(["memory-diagnostics"]));
+    expect(record.rankedSkills[0]).toBe("acceptance-report");
     expect(record.failurePattern).toBe("near_miss");
     expect(record.nextImprovement).toContain("alternative skills");
   });

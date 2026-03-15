@@ -199,7 +199,10 @@ export type CompactEmbeddedPiSessionParams = {
     primarySkill?: string;
     fallbackSkills: string[];
     skillChain: string[];
+    rankedSkills: string[];
+    prerequisiteWarnings: string[];
     capabilityGaps: string[];
+    multiSkillCandidate: boolean;
     rationale?: string;
   };
   environmentState?: {

@@ -650,6 +650,61 @@ describe("agentic quality gate", () => {
     );
   });
 
+  it("can fail the quality gate on a rising long-run clarification blocker trend", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+
+    const report = runAgenticQualityGate({
+      failOnClarificationTrend: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        clarificationProfileCounts: ["environment_variable:2", "approval:1"],
+        dominantClarificationProfile: "environment_variable",
+        clarificationTrendSignals: ["approval:rising(0->1)"],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.diagnosticsPassed).toBe(false);
+    expect(report.failReasons).toContain("diagnostics_clarification_trend_approval");
+    expect(report.recommendations).toContain(
+      "Long-run clarification blocker trend is rising: approval:rising(0->1).",
+    );
+  });
+
   it("surfaces template-ready and merge-ready consolidation recommendations in the quality gate", () => {
     const templateDiagnostics = inspectAgenticExecutionObservability({
       taskState: {

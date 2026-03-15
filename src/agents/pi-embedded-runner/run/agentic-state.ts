@@ -516,6 +516,19 @@ function mapClarificationReasonToQualityFailReason(reason?: string): string | un
         : undefined;
 }
 
+function mapClarificationTrendToQualityFailReason(trend?: string): string | undefined {
+  if (!trend) {
+    return undefined;
+  }
+  return trend.startsWith("environment_variable:rising(")
+    ? "diagnostics_clarification_trend_environment_variable"
+    : trend.startsWith("approval:rising(")
+      ? "diagnostics_clarification_trend_approval"
+      : trend.startsWith("external_input:rising(")
+        ? "diagnostics_clarification_trend_external_input"
+        : "diagnostics_clarification_trend_rising";
+}
+
 function mapClarificationReasonToProfile(
   reason?: string,
 ): AgenticQualityGateReport["clarificationProfile"] | undefined {
@@ -7400,6 +7413,7 @@ export function runAgenticQualityGate(params?: {
   failOnEscalation?: boolean;
   failOnMissingFallback?: boolean;
   failOnClarificationBlockers?: boolean;
+  failOnClarificationTrend?: boolean;
   failOnWeakeningSkills?: boolean;
   failOnRecoveringSkills?: boolean;
   diagnosticsOverride?: AgenticExecutionObservabilityReport;
@@ -7452,6 +7466,16 @@ export function runAgenticQualityGate(params?: {
       ? (mapClarificationReasonToQualityFailReason(diagnostics.clarificationReason) ??
         "diagnostics_clarification_blocker")
       : undefined;
+  const soakClarificationProfile = soak.dominantClarificationProfile ?? "none";
+  const soakClarificationTrends = soak.clarificationTrendSignals ?? [];
+  const risingClarificationTrend = soakClarificationTrends.find((trend) =>
+    trend.includes(":rising("),
+  );
+  const clarificationTrendFailReason =
+    params?.failOnClarificationTrend && risingClarificationTrend
+      ? (mapClarificationTrendToQualityFailReason(risingClarificationTrend) ??
+        "diagnostics_clarification_trend_rising")
+      : undefined;
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -7462,6 +7486,7 @@ export function runAgenticQualityGate(params?: {
       ? "diagnostics_missing_fallback"
       : undefined,
     clarificationFailReason,
+    clarificationTrendFailReason,
     params?.failOnWeakeningSkills && weakeningSkills.length > 0
       ? "weakening_scoped_skills"
       : undefined,
@@ -7472,15 +7497,11 @@ export function runAgenticQualityGate(params?: {
   const diagnosticsPassed =
     (!params?.failOnEscalation || !diagnostics.escalationRequired) &&
     (!params?.failOnMissingFallback || diagnostics.hasViableFallback) &&
-    !clarificationFailReason;
+    !clarificationFailReason &&
+    !clarificationTrendFailReason;
   const effectivenessPassed =
     (!params?.failOnWeakeningSkills || weakeningSkills.length === 0) &&
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
-  const soakClarificationProfile = soak.dominantClarificationProfile ?? "none";
-  const soakClarificationTrends = soak.clarificationTrendSignals ?? [];
-  const risingClarificationTrend = soakClarificationTrends.find((trend) =>
-    trend.includes(":rising("),
-  );
   const recommendations = uniqueCompact(
     [
       diagnostics.autonomyMode === "approval_required"

@@ -811,8 +811,199 @@ describe("memory system store", () => {
     expect(
       packet.retrievalItems.some(
         (item) =>
-          item.reason === "artifact traversal via superseded_by" &&
+          item.reason === "artifact outcome traversal via superseded_by" &&
           item.memoryId === "ltm-old-workaround",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses constraint facet traversal before unrelated outcome neighbors", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "artifact-facet-a",
+          messages: [
+            userMessage(
+              "Plan updates for src/context-engine/memory-system.ts and preserve the migration constraint.",
+            ),
+          ],
+        }),
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-constraint-seed",
+            category: "decision",
+            text: "Use src/context-engine/memory-system.ts as the canonical migration constraint.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.95,
+          }),
+          longTermEntry({
+            id: "ltm-constraint-neighbor",
+            category: "decision",
+            text: "The release checklist must keep the canonical implementation path intact during rollout handoff.",
+            strength: 0.66,
+          }),
+          longTermEntry({
+            id: "ltm-outcome-seed",
+            category: "episode",
+            text: "The latest fix in src/context-engine/memory-system.ts restored carry-forward output.",
+            artifactRefs: ["src/context-engine/memory-system.ts"],
+            strength: 0.9,
+          }),
+          longTermEntry({
+            id: "ltm-outcome-neighbor",
+            category: "episode",
+            text: "The previous regression was resolved after the rollout fix landed.",
+            strength: 0.8,
+          }),
+          longTermEntry({
+            id: "ltm-direct-a",
+            category: "fact",
+            text: "Planning review should keep rollout notes visible.",
+            strength: 0.91,
+          }),
+          longTermEntry({
+            id: "ltm-direct-b",
+            category: "decision",
+            text: "Plan the next rollout before changing migration constraints.",
+            strength: 0.89,
+          }),
+          longTermEntry({
+            id: "ltm-direct-c",
+            category: "fact",
+            text: "Planning updates should preserve the current migration summary for the next rollout.",
+            strength: 0.88,
+          }),
+          longTermEntry({
+            id: "ltm-direct-d",
+            category: "strategy",
+            text: "Migration planning should keep the current rollout path visible before edits.",
+            strength: 0.87,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: {
+          nodes: [
+            {
+              id: "ltm-constraint-seed",
+              kind: "memory",
+              category: "decision",
+              summary: "Canonical migration constraint.",
+              confidence: 0.95,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-constraint-neighbor",
+              kind: "memory",
+              category: "decision",
+              summary: "Release checklist keeps canonical path intact.",
+              confidence: 0.84,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-outcome-seed",
+              kind: "memory",
+              category: "episode",
+              summary: "Latest fix restored carry-forward output.",
+              confidence: 0.9,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-outcome-neighbor",
+              kind: "memory",
+              category: "episode",
+              summary: "Regression resolved after rollout fix.",
+              confidence: 0.8,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-direct-c",
+              kind: "memory",
+              category: "fact",
+              summary: "Preserve current migration summary.",
+              confidence: 0.88,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "ltm-direct-d",
+              kind: "memory",
+              category: "strategy",
+              summary: "Keep rollout path visible before edits.",
+              confidence: 0.87,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+            {
+              id: "artifact:src/context-engine/memory-system.ts",
+              kind: "artifact",
+              category: "entity",
+              summary: "src/context-engine/memory-system.ts",
+              artifactRef: "src/context-engine/memory-system.ts",
+              confidence: 0.95,
+              activeStatus: "active",
+              updatedAt: Date.now(),
+            },
+          ],
+          edges: [
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-constraint-seed",
+              type: "relevant_to",
+              weight: 0.93,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "artifact:src/context-engine/memory-system.ts",
+              to: "ltm-outcome-seed",
+              type: "confirmed_by",
+              weight: 0.9,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "ltm-constraint-seed",
+              to: "ltm-constraint-neighbor",
+              type: "relevant_to",
+              weight: 0.91,
+              updatedAt: Date.now(),
+            },
+            {
+              from: "ltm-outcome-seed",
+              to: "ltm-outcome-neighbor",
+              type: "confirmed_by",
+              weight: 0.86,
+              updatedAt: Date.now(),
+            },
+          ],
+          updatedAt: Date.now(),
+        },
+        permanentMemory: permanentRoot(),
+      },
+      {
+        messages: [
+          userMessage(
+            "Plan updates for src/context-engine/memory-system.ts and preserve the migration constraint.",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("Artifact traversal expansion");
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason === "artifact constraint traversal via relevant_to" &&
+          item.memoryId === "ltm-constraint-neighbor",
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.reason === "artifact outcome traversal via confirmed_by" &&
+          item.memoryId === "ltm-outcome-neighbor",
       ),
     ).toBe(true);
   });

@@ -1953,69 +1953,124 @@ function collectArtifactAnchoredMemories(params: {
   };
 }
 
-function artifactTraversalConfig(taskMode: MemoryTaskMode): {
+type ArtifactAnchorFacet = "constraint" | "pattern" | "outcome";
+
+function artifactTraversalConfig(
+  taskMode: MemoryTaskMode,
+  facet: ArtifactAnchorFacet,
+): {
   allowedTypes: Set<MemoryRelationType>;
   maxHops: number;
   maxItems: number;
 } {
+  if (facet === "constraint") {
+    switch (taskMode) {
+      case "planning":
+        return {
+          allowedTypes: new Set<MemoryRelationType>([
+            "relevant_to",
+            "superseded_by",
+            "derived_from",
+          ]),
+          maxHops: 2,
+          maxItems: 2,
+        };
+      case "debugging":
+        return {
+          allowedTypes: new Set<MemoryRelationType>(["contradicts", "relevant_to", "confirmed_by"]),
+          maxHops: 2,
+          maxItems: 2,
+        };
+      default:
+        return {
+          allowedTypes: new Set<MemoryRelationType>([
+            "relevant_to",
+            "derived_from",
+            "confirmed_by",
+          ]),
+          maxHops: 2,
+          maxItems: 2,
+        };
+    }
+  }
+  if (facet === "pattern") {
+    switch (taskMode) {
+      case "support":
+        return {
+          allowedTypes: new Set<MemoryRelationType>([
+            "confirmed_by",
+            "derived_from",
+            "relevant_to",
+          ]),
+          maxHops: 2,
+          maxItems: 2,
+        };
+      default:
+        return {
+          allowedTypes: new Set<MemoryRelationType>([
+            "derived_from",
+            "confirmed_by",
+            "relevant_to",
+          ]),
+          maxHops: 2,
+          maxItems: 2,
+        };
+    }
+  }
   switch (taskMode) {
-    case "coding":
-      return {
-        allowedTypes: new Set<MemoryRelationType>([
-          "derived_from",
-          "confirmed_by",
-          "relevant_to",
-          "superseded_by",
-        ]),
-        maxHops: 2,
-        maxItems: MAX_PACKET_ITEMS,
-      };
     case "debugging":
       return {
-        allowedTypes: new Set<MemoryRelationType>([
-          "confirmed_by",
-          "contradicts",
-          "superseded_by",
-          "derived_from",
-        ]),
+        allowedTypes: new Set<MemoryRelationType>(["confirmed_by", "superseded_by", "contradicts"]),
         maxHops: 2,
-        maxItems: MAX_PACKET_ITEMS,
-      };
-    case "planning":
-      return {
-        allowedTypes: new Set<MemoryRelationType>(["relevant_to", "superseded_by", "derived_from"]),
-        maxHops: 2,
-        maxItems: MAX_PACKET_ITEMS,
+        maxItems: 2,
       };
     case "support":
       return {
-        allowedTypes: new Set<MemoryRelationType>(["confirmed_by", "contradicts", "relevant_to"]),
+        allowedTypes: new Set<MemoryRelationType>(["confirmed_by", "contradicts", "superseded_by"]),
         maxHops: 2,
-        maxItems: MAX_PACKET_ITEMS,
+        maxItems: 2,
+      };
+    case "planning":
+      return {
+        allowedTypes: new Set<MemoryRelationType>(["superseded_by", "confirmed_by", "relevant_to"]),
+        maxHops: 2,
+        maxItems: 2,
+      };
+    case "coding":
+      return {
+        allowedTypes: new Set<MemoryRelationType>([
+          "confirmed_by",
+          "superseded_by",
+          "derived_from",
+        ]),
+        maxHops: 2,
+        maxItems: 2,
       };
     default:
       return {
         allowedTypes: new Set<MemoryRelationType>([
-          "derived_from",
           "confirmed_by",
-          "relevant_to",
           "superseded_by",
-          "contradicts",
+          "derived_from",
         ]),
         maxHops: 2,
-        maxItems: MAX_PACKET_ITEMS,
+        maxItems: 2,
       };
   }
 }
 
 function collectArtifactTraversalExpansion(params: {
-  selectedArtifactRefs: string[];
+  anchors: {
+    constraints: LongTermMemoryEntry[];
+    patterns: LongTermMemoryEntry[];
+    outcomes: LongTermMemoryEntry[];
+  };
   taskMode: MemoryTaskMode;
   longTermMemory: LongTermMemoryEntry[];
   graph?: MemoryGraphSnapshot;
   excludeIds?: string[];
-}): Array<{ entry: LongTermMemoryEntry; via: MemoryRelationType }> {
-  if (params.selectedArtifactRefs.length === 0 || !params.graph) {
+}): Array<{ entry: LongTermMemoryEntry; via: MemoryRelationType; facet: ArtifactAnchorFacet }> {
+  if (!params.graph) {
     return [];
   }
 
@@ -2027,49 +2082,63 @@ function collectArtifactTraversalExpansion(params: {
     outgoing.set(edge.from, current);
   }
 
-  const config = artifactTraversalConfig(params.taskMode);
-  const queue = params.selectedArtifactRefs.map((ref) => ({
-    nodeId: `artifact:${ref}`,
-    depth: 0,
-  }));
-  const visitedNodes = new Set(queue.map((item) => item.nodeId));
   const seenMemoryIds = new Set(params.excludeIds ?? []);
   const collected: Array<{
     entry: LongTermMemoryEntry;
     depth: number;
     via: MemoryRelationType;
     weight: number;
+    facet: ArtifactAnchorFacet;
   }> = [];
+  const facetSeeds: Array<{ facet: ArtifactAnchorFacet; entries: LongTermMemoryEntry[] }> = [
+    { facet: "constraint", entries: params.anchors.constraints },
+    { facet: "pattern", entries: params.anchors.patterns },
+    { facet: "outcome", entries: params.anchors.outcomes },
+  ];
 
-  while (queue.length > 0 && collected.length < config.maxItems) {
-    const current = queue.shift();
-    if (!current) {
-      break;
-    }
-    const nextEdges = (outgoing.get(current.nodeId) ?? [])
-      .filter((edge) => config.allowedTypes.has(edge.type) && edge.weight >= 0.5)
-      .toSorted((a, b) => b.weight - a.weight);
+  for (const seedGroup of facetSeeds) {
+    const config = artifactTraversalConfig(params.taskMode, seedGroup.facet);
+    const queue = seedGroup.entries.map((entry) => ({
+      nodeId: entry.id,
+      depth: 0,
+    }));
+    const visitedNodes = new Set(queue.map((item) => item.nodeId));
+    while (
+      queue.length > 0 &&
+      collected.filter((item) => item.facet === seedGroup.facet).length < config.maxItems
+    ) {
+      const current = queue.shift();
+      if (!current) {
+        break;
+      }
+      const nextEdges = (outgoing.get(current.nodeId) ?? [])
+        .filter((edge) => config.allowedTypes.has(edge.type) && edge.weight >= 0.5)
+        .toSorted((a, b) => b.weight - a.weight);
 
-    for (const edge of nextEdges) {
-      const entry = byId.get(edge.to);
-      if (entry && entry.activeStatus !== "superseded" && !seenMemoryIds.has(entry.id)) {
-        seenMemoryIds.add(entry.id);
-        collected.push({
-          entry,
-          depth: current.depth + 1,
-          via: edge.type,
-          weight: edge.weight,
-        });
-        if (collected.length >= config.maxItems) {
-          break;
+      for (const edge of nextEdges) {
+        const entry = byId.get(edge.to);
+        if (entry && entry.activeStatus !== "superseded" && !seenMemoryIds.has(entry.id)) {
+          seenMemoryIds.add(entry.id);
+          collected.push({
+            entry,
+            depth: current.depth + 1,
+            via: edge.type,
+            weight: edge.weight,
+            facet: seedGroup.facet,
+          });
+          if (
+            collected.filter((item) => item.facet === seedGroup.facet).length >= config.maxItems
+          ) {
+            break;
+          }
         }
-      }
 
-      if (current.depth + 1 >= config.maxHops || visitedNodes.has(edge.to)) {
-        continue;
+        if (current.depth + 1 >= config.maxHops || visitedNodes.has(edge.to)) {
+          continue;
+        }
+        visitedNodes.add(edge.to);
+        queue.push({ nodeId: edge.to, depth: current.depth + 1 });
       }
-      visitedNodes.add(edge.to);
-      queue.push({ nodeId: edge.to, depth: current.depth + 1 });
     }
   }
 
@@ -2077,7 +2146,8 @@ function collectArtifactTraversalExpansion(params: {
     .toSorted(
       (a, b) => a.depth - b.depth || b.weight - a.weight || b.entry.confidence - a.entry.confidence,
     )
-    .map((item) => ({ entry: item.entry, via: item.via }));
+    .slice(0, MAX_PACKET_ITEMS)
+    .map((item) => ({ entry: item.entry, via: item.via, facet: item.facet }));
 }
 
 function expandRelatedMemories(
@@ -2305,7 +2375,7 @@ export function retrieveMemoryContextPacket(
     );
   }
   const artifactTraversal = collectArtifactTraversalExpansion({
-    selectedArtifactRefs: scopeContext.artifactRefs,
+    anchors: artifactAnchors,
     taskMode,
     longTermMemory: snapshot.longTermMemory,
     graph: snapshot.graph,
@@ -2316,7 +2386,7 @@ export function retrieveMemoryContextPacket(
       ...artifactTraversal.map((item) => ({
         kind: "long-term" as const,
         text: `[${item.entry.category}] ${item.entry.text}`,
-        reason: `artifact traversal via ${item.via}`,
+        reason: `artifact ${item.facet} traversal via ${item.via}`,
         memoryId: item.entry.id,
       })),
     );

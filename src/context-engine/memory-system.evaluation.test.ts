@@ -177,6 +177,76 @@ describe("memory system evaluation scenarios", () => {
     ).toBe(true);
   });
 
+  it("does not leave a weak authoritative winner when stronger entity-linked evidence arrives", () => {
+    const first = compileMemoryState({
+      sessionId: "eval-weak-winner-governance",
+      messages: [
+        userMessage(
+          "Summary says to use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const second = compileMemoryState({
+      sessionId: "eval-weak-winner-governance",
+      previous: first,
+      messages: [
+        userMessage(
+          "Summary says to keep using the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const third = compileMemoryState({
+      sessionId: "eval-weak-winner-governance",
+      previous: second,
+      messages: [
+        userMessage(
+          "I observed directly that we should use the permanent memory-system path in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+        ),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+    const packet = retrieveMemoryContextPacket(third, {
+      messages: [
+        userMessage(
+          "For install profile profile-a on feature/memory-v2, what should we use in src/context-engine/memory-system.ts?",
+        ),
+      ],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.text.includes("permanent memory-system path") &&
+          item.reason.includes("source=direct_observation") &&
+          item.reason.includes("adjudication=authoritative:winner"),
+      ),
+    ).toBe(true);
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.text.includes("old workaround") &&
+          item.reason.includes("source=summary_derived") &&
+          item.reason.includes("adjudication=authoritative:winner"),
+      ),
+    ).toBe(false);
+  });
+
   it("records narrowed revisions on the same concept identity", () => {
     const first = compileMemoryState({
       sessionId: "eval-narrow",

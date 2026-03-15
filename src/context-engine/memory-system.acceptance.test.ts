@@ -15,7 +15,7 @@ describe("memory system acceptance suite", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.scenarioCount).toBeGreaterThanOrEqual(11);
+    expect(report.scenarioCount).toBeGreaterThanOrEqual(12);
     expect(report.failedCount).toBe(0);
     expect(report.summary).toContain("acceptance");
     expect(report.scenarios.every((scenario) => scenario.details.length > 0)).toBe(true);
@@ -56,7 +56,7 @@ describe("memory system acceptance suite", () => {
     expect(invalidation?.summary).toContain("superseded=");
   });
 
-  it("includes entity resolution, evidence priority, handoff continuity, store recovery, and soak scenarios", async () => {
+  it("includes entity resolution, evidence priority, weak-evidence governance, handoff continuity, store recovery, and soak scenarios", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-acceptance-"));
 
     const report = await runMemoryAcceptanceSuite({
@@ -71,6 +71,9 @@ describe("memory system acceptance suite", () => {
     const evidencePriority = report.scenarios.find(
       (scenario) => scenario.scenario === "evidence_priority",
     );
+    const weakEvidenceGovernance = report.scenarios.find(
+      (scenario) => scenario.scenario === "weak_evidence_governance",
+    );
     const handoff = report.scenarios.find(
       (scenario) => scenario.scenario === "session_handoff_continuity",
     );
@@ -83,6 +86,8 @@ describe("memory system acceptance suite", () => {
     expect(entityResolution?.summary).toContain("entity-visible=");
     expect(evidencePriority?.passed).toBe(true);
     expect(evidencePriority?.summary).toContain("evidence winner=");
+    expect(weakEvidenceGovernance?.passed).toBe(true);
+    expect(weakEvidenceGovernance?.summary).toContain("weak-evidence contested=");
     expect(handoff?.passed).toBe(true);
     expect(handoff?.summary).toContain("handoff long-term=");
     expect(storeRecovery?.passed).toBe(true);

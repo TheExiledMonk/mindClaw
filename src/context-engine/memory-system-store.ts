@@ -336,6 +336,7 @@ export type MemoryAcceptanceScenarioResult = {
     | "contested_visibility"
     | "entity_resolution"
     | "evidence_priority"
+    | "weak_evidence_governance"
     | "session_handoff_continuity"
     | "backend_parity"
     | "runtime_lifecycle"
@@ -1085,6 +1086,10 @@ function createSourceTypeCounts(): Record<MemorySourceType, number> {
     summary_derived: 0,
     system_inferred: 0,
   };
+}
+
+function isWeakEvidenceSource(sourceType: MemorySourceType): boolean {
+  return sourceType === "summary_derived" || sourceType === "system_inferred";
 }
 
 function inferMessageSourceType(text: string): MemorySourceType {
@@ -5685,6 +5690,86 @@ export async function runMemoryAcceptanceSuite(params: {
     ),
   });
 
+  const weakEvidenceFirst = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:weak-evidence`,
+    messages: [
+      userMessageForSuite(
+        "Summary says to use the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const weakEvidenceSecond = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:weak-evidence`,
+    previous: weakEvidenceFirst,
+    messages: [
+      userMessageForSuite(
+        "Summary says to keep using the old workaround in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const weakEvidenceThird = compileMemoryState({
+    sessionId: `${sessionIdPrefix}:weak-evidence`,
+    previous: weakEvidenceSecond,
+    messages: [
+      userMessageForSuite(
+        "I observed directly that we should use the permanent memory-system path in src/context-engine/memory-system.ts on feature/memory-v2 for install profile profile-a.",
+      ),
+    ],
+    runtimeContext: {
+      workspaceState: {
+        gitBranch: "feature/memory-v2",
+      },
+    },
+  });
+  const weakEvidenceAdjudications = buildPersistedMemoryAdjudications({
+    sessionId: `${sessionIdPrefix}:weak-evidence`,
+    entries: weakEvidenceThird.longTermMemory,
+    revisions: collectPersistedMemoryRevisions(weakEvidenceThird.longTermMemory),
+  });
+  const weakEvidenceWinnerCount = countWeakEvidenceWinners(
+    weakEvidenceThird.longTermMemory,
+    weakEvidenceAdjudications,
+  );
+  const weakEvidenceContested = weakEvidenceAdjudications.some(
+    (item) =>
+      item.status === "contested" &&
+      item.rationale.includes("weak-evidence winner") &&
+      item.entityIds.length > 0,
+  );
+  const weakEvidencePacket = retrieveMemoryContextPacket(weakEvidenceThird, {
+    messages: [
+      userMessageForSuite(
+        "For install profile profile-a on feature/memory-v2, what should we use in src/context-engine/memory-system.ts?",
+      ),
+    ],
+  });
+  scenarios.push({
+    scenario: "weak_evidence_governance",
+    passed:
+      weakEvidenceWinnerCount === 0 &&
+      weakEvidencePacket.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.text.includes("permanent memory-system path") &&
+          item.reason.includes("source=direct_observation") &&
+          item.reason.includes("adjudication=authoritative:winner"),
+      ),
+    summary: `weak-evidence contested=${weakEvidenceContested} weak-winners=${weakEvidenceWinnerCount} packet-items=${weakEvidencePacket.retrievalItems.length}`,
+    details: weakEvidencePacket.retrievalItems.map(
+      (item) => `${item.reason} :: ${clipText(item.text, 100)}`,
+    ),
+  });
+
   const handoffWorkspaceDir = path.join(
     params.workspaceDir,
     `${MEMORY_SYSTEM_DIRNAME}-handoff-${sessionIdPrefix}`,
@@ -6746,6 +6831,35 @@ function sanitizePersistedMemoryAdjudication(
   };
 }
 
+function countWeakEvidenceWinners(
+  entries: LongTermMemoryEntry[],
+  adjudications: PersistedMemoryAdjudication[],
+): number {
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+  return adjudications.filter((item) => {
+    if (item.status !== "authoritative" || !item.winningMemoryId) {
+      return false;
+    }
+    const winner = entriesById.get(item.winningMemoryId);
+    if (!winner || !isWeakEvidenceSource(winner.sourceType)) {
+      return false;
+    }
+    const strongerAlternatives = [
+      ...item.losingMemoryIds
+        .map((id) => entriesById.get(id))
+        .filter((entry): entry is LongTermMemoryEntry => Boolean(entry)),
+      ...item.alternativeConceptIds
+        .flatMap((conceptId) => entries.filter((entry) => getEntryConceptId(entry) === conceptId))
+        .filter((entry) => entry.id !== winner.id),
+    ];
+    return strongerAlternatives.some(
+      (entry) =>
+        sourceTypeReliabilityScore(entry.sourceType) >
+        sourceTypeReliabilityScore(winner.sourceType),
+    );
+  }).length;
+}
+
 function reviseReviewInputsFromHistory(params: {
   entries: LongTermMemoryEntry[];
   revisions: PersistedMemoryRevision[];
@@ -7062,6 +7176,30 @@ function buildPersistedMemoryAdjudications(params: {
         .filter((entry) => isContradictoryPair(entry, winner ?? conceptEntries[0]))
         .map((entry) => getEntryConceptId(entry)),
     );
+    const scoredAlternativeEntries = [
+      ...new Map(
+        [...familyAlternativeEntries, ...entityNeighborEntries]
+          .filter((entry) => getEntryConceptId(entry) !== conceptId)
+          .map((entry) => [entry.id, entry]),
+      ).values(),
+    ]
+      .map((entry) => ({
+        entry,
+        score: scoreEntry(
+          entry,
+          revisionsByConcept
+            .get(getEntryConceptId(entry))
+            ?.filter((revision) => revision.memoryId === entry.id) ?? [],
+        ),
+      }))
+      .toSorted(
+        (a, b) =>
+          b.score - a.score ||
+          sourceTypeReliabilityScore(b.entry.sourceType) -
+            sourceTypeReliabilityScore(a.entry.sourceType) ||
+          b.entry.updatedAt - a.entry.updatedAt,
+      );
+    const strongestAlternative = scoredAlternativeEntries[0];
     const winnerSourceScore = winner ? sourceTypeReliabilityScore(winner.sourceType) : 0;
     const strongestAlternativeSourceScore = Math.max(
       0,
@@ -7093,6 +7231,20 @@ function buildPersistedMemoryAdjudications(params: {
       resolutionKind = "contested";
       rationale =
         "shared canonical entities point to conflicting concept states without enough winning margin";
+    } else if (
+      winner &&
+      isWeakEvidenceSource(winner.sourceType) &&
+      strongestAlternative &&
+      sourceTypeReliabilityScore(strongestAlternative.entry.sourceType) > winnerSourceScore &&
+      strongestAlternative.score + 0.08 >= winningScore &&
+      (countSharedEntityIds(winner, strongestAlternative.entry) > 0 ||
+        countCanonicalEntityKindOverlap(winner, strongestAlternative.entry) > 0 ||
+        isContradictoryPair(winner, strongestAlternative.entry))
+    ) {
+      status = "contested";
+      resolutionKind = "contested";
+      rationale =
+        "weak-evidence winner is too close to a stronger competing observation on the same entity family";
     } else if (alternativeConceptIds.length > 0) {
       status = winner?.activeStatus === "superseded" ? "superseded" : "authoritative";
       resolutionKind = "scoped_alternative";
@@ -8055,33 +8207,7 @@ export async function inspectMemoryStoreHealth(params: {
   const contestedEntityConflictCount = adjudications.filter(
     (item) => item.status === "contested" && item.entityIds.length > 0,
   ).length;
-  const weakEvidenceWinnerCount = adjudications.filter((item) => {
-    if (item.status !== "authoritative" || !item.winningMemoryId) {
-      return false;
-    }
-    const winner = entriesById.get(item.winningMemoryId);
-    if (!winner) {
-      return false;
-    }
-    if (winner.sourceType !== "summary_derived" && winner.sourceType !== "system_inferred") {
-      return false;
-    }
-    const strongerAlternatives = [
-      ...item.losingMemoryIds
-        .map((id) => entriesById.get(id))
-        .filter((entry): entry is LongTermMemoryEntry => Boolean(entry)),
-      ...item.alternativeConceptIds
-        .flatMap((conceptId) =>
-          snapshot.longTermMemory.filter((entry) => getEntryConceptId(entry) === conceptId),
-        )
-        .filter((entry) => entry.id !== winner.id),
-    ];
-    return strongerAlternatives.some(
-      (entry) =>
-        sourceTypeReliabilityScore(entry.sourceType) >
-        sourceTypeReliabilityScore(winner.sourceType),
-    );
-  }).length;
+  const weakEvidenceWinnerCount = countWeakEvidenceWinners(snapshot.longTermMemory, adjudications);
   const permanentEligibleCount = snapshot.longTermMemory.filter(
     (entry) => entry.permanenceStatus === "eligible",
   ).length;

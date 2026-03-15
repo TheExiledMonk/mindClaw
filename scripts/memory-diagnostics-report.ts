@@ -10,6 +10,8 @@ type CliArgs = {
   acceptanceBackendKinds?: Array<"fs-json" | "sqlite-doc" | "sqlite-graph">;
   failOnIssues: boolean;
   failOnAcceptance: boolean;
+  failOnWeakWinners: boolean;
+  failOnEntityConflicts: boolean;
   runRepair: boolean;
   runRecover: boolean;
   outputPath?: string;
@@ -23,6 +25,8 @@ function parseArgs(argv: string[]): CliArgs {
   let includeAcceptance = false;
   let failOnIssues = false;
   let failOnAcceptance = false;
+  let failOnWeakWinners = false;
+  let failOnEntityConflicts = false;
   let runRepair = false;
   let runRecover = false;
   let outputPath: string | undefined;
@@ -59,6 +63,14 @@ function parseArgs(argv: string[]): CliArgs {
     }
     if (arg === "--fail-on-acceptance") {
       failOnAcceptance = true;
+      continue;
+    }
+    if (arg === "--fail-on-weak-winners") {
+      failOnWeakWinners = true;
+      continue;
+    }
+    if (arg === "--fail-on-entity-conflicts") {
+      failOnEntityConflicts = true;
       continue;
     }
     if (arg === "--run-repair") {
@@ -100,6 +112,8 @@ function parseArgs(argv: string[]): CliArgs {
     acceptanceBackendKinds: acceptanceBackendKinds.length > 0 ? acceptanceBackendKinds : undefined,
     failOnIssues,
     failOnAcceptance,
+    failOnWeakWinners,
+    failOnEntityConflicts,
     runRepair,
     runRecover,
     outputPath,
@@ -129,6 +143,12 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   }
   if (args.failOnAcceptance && report.failedAcceptanceScenarios.length > 0) {
+    process.exitCode = 1;
+  }
+  if (args.failOnWeakWinners && report.health.weakEvidenceWinnerCount > 0) {
+    process.exitCode = 1;
+  }
+  if (args.failOnEntityConflicts && report.health.contestedEntityConflictCount > 0) {
     process.exitCode = 1;
   }
 }

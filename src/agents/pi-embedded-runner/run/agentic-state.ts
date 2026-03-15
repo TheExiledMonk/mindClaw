@@ -319,7 +319,8 @@ export type AgenticAcceptanceScenarioId =
   | "clarification_strategy_alignment"
   | "memory_backed_clarification_alignment"
   | "clarification_policy_quality_alignment"
-  | "clarification_trend_policy_alignment";
+  | "clarification_trend_policy_alignment"
+  | "clarification_trend_policy_drift_guard";
 
 export type AgenticAcceptanceScenarioResult = {
   id: AgenticAcceptanceScenarioId;
@@ -5681,6 +5682,57 @@ export function runAgenticAcceptanceSuite(): AgenticAcceptanceReport {
         ? "Release-facing quality policy can keep rising clarification trends warning-only by default and make them release-blocking when trend gating is enabled."
         : "Rising clarification trend policy did not stay aligned between warning-only and release-blocking quality modes.",
       details: `soak_warning_policy=${warningSoakReport.clarificationTrendPolicy} warning_policy=${warningReport.clarificationTrendPolicy} warning=${warningReport.failReasons.join("|") || "none"} soak_blocking_policy=${blockingSoakReport.clarificationTrendPolicy} blocking_policy=${blockingReport.clarificationTrendPolicy} blocking=${blockingReport.failReasons.join("|") || "none"} recommendations=${blockingReport.recommendations.join("|")}`,
+    });
+  }
+
+  {
+    const approvalState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+    const soakReport = runAgenticSoakSuite();
+    const acceptanceOverride: AgenticAcceptanceReport = {
+      passed: true,
+      totalScenarios: 0,
+      passedScenarios: 0,
+      failedScenarioIds: [],
+      scenarios: [],
+      summary: "agentic acceptance 0/0 passed",
+    };
+    const driftReport = runAgenticQualityGate({
+      failOnClarificationTrend: true,
+      diagnosticsOverride: inspectAgenticExecutionObservability(approvalState),
+      acceptanceOverride,
+      soakOverride: soakReport,
+    });
+    const passed =
+      soakReport.clarificationTrendPolicy === "observe" &&
+      driftReport.clarificationTrendPolicy === "blocking" &&
+      driftReport.failReasons.includes("diagnostics_clarification_trend_external_input");
+    scenarios.push({
+      id: "clarification_trend_policy_drift_guard",
+      passed,
+      summary: passed
+        ? "Policy drift between soak trend mode and quality trend mode is directly detectable."
+        : "Policy drift between soak trend mode and quality trend mode was not detectable.",
+      details: `soak_policy=${soakReport.clarificationTrendPolicy} quality_policy=${driftReport.clarificationTrendPolicy} fail_reasons=${driftReport.failReasons.join("|") || "none"}`,
     });
   }
 

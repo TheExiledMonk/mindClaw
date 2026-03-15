@@ -804,7 +804,7 @@ describe("memory system store", () => {
 
     expect(supportPacket.text).toContain("Related memory expansion");
     const expandedItems = supportPacket.retrievalItems.filter((item) =>
-      item.reason.includes("graph expansion"),
+      item.reason.includes("related expansion"),
     );
     expect(expandedItems[0]?.text).toContain("Call transcript verified");
   });

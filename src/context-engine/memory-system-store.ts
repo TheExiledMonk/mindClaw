@@ -1255,6 +1255,58 @@ function getEntryConceptId(entry: Pick<LongTermMemoryEntry, "conceptKey" | "sema
   return buildStableConceptId(entry.conceptKey || entry.semanticKey);
 }
 
+function countSharedEntityIds(
+  a: Pick<LongTermMemoryEntry, "entityIds">,
+  b: Pick<LongTermMemoryEntry, "entityIds">,
+): number {
+  if (!a.entityIds?.length || !b.entityIds?.length) {
+    return 0;
+  }
+  const right = new Set(b.entityIds);
+  return a.entityIds.filter((id) => right.has(id)).length;
+}
+
+function countSharedResolvedEntityAliases(
+  a: Pick<
+    LongTermMemoryEntry,
+    | "text"
+    | "versionScope"
+    | "installProfileScope"
+    | "customerScope"
+    | "environmentTags"
+    | "artifactRefs"
+    | "entityAliases"
+  >,
+  b: Pick<
+    LongTermMemoryEntry,
+    | "text"
+    | "versionScope"
+    | "installProfileScope"
+    | "customerScope"
+    | "environmentTags"
+    | "artifactRefs"
+    | "entityAliases"
+  >,
+): number {
+  const left = new Set(
+    uniqueStrings([...(a.entityAliases ?? []), ...buildResolvedEntityAliases(a)]).map((alias) =>
+      normalizeComparable(alias),
+    ),
+  );
+  const right = new Set(
+    uniqueStrings([...(b.entityAliases ?? []), ...buildResolvedEntityAliases(b)]).map((alias) =>
+      normalizeComparable(alias),
+    ),
+  );
+  let overlap = 0;
+  for (const alias of left) {
+    if (right.has(alias)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
 function findConceptMatch(
   entries: Iterable<LongTermMemoryEntry>,
   incoming: LongTermMemoryEntry,
@@ -4136,6 +4188,7 @@ function rankLongTermEntries(
   queryTokens: Set<string>,
   taskMode: MemoryTaskMode,
   scopeContext?: MemoryScopeContext,
+  queryEntityAliases?: Set<string>,
   adjudications?: PersistedMemoryAdjudication[],
 ): LongTermMemoryEntry[] {
   const taskBonus = (entry: LongTermMemoryEntry): number => {
@@ -4199,6 +4252,19 @@ function rankLongTermEntries(
       };
       const contradictionPenalty = (entry: LongTermMemoryEntry): number =>
         entry.contradictionCount * 1.2;
+      const entityBonus = (entry: LongTermMemoryEntry): number => {
+        if (!queryEntityAliases || queryEntityAliases.size === 0) {
+          return 0;
+        }
+        const entryAliases = uniqueStrings([
+          ...(entry.entityAliases ?? []),
+          ...buildResolvedEntityAliases(entry),
+        ]);
+        const overlap = entryAliases.filter((alias) =>
+          queryEntityAliases.has(normalizeComparable(alias)),
+        ).length;
+        return overlap * 1.5;
+      };
       const adjudicationBonus = (entry: LongTermMemoryEntry): number => {
         const adjudication = resolveEntryAdjudication(entry, adjudications);
         if (!adjudication) {
@@ -4225,6 +4291,7 @@ function rankLongTermEntries(
         taskBonus(a) -
         statePenalty(a) -
         contradictionPenalty(a) +
+        entityBonus(a) +
         scopeBonus(a) +
         adjudicationBonus(a);
       const bScore =
@@ -4234,6 +4301,7 @@ function rankLongTermEntries(
         taskBonus(b) -
         statePenalty(b) -
         contradictionPenalty(b) +
+        entityBonus(b) +
         scopeBonus(b) +
         adjudicationBonus(b);
       return bScore - aScore;
@@ -4552,10 +4620,10 @@ function expandRelatedMemories(
   scopeContext?: MemoryScopeContext,
   graph?: MemoryGraphSnapshot,
   adjudications?: PersistedMemoryAdjudication[],
-): LongTermMemoryEntry[] {
+): Array<{ entry: LongTermMemoryEntry; via: string }> {
   const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
   const graphNodeById = new Map((graph?.nodes ?? []).map((node) => [node.id, node]));
-  const expanded: LongTermMemoryEntry[] = [];
+  const expanded: Array<{ entry: LongTermMemoryEntry; via: string }> = [];
   const seen = new Set<string>(selected.map((entry) => entry.id));
   const selectedIds = new Set(selected.map((entry) => entry.id));
   const allowedRelationTypes = (() => {
@@ -4645,7 +4713,7 @@ function expandRelatedMemories(
       continue;
     }
     seen.add(related.id);
-    expanded.push(related);
+    expanded.push({ entry: related, via: relation.type });
     if (expanded.length >= MAX_PACKET_ITEMS) {
       return expanded;
     }
@@ -4687,7 +4755,7 @@ function expandRelatedMemories(
           continue;
         }
         seen.add(artifactRelated.id);
-        expanded.push(artifactRelated);
+        expanded.push({ entry: artifactRelated, via: artifactEdge.type });
         if (expanded.length >= MAX_PACKET_ITEMS) {
           return expanded;
         }
@@ -4708,7 +4776,66 @@ function expandRelatedMemories(
       continue;
     }
     seen.add(related.id);
-    expanded.push(related);
+    expanded.push({ entry: related, via: edge.type });
+    if (expanded.length >= MAX_PACKET_ITEMS) {
+      break;
+    }
+  }
+
+  if (expanded.length >= MAX_PACKET_ITEMS) {
+    return expanded;
+  }
+
+  const entityLinked = allEntries
+    .filter((entry) => !seen.has(entry.id))
+    .map((entry) => {
+      const sharedEntityCount = Math.max(
+        ...selected.map((candidate) => countSharedEntityIds(candidate, entry)),
+      );
+      const sharedAliasCount = Math.max(
+        ...selected.map((candidate) => countSharedResolvedEntityAliases(candidate, entry)),
+      );
+      const textSupport = Math.max(
+        ...selected.map((candidate) =>
+          computeOverlapScore(entry.canonicalText || entry.text, new Set(tokenize(candidate.text))),
+        ),
+      );
+      return {
+        entry,
+        score: sharedEntityCount * 3 + sharedAliasCount * 1.5 + textSupport,
+        sharedEntityCount,
+        sharedAliasCount,
+      };
+    })
+    .filter((candidate) => candidate.sharedEntityCount > 0 || candidate.sharedAliasCount > 0)
+    .filter(
+      (candidate) =>
+        includeMemoryForContext(candidate.entry, taskMode) &&
+        shouldIncludeScopedEntry({
+          entry: candidate.entry,
+          taskMode,
+          scopeContext,
+          adjudications,
+        }),
+    )
+    .toSorted(
+      (a, b) =>
+        b.score - a.score ||
+        b.entry.confidence - a.entry.confidence ||
+        b.entry.updatedAt - a.entry.updatedAt,
+    );
+  for (const candidate of entityLinked) {
+    if (seen.has(candidate.entry.id)) {
+      continue;
+    }
+    seen.add(candidate.entry.id);
+    expanded.push({
+      entry: candidate.entry,
+      via:
+        candidate.sharedEntityCount > 0
+          ? `entity-link:${candidate.sharedEntityCount}`
+          : `entity-alias:${candidate.sharedAliasCount}`,
+    });
     if (expanded.length >= MAX_PACKET_ITEMS) {
       break;
     }
@@ -4730,6 +4857,16 @@ export function retrieveMemoryContextPacket(
   const queryTokens = new Set(tokenize(currentText));
   const taskMode = detectTaskMode(params?.messages ?? [], snapshot.workingMemory);
   const scopeContext = buildMemoryScopeContext(currentText);
+  const queryEntityAliases = new Set(
+    buildResolvedEntityAliases({
+      text: currentText,
+      versionScope: scopeContext.versionScope,
+      installProfileScope: scopeContext.installProfileScope,
+      customerScope: scopeContext.customerScope,
+      environmentTags: scopeContext.environmentTags,
+      artifactRefs: scopeContext.artifactRefs,
+    }).map((alias) => normalizeComparable(alias)),
+  );
   const adjudications = buildPersistedMemoryAdjudications({
     sessionId: snapshot.workingMemory.sessionId || "runtime",
     entries: snapshot.longTermMemory,
@@ -4751,6 +4888,7 @@ export function retrieveMemoryContextPacket(
     queryTokens,
     taskMode,
     scopeContext,
+    queryEntityAliases,
     adjudications,
   ).slice(0, MAX_PACKET_ITEMS);
   if (longTerm.length > 0) {
@@ -4760,10 +4898,11 @@ export function retrieveMemoryContextPacket(
           (entry) => entry.conceptId === getEntryConceptId(item),
         );
         const itemScopeSummary = formatEntryScopeSummary(item);
+        const entitySummary = (item.entityAliases ?? []).slice(0, 2).join(",");
         return {
           kind: "long-term" as const,
           text: formatMemoryWithState(item),
-          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${itemScopeSummary ? ` scope=${itemScopeSummary}` : ""}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
+          reason: `concept=${getEntryConceptId(item).slice(0, 10)} relevance=${computeOverlapScore(item.text, queryTokens)} strength=${item.strength.toFixed(2)} confidence=${item.confidence.toFixed(2)}${itemScopeSummary ? ` scope=${itemScopeSummary}` : ""}${entitySummary ? ` entities=${entitySummary}` : ""}${adjudication ? ` adjudication=${adjudication.status}:${adjudication.resolutionKind}${typeof adjudication.winningScore === "number" ? ` score=${adjudication.winningScore.toFixed(2)}` : ""}${typeof adjudication.scoreGap === "number" ? ` gap=${adjudication.scoreGap.toFixed(2)}` : ""}` : ""}${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
           memoryId: item.id,
           conceptId: getEntryConceptId(item),
         };
@@ -4854,16 +4993,16 @@ export function retrieveMemoryContextPacket(
     retrievalItems.push(
       ...relatedExpansion.map((item) => ({
         kind: "long-term" as const,
-        text: formatMemoryWithState(item),
-        reason: `concept=${getEntryConceptId(item).slice(0, 10)} graph expansion via ${item.relations[0]?.type ?? "linked"} relation${describeMemoryStateDowngrade(item).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item).join(",")}` : ""}`,
-        memoryId: item.id,
-        conceptId: getEntryConceptId(item),
+        text: formatMemoryWithState(item.entry),
+        reason: `concept=${getEntryConceptId(item.entry).slice(0, 10)} related expansion via ${item.via}${describeMemoryStateDowngrade(item.entry).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item.entry).join(",")}` : ""}`,
+        memoryId: item.entry.id,
+        conceptId: getEntryConceptId(item.entry),
       })),
     );
-    accessedLongTermIds.push(...relatedExpansion.map((item) => item.id));
-    accessedConceptIds.push(...relatedExpansion.map((item) => getEntryConceptId(item)));
+    accessedLongTermIds.push(...relatedExpansion.map((item) => item.entry.id));
+    accessedConceptIds.push(...relatedExpansion.map((item) => getEntryConceptId(item.entry)));
     sections.push(
-      `Related memory expansion:\n- ${relatedExpansion.map((item) => formatMemoryWithState(item)).join("\n- ")}`,
+      `Related memory expansion:\n- ${relatedExpansion.map((item) => formatMemoryWithState(item.entry)).join("\n- ")}`,
     );
   }
 
@@ -5923,6 +6062,7 @@ type PersistedMemoryAdjudication = {
   winningMemoryId?: string;
   losingMemoryIds: string[];
   alternativeConceptIds: string[];
+  entityIds: string[];
   winningScore?: number;
   scoreGap?: number;
   scopeSummary?: string;
@@ -5936,6 +6076,7 @@ function sanitizePersistedMemoryAdjudication(
     ...adjudication,
     resolutionKind: adjudication.resolutionKind ?? "winner",
     alternativeConceptIds: uniqueIds(adjudication.alternativeConceptIds ?? []),
+    entityIds: uniqueIds(adjudication.entityIds ?? []),
     winningScore:
       typeof adjudication.winningScore === "number" && Number.isFinite(adjudication.winningScore)
         ? adjudication.winningScore
@@ -6159,6 +6300,7 @@ function buildPersistedMemoryAdjudications(params: {
   };
   const entriesByConcept = new Map<string, LongTermMemoryEntry[]>();
   const entriesByConceptFamily = new Map<string, LongTermMemoryEntry[]>();
+  const entriesByEntityId = new Map<string, LongTermMemoryEntry[]>();
   for (const entry of params.entries) {
     const conceptId = getEntryConceptId(entry);
     const bucket = entriesByConcept.get(conceptId) ?? [];
@@ -6168,6 +6310,11 @@ function buildPersistedMemoryAdjudications(params: {
     const familyBucket = entriesByConceptFamily.get(familyKey) ?? [];
     familyBucket.push(entry);
     entriesByConceptFamily.set(familyKey, familyBucket);
+    for (const entityId of entry.entityIds ?? []) {
+      const entityBucket = entriesByEntityId.get(entityId) ?? [];
+      entityBucket.push(entry);
+      entriesByEntityId.set(entityId, entityBucket);
+    }
   }
   const revisionsByConcept = new Map<string, PersistedMemoryRevision[]>();
   for (const revision of params.revisions) {
@@ -6204,12 +6351,19 @@ function buildPersistedMemoryAdjudications(params: {
     const runnerUpScore = scoredEntries[1]?.score ?? 0;
     const scoreGap = winningScore - runnerUpScore;
     const conceptFamilyKey = getEntryConceptFamilyKey(winner ?? conceptEntries[0]);
+    const entityIds = uniqueIds(conceptEntries.flatMap((entry) => entry.entityIds ?? []));
     const losingMemoryIds = conceptEntries
       .filter((entry) => entry.id !== winner?.id)
       .map((entry) => entry.id);
     const winnerScopeSignature = buildScopeSignature(winner ?? conceptEntries[0]);
+    const familyAlternativeEntries = (entriesByConceptFamily.get(conceptFamilyKey) ?? []).filter(
+      (entry) => getEntryConceptId(entry) !== conceptId,
+    );
+    const entityAlternativeEntries = entityIds.flatMap(
+      (entityId) => entriesByEntityId.get(entityId) ?? [],
+    );
     const alternativeConceptIds = uniqueIds(
-      (entriesByConceptFamily.get(conceptFamilyKey) ?? [])
+      [...familyAlternativeEntries, ...entityAlternativeEntries]
         .filter((entry) => getEntryConceptId(entry) !== conceptId)
         .filter((entry) => buildScopeSignature(entry) !== winnerScopeSignature)
         .map((entry) => getEntryConceptId(entry)),
@@ -6234,7 +6388,9 @@ function buildPersistedMemoryAdjudications(params: {
       status = winner?.activeStatus === "superseded" ? "superseded" : "authoritative";
       resolutionKind = "scoped_alternative";
       rationale =
-        "concept family includes scope-specific alternatives with distinct scope signatures";
+        entityIds.length > 0
+          ? "concept family includes scope-specific alternatives over shared canonical entities"
+          : "concept family includes scope-specific alternatives with distinct scope signatures";
     } else if (conceptEntries.some((entry) => entry.activeStatus === "superseded")) {
       status = winner?.activeStatus === "superseded" ? "superseded" : status;
       resolutionKind = winner?.activeStatus === "superseded" ? "retired" : "winner";
@@ -6254,6 +6410,7 @@ function buildPersistedMemoryAdjudications(params: {
       winningMemoryId: winner?.id,
       losingMemoryIds,
       alternativeConceptIds,
+      entityIds,
       winningScore,
       scoreGap: scoredEntries.length > 1 ? scoreGap : undefined,
       scopeSummary: [

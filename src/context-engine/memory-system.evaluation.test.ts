@@ -6,6 +6,7 @@ import {
   inspectMemoryRetrievalObservability,
   retrieveMemoryContextPacket,
 } from "./memory-system-store.js";
+import type { MemoryStoreSnapshot } from "./memory-system-store.js";
 
 function userMessage(content: string): AgentMessage {
   return {
@@ -468,5 +469,244 @@ describe("memory system evaluation scenarios", () => {
     expect(merged?.entityAliases).toContain("feature/memory-v2");
     expect(merged?.entityAliases).toContain("memory-system.ts");
     expect(merged?.conceptAliases.length).toBeGreaterThan(1);
+  });
+
+  it("uses entity-linked retrieval when the query matches by branch and basename", () => {
+    const compiled = compileMemoryState({
+      sessionId: "eval-entity-retrieval",
+      messages: [
+        userMessage("Use the permanent memory-system path in src/context-engine/memory-system.ts."),
+      ],
+      runtimeContext: {
+        workspaceState: {
+          gitBranch: "feature/memory-v2",
+        },
+      } as never,
+    });
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage("On branch feature/memory-v2, what should we do in memory-system.ts?"),
+      ],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.reason.includes("entities=") &&
+          item.reason.includes("memory-system.ts") &&
+          item.text.includes("permanent memory-system path"),
+      ),
+    ).toBe(true);
+  });
+
+  it("expands related memories through shared canonical entities when text overlap is weak", () => {
+    const now = Date.now();
+    const snapshot: MemoryStoreSnapshot = {
+      workingMemory: buildWorkingMemorySnapshot({
+        sessionId: "eval-entity-expansion",
+        messages: [],
+      }),
+      longTermMemory: [
+        {
+          id: "ltm-entity-anchor",
+          semanticKey: "entity::anchor",
+          conceptKey: "concept::entity::anchor",
+          canonicalText: "use permanent memory system path memory system ts",
+          conceptAliases: [
+            "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+          ],
+          ontologyKind: "constraint",
+          category: "decision",
+          text: "Use the permanent memory-system path in src/context-engine/memory-system.ts.",
+          strength: 0.95,
+          evidence: ["anchor"],
+          provenance: [],
+          sourceType: "user_stated",
+          confidence: 0.94,
+          importanceClass: "critical",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "eligible",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: now - 10_000,
+          lastConfirmedAt: now - 10_000,
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          entityAliases: ["feature/memory-v2", "memory-system.ts"],
+          entityIds: ["entity-branch", "entity-artifact"],
+          environmentTags: ["git-branch:feature/memory-v2"],
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+          updatedAt: now - 10_000,
+        },
+        {
+          id: "ltm-distractor-1",
+          semanticKey: "entity::d1",
+          conceptKey: "concept::entity::d1",
+          canonicalText: "review memory system ts branch feature memory v2",
+          conceptAliases: ["Review memory-system.ts on feature/memory-v2 before editing."],
+          ontologyKind: "fact",
+          category: "fact",
+          text: "Review memory-system.ts on feature/memory-v2 before editing.",
+          strength: 0.92,
+          evidence: ["d1"],
+          provenance: [],
+          sourceType: "summary_derived",
+          confidence: 0.9,
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "deferred",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: now - 9_000,
+          lastConfirmedAt: now - 9_000,
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          environmentTags: ["git-branch:feature/memory-v2"],
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+          updatedAt: now - 9_000,
+        },
+        {
+          id: "ltm-distractor-2",
+          semanticKey: "entity::d2",
+          conceptKey: "concept::entity::d2",
+          canonicalText: "plan changes for memory system ts on feature memory v2",
+          conceptAliases: ["Plan changes for memory-system.ts on feature/memory-v2 carefully."],
+          ontologyKind: "pattern",
+          category: "strategy",
+          text: "Plan changes for memory-system.ts on feature/memory-v2 carefully.",
+          strength: 0.9,
+          evidence: ["d2"],
+          provenance: [],
+          sourceType: "summary_derived",
+          confidence: 0.88,
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "deferred",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: now - 8_000,
+          lastConfirmedAt: now - 8_000,
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          environmentTags: ["git-branch:feature/memory-v2"],
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+          updatedAt: now - 8_000,
+        },
+        {
+          id: "ltm-distractor-3",
+          semanticKey: "entity::d3",
+          conceptKey: "concept::entity::d3",
+          canonicalText: "keep branch feature memory v2 aligned in memory system ts",
+          conceptAliases: ["Keep branch feature/memory-v2 aligned in memory-system.ts."],
+          ontologyKind: "fact",
+          category: "fact",
+          text: "Keep branch feature/memory-v2 aligned in memory-system.ts.",
+          strength: 0.89,
+          evidence: ["d3"],
+          provenance: [],
+          sourceType: "summary_derived",
+          confidence: 0.87,
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "deferred",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: now - 7_000,
+          lastConfirmedAt: now - 7_000,
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          environmentTags: ["git-branch:feature/memory-v2"],
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+          updatedAt: now - 7_000,
+        },
+        {
+          id: "ltm-entity-neighbor",
+          semanticKey: "entity::neighbor",
+          conceptKey: "concept::entity::neighbor",
+          canonicalText: "preserve canonical bootstrap flow",
+          conceptAliases: ["Preserve the canonical bootstrap flow."],
+          ontologyKind: "constraint",
+          category: "decision",
+          text: "Preserve the canonical bootstrap flow.",
+          strength: 0.64,
+          evidence: ["neighbor"],
+          provenance: [],
+          sourceType: "user_stated",
+          confidence: 0.72,
+          importanceClass: "useful",
+          compressionState: "stable",
+          activeStatus: "active",
+          adjudicationStatus: "authoritative",
+          revisionCount: 0,
+          lastRevisionKind: "new",
+          permanenceStatus: "deferred",
+          permanenceReasons: [],
+          trend: "stable",
+          accessCount: 0,
+          createdAt: now - 6_000,
+          lastConfirmedAt: now - 6_000,
+          contradictionCount: 0,
+          relatedMemoryIds: [],
+          relations: [],
+          entityAliases: ["feature/memory-v2", "memory-system.ts"],
+          entityIds: ["entity-branch", "entity-artifact"],
+          environmentTags: ["git-branch:feature/memory-v2"],
+          artifactRefs: ["src/context-engine/memory-system.ts"],
+          updatedAt: now - 6_000,
+        },
+      ],
+      pendingSignificance: [],
+      permanentMemory: {
+        id: "root",
+        label: "permanent-memory",
+        nodeType: "root",
+        updatedAt: now,
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [],
+      },
+      graph: { nodes: [], edges: [], updatedAt: now },
+    };
+
+    const packet = retrieveMemoryContextPacket(snapshot, {
+      messages: [userMessage("What matters on feature/memory-v2 for memory-system.ts right now?")],
+    });
+
+    expect(
+      packet.retrievalItems.some(
+        (item) =>
+          item.kind === "long-term" &&
+          item.reason.includes("related expansion via entity-") &&
+          item.text.includes("canonical bootstrap flow"),
+      ),
+    ).toBe(true);
   });
 });

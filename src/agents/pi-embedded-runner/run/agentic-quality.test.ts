@@ -89,6 +89,10 @@ describe("agentic quality gate", () => {
       },
     });
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("agentic quality gate");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_profile=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("soak_clarification_mix=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -101,7 +105,10 @@ describe("agentic quality gate", () => {
       "# Agentic Quality Gate Report",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Diagnostics");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Soak");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("## Effectiveness");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification profile:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Clarification mix:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Template-ready families:",
@@ -573,6 +580,62 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Clarification profile: external_input",
+    );
+  });
+
+  it("surfaces a mismatch between current clarification blocker and long-run soak mix", () => {
+    const clarificationState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Resume the production deployment once the prerequisite is available.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "error",
+          summary: "Missing required prerequisite for deployment.",
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic regression guidance:",
+        "- reasons=missing_information:approval trend=watch",
+      ].join("\n"),
+    });
+
+    const report = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(clarificationState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        clarificationProfileCounts: ["environment_variable:3", "approval:1"],
+        dominantClarificationProfile: "environment_variable",
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(report.recommendations).toContain(
+      "Current clarification blocker differs from long-run blocker mix: current=approval soak=environment_variable.",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_profile=environment_variable",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "soak_clarification_mix=environment_variable:3,approval:1",
     );
   });
 

@@ -7440,6 +7440,7 @@ export function runAgenticQualityGate(params?: {
   const effectivenessPassed =
     (!params?.failOnWeakeningSkills || weakeningSkills.length === 0) &&
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
+  const soakClarificationProfile = soak.dominantClarificationProfile ?? "none";
   const recommendations = uniqueCompact(
     [
       diagnostics.autonomyMode === "approval_required"
@@ -7455,6 +7456,12 @@ export function runAgenticQualityGate(params?: {
       diagnostics.clarificationReason &&
       diagnostics.clarificationReason !== "missing_information:file_or_input"
         ? diagnostics.clarificationSummary
+        : undefined,
+      diagnostics.retryClass === "clarify" &&
+      soakClarificationProfile !== "none" &&
+      soakClarificationProfile !== "mixed" &&
+      clarificationProfile !== soakClarificationProfile
+        ? `Current clarification blocker differs from long-run blocker mix: current=${clarificationProfile} soak=${soakClarificationProfile}.`
         : undefined,
       diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"
         ? "Capture an observed validation command before allowing another retry on project work."
@@ -7518,10 +7525,14 @@ export function formatAgenticQualityGateReport(
     return `${JSON.stringify(report, null, 2)}\n`;
   }
   if (format === "summary") {
+    const soakClarificationProfile = report.soak.dominantClarificationProfile ?? "none";
+    const soakClarificationMix = report.soak.clarificationProfileCounts ?? [];
     const lines = [
       report.summary,
       `acceptance=${report.acceptance.summary}`,
       `soak=${report.soak.summary}`,
+      `soak_clarification_profile=${soakClarificationProfile}`,
+      `soak_clarification_mix=${soakClarificationMix.length > 0 ? soakClarificationMix.join(",") : "none"}`,
       `diagnostics=${report.diagnostics.summary}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
@@ -7536,6 +7547,8 @@ export function formatAgenticQualityGateReport(
     ];
     return `${lines.join("\n")}\n`;
   }
+  const soakClarificationProfile = report.soak.dominantClarificationProfile ?? "none";
+  const soakClarificationMix = report.soak.clarificationProfileCounts ?? [];
   const lines = [
     "# Agentic Quality Gate Report",
     "",
@@ -7550,6 +7563,8 @@ export function formatAgenticQualityGateReport(
     "## Soak",
     `- Summary: ${report.soak.summary}`,
     `- Passed: ${report.soakPassed ? "yes" : "no"}`,
+    `- Clarification profile: ${soakClarificationProfile}`,
+    `- Clarification mix: ${soakClarificationMix.length > 0 ? soakClarificationMix.join(", ") : "none"}`,
     "",
     "## Diagnostics",
     `- Summary: ${report.diagnostics.summary}`,

@@ -1,6 +1,7 @@
-import { beforeEach, describe, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMemorySearchToolOrThrow,
+  createMemoryStoreToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./memory-tool.test-helpers.js";
 
@@ -11,6 +12,7 @@ vi.mock("../../context-engine/memory-system-store.js", async () => {
   return {
     ...actual,
     loadMemoryStoreSnapshot: vi.fn(),
+    storeIntegratedMemoryEntry: vi.fn(),
   };
 });
 
@@ -18,6 +20,7 @@ describe("memory_search unavailable payloads", () => {
   beforeEach(async () => {
     const mod = await import("../../context-engine/memory-system-store.js");
     vi.mocked(mod.loadMemoryStoreSnapshot).mockReset();
+    vi.mocked(mod.storeIntegratedMemoryEntry).mockReset();
   });
 
   it("returns explicit unavailable metadata for integrated store failures", async () => {
@@ -32,6 +35,21 @@ describe("memory_search unavailable payloads", () => {
       error: "integrated memory store unavailable",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
+    });
+  });
+
+  it("returns explicit disabled metadata for integrated store write failures", async () => {
+    const mod = await import("../../context-engine/memory-system-store.js");
+    vi.mocked(mod.storeIntegratedMemoryEntry).mockRejectedValue(
+      new Error("integrated memory store unavailable"),
+    );
+
+    const tool = createMemoryStoreToolOrThrow();
+    const result = await tool.execute("store-write-failure", { text: "remember this" });
+    expect(result.details).toEqual({
+      stored: false,
+      disabled: true,
+      error: "integrated memory store unavailable",
     });
   });
 });

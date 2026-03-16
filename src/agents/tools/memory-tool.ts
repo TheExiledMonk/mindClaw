@@ -5,8 +5,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import {
   loadMemoryStoreSnapshot,
+  storeIntegratedMemoryEntry,
   retrieveMemoryContextPacket,
   type MemoryContextPacket,
+  type MemoryCategory,
+  type MemorySourceType,
   type MemoryRetrievalItem,
   type MemoryStoreBackendKind,
   type PermanentMemoryNode,
@@ -16,7 +19,7 @@ import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -28,6 +31,13 @@ const MemoryGetSchema = Type.Object({
   path: Type.String(),
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
+});
+
+const MemoryStoreSchema = Type.Object({
+  text: Type.String(),
+  category: Type.Optional(Type.String()),
+  importanceClass: Type.Optional(Type.String()),
+  sourceType: Type.Optional(Type.String()),
 });
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
@@ -45,7 +55,9 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
   return { cfg, agentId };
 }
 
-function createMemoryTool(params: {
+function createMemoryTool<
+  TParameters extends typeof MemorySearchSchema | typeof MemoryGetSchema | typeof MemoryStoreSchema,
+>(params: {
   options: {
     config?: OpenClawConfig;
     agentSessionKey?: string;
@@ -53,7 +65,7 @@ function createMemoryTool(params: {
   label: string;
   name: string;
   description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  parameters: TParameters;
   execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
@@ -152,6 +164,58 @@ export function createMemoryGetTool(options: {
   });
 }
 
+export function createMemoryStoreTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  return createMemoryTool({
+    options,
+    label: "Memory Store",
+    name: "memory_store",
+    description:
+      "Persist a durable note directly into the integrated MindClaw memory store. Use when the user explicitly asks you to remember something, or when a stable takeaway should survive future sessions. Do not write MEMORY.md or memory/*.md.",
+    parameters: MemoryStoreSchema,
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const text = readStringParam(params, "text", { required: true });
+        const category = readMemoryCategoryParam(params, "category");
+        const importanceClass = readImportanceClassParam(params, "importanceClass");
+        const sourceType = readMemorySourceTypeParam(params, "sourceType");
+        try {
+          const stored = await storeIntegratedMemoryEntry({
+            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+            sessionId: options.agentSessionKey ?? agentId,
+            backendKind: resolveIntegratedMemoryBackendKind(),
+            text,
+            category,
+            importanceClass,
+            sourceType,
+          });
+          const path = `${MINDCLAW_MEMORY_PREFIX}long-term/${encodeURIComponent(stored.entry.id)}`;
+          return jsonResult({
+            stored: true,
+            created: stored.created,
+            provider: "mindclaw-memory",
+            mode: "integrated-memory",
+            path,
+            text: stored.entry.text,
+            category: stored.entry.category,
+            importanceClass: stored.entry.importanceClass,
+            sourceType: stored.entry.sourceType,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({
+            stored: false,
+            disabled: true,
+            error: message,
+          });
+        }
+      },
+  });
+}
+
 function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
   if (mode === "on" || mode === "off" || mode === "auto") {
@@ -193,6 +257,64 @@ function formatCitation(entry: IntegratedMemorySearchResult): string {
 }
 
 const MINDCLAW_MEMORY_PREFIX = "mindclaw_memory://";
+
+function readMemoryCategoryParam(
+  params: Record<string, unknown>,
+  key: string,
+): MemoryCategory | undefined {
+  const value = readStringParam(params, key);
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "fact" ||
+    normalized === "preference" ||
+    normalized === "decision" ||
+    normalized === "strategy" ||
+    normalized === "entity" ||
+    normalized === "episode" ||
+    normalized === "pattern"
+  ) {
+    return normalized;
+  }
+  throw new ToolInputError(`unsupported memory category: ${value}`);
+}
+
+function readImportanceClassParam(
+  params: Record<string, unknown>,
+  key: string,
+): "critical" | "useful" | undefined {
+  const value = readStringParam(params, key);
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "critical" || normalized === "useful") {
+    return normalized;
+  }
+  throw new ToolInputError(`unsupported importance class: ${value}`);
+}
+
+function readMemorySourceTypeParam(
+  params: Record<string, unknown>,
+  key: string,
+): MemorySourceType | undefined {
+  const value = readStringParam(params, key);
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "user_stated" ||
+    normalized === "direct_observation" ||
+    normalized === "summary_derived" ||
+    normalized === "system_inferred"
+  ) {
+    return normalized;
+  }
+  throw new ToolInputError(`unsupported memory source type: ${value}`);
+}
 
 function resolveIntegratedMemoryBackendKind(): MemoryStoreBackendKind | undefined {
   const envValue = process.env.OPENCLAW_MEMORY_STORE_BACKEND;

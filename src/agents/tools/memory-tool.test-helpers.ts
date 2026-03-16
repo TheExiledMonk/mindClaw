@@ -1,6 +1,10 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+  createMemoryStoreTool,
+} from "./memory-tool.js";
 
 export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
   return config as OpenClawConfig;
@@ -25,9 +29,37 @@ export function createMemorySearchToolOrThrow(params?: {
 }
 
 export function createMemoryGetToolOrThrow(
-  config: OpenClawConfig = createDefaultMemoryToolConfig(),
+  params?:
+    | OpenClawConfig
+    | {
+        config?: OpenClawConfig;
+        agentSessionKey?: string;
+      },
 ) {
-  const tool = createMemoryGetTool({ config });
+  const isConfigOnly =
+    params !== undefined && !("config" in params) && !("agentSessionKey" in params);
+  const config: OpenClawConfig = isConfigOnly
+    ? (params as OpenClawConfig)
+    : (params?.config ?? createDefaultMemoryToolConfig());
+  const agentSessionKey: string | undefined = isConfigOnly ? undefined : params?.agentSessionKey;
+  const tool = createMemoryGetTool({
+    config,
+    ...(agentSessionKey ? { agentSessionKey } : {}),
+  });
+  if (!tool) {
+    throw new Error("tool missing");
+  }
+  return tool;
+}
+
+export function createMemoryStoreToolOrThrow(params?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}) {
+  const tool = createMemoryStoreTool({
+    config: params?.config ?? createDefaultMemoryToolConfig(),
+    ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+  });
   if (!tool) {
     throw new Error("tool missing");
   }

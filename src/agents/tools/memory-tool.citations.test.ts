@@ -14,6 +14,7 @@ import {
   asOpenClawConfig,
   createMemoryGetToolOrThrow,
   createMemorySearchToolOrThrow,
+  createMemoryStoreToolOrThrow,
 } from "./memory-tool.test-helpers.js";
 
 let workspaceDir = "";
@@ -145,6 +146,47 @@ describe("memory tools", () => {
       path: "mindclaw_memory://long-term/ltm-course",
       text: "CPA course syllabus stored under PowerHouse Affiliate with tax module sequencing.",
     });
+  });
+
+  it("stores explicit durable memory into the integrated memory store", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const storeTool = createMemoryStoreToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const storeResult = await storeTool.execute("call_store", {
+      text: "Remember that the CPA affiliate course lives under PowerHouse Affiliate and includes compliance notes.",
+      category: "fact",
+      importanceClass: "useful",
+    });
+    const stored = storeResult.details as {
+      stored: boolean;
+      created: boolean;
+      path: string;
+      text: string;
+    };
+    expect(stored.stored).toBe(true);
+    expect(stored.path).toMatch(/^mindclaw_memory:\/\/long-term\//);
+    expect(stored.text).toContain("PowerHouse Affiliate");
+
+    const getTool = createMemoryGetToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const getResult = await getTool.execute("call_store_get", { path: stored.path });
+    expect((getResult.details as { text: string }).text).toContain("compliance notes");
+
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const searchResult = await searchTool.execute("call_store_search", {
+      query: "compliance notes",
+    });
+    const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
+    expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
   });
 });
 

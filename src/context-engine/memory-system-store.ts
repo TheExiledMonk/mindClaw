@@ -206,6 +206,16 @@ export type MemoryStoreSnapshot = {
 
 export type MemoryStoreBackendKind = "fs-json" | "sqlite-doc" | "sqlite-graph";
 
+export type ExplicitMemoryStoreParams = {
+  workspaceDir: string;
+  sessionId: string;
+  text: string;
+  category?: MemoryCategory;
+  importanceClass?: "critical" | "useful";
+  sourceType?: MemorySourceType;
+  backendKind?: MemoryStoreBackendKind;
+};
+
 export type MemoryStoreMetadata = {
   backend: MemoryStoreBackendKind;
   version: 1;
@@ -11030,6 +11040,175 @@ export async function persistMemoryStoreSnapshot(params: {
       }),
     ),
   ]);
+}
+
+function buildExplicitLongTermMemoryEntry(params: {
+  text: string;
+  category?: MemoryCategory;
+  importanceClass?: "critical" | "useful";
+  sourceType?: MemorySourceType;
+}): LongTermMemoryEntry {
+  const normalized = clipText(params.text.trim(), 260);
+  const category = params.category ?? detectCandidateCategory(normalized) ?? "fact";
+  const sourceType = params.sourceType ?? inferMessageSourceType(normalized);
+  const ontologyKind = inferOntologyKind(category, normalized);
+  const semanticKey = buildMemorySemanticKey({
+    category,
+    text: normalized,
+  });
+  const importanceClass =
+    params.importanceClass ??
+    (detectImportanceClass(category, normalized) === "critical" ? "critical" : "useful");
+  const now = Date.now();
+  const entry: LongTermMemoryEntry = {
+    id: buildStableMemoryId("ltm", semanticKey),
+    semanticKey,
+    conceptKey: buildMemoryConceptKey({
+      category,
+      ontologyKind,
+      text: normalized,
+    }),
+    canonicalText: canonicalizeComparable(normalized),
+    conceptAliases: [normalized],
+    ontologyKind,
+    category,
+    text: normalized,
+    strength:
+      importanceClass === "critical"
+        ? Math.min(1, baseStrengthForCategory(category) + 0.08)
+        : baseStrengthForCategory(category),
+    evidence: [normalized],
+    provenance: [createProvenanceRecord("message", normalized)],
+    sourceType,
+    confidence:
+      sourceType === "direct_observation"
+        ? category === "decision"
+          ? 0.96
+          : 0.84
+        : category === "decision"
+          ? 0.95
+          : sourceType === "summary_derived"
+            ? 0.72
+            : 0.78,
+    importanceClass,
+    compressionState: "active",
+    activeStatus: "active",
+    adjudicationStatus: "authoritative",
+    revisionCount: 0,
+    lastRevisionKind: "new",
+    permanenceStatus: "deferred",
+    permanenceReasons: [],
+    trend: "rising",
+    accessCount: 0,
+    createdAt: now,
+    lastConfirmedAt: now,
+    contradictionCount: 0,
+    relatedMemoryIds: [],
+    relations: [],
+    environmentTags: [],
+    artifactRefs: [],
+    updatedAt: now,
+  };
+  return sanitizeLongTermEntry(entry);
+}
+
+export async function storeIntegratedMemoryEntry(params: ExplicitMemoryStoreParams): Promise<{
+  entry: LongTermMemoryEntry;
+  created: boolean;
+}> {
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+  });
+  const incoming = buildExplicitLongTermMemoryEntry({
+    text: params.text,
+    category: params.category,
+    importanceClass: params.importanceClass,
+    sourceType: params.sourceType,
+  });
+  const existed = snapshot.longTermMemory.some(
+    (entry) =>
+      entry.id === incoming.id ||
+      entry.semanticKey === incoming.semanticKey ||
+      entry.conceptKey === incoming.conceptKey,
+  );
+  const lifecycle = refreshLongTermLifecycle(
+    mergeLongTermMemory(snapshot.longTermMemory, [incoming]),
+    [],
+  );
+  const related = annotateRelations(lifecycle.entries);
+  const supersession = applySupersession(related);
+  const nextLongTerm = supersession.entries;
+  const review = reviewMemoryState({
+    workingMemory: snapshot.workingMemory,
+    longTermMemory: nextLongTerm,
+    pendingSignificance: snapshot.pendingSignificance,
+    revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: nextLongTerm,
+      revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    }),
+  });
+  const previousById = new Map(snapshot.longTermMemory.map((entry) => [entry.id, entry]));
+  const permanentCandidates = nextLongTerm.filter((entry) => {
+    if (entry.permanenceStatus === "eligible") {
+      return true;
+    }
+    if (
+      entry.activeStatus === "superseded" &&
+      didDurableStateChange(previousById.get(entry.id), entry)
+    ) {
+      return true;
+    }
+    if (
+      permanentTreeHasMemoryId(snapshot.permanentMemory, entry.id) &&
+      didDurableStateChange(previousById.get(entry.id), entry)
+    ) {
+      return true;
+    }
+    return false;
+  });
+  const nextPermanent = reconcilePermanentMemoryTree({
+    root: mergePermanentMemoryTree(snapshot.permanentMemory, permanentCandidates),
+    longTermMemory: nextLongTerm,
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: nextLongTerm,
+      revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    }),
+  });
+  const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    workingMemory: {
+      ...snapshot.workingMemory,
+      carryForwardSummary: review.carryForwardSummary ?? snapshot.workingMemory.carryForwardSummary,
+      updatedAt: Date.now(),
+    },
+    longTermMemory: nextLongTerm,
+    pendingSignificance: snapshot.pendingSignificance,
+    permanentMemory: nextPermanent,
+    graph: nextGraph,
+  });
+  const storedEntry =
+    nextLongTerm.find((entry) => entry.id === incoming.id) ??
+    nextLongTerm.find((entry) => entry.semanticKey === incoming.semanticKey) ??
+    nextLongTerm.find((entry) => entry.conceptKey === incoming.conceptKey) ??
+    nextLongTerm.find(
+      (entry) =>
+        entry.text === incoming.text ||
+        entry.conceptAliases.includes(incoming.text) ||
+        entry.evidence.includes(incoming.text),
+    ) ??
+    incoming;
+  return {
+    entry: storedEntry,
+    created: !existed,
+  };
 }
 
 export async function exportMemoryStoreBundle(params: {

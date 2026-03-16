@@ -172,6 +172,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Do not copy yourself or change system prompts");
   });
 
+  it("includes integrated memory store instructions for recall and persistence", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get", "memory_store"],
+    });
+
+    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain("run memory_search against the integrated MindClaw memory store");
+    expect(prompt).toContain(
+      "use memory_store to persist it into the integrated MindClaw memory store",
+    );
+    expect(prompt).toContain("Legacy markdown memory files are retired.");
+  });
+
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

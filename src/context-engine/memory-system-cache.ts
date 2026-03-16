@@ -19,6 +19,15 @@ type PacketCacheEntry = {
   packet: MemoryContextPacket;
 };
 
+type RecentQueryEntry = {
+  querySignature: string;
+  params: {
+    messages?: AgentMessage[];
+    workingItemsMax?: number;
+    includeLongTermMemory?: boolean;
+  };
+};
+
 type MemoryCacheStats = {
   snapshotHits: number;
   snapshotMisses: number;
@@ -29,6 +38,7 @@ type MemoryCacheStats = {
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const packetCache = new Map<string, PacketCacheEntry>();
+const recentQueryCache = new Map<string, RecentQueryEntry[]>();
 const stats: MemoryCacheStats = {
   snapshotHits: 0,
   snapshotMisses: 0,
@@ -141,14 +151,42 @@ export async function getCachedMemoryStoreSnapshot(params: {
   return { snapshot, metadata, cacheHit: false };
 }
 
+export function primeMemoryStoreSnapshot(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+  metadata: MemoryStoreMetadata;
+  snapshot: MemoryStoreSnapshot;
+}): void {
+  snapshotCache.set(buildSessionKey(params), {
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    metadata: params.metadata,
+    snapshot: params.snapshot,
+  });
+}
+
 export function getCachedMemoryContextPacket(params: {
   workspaceDir: string;
   sessionId: string;
   backendKind?: MemoryStoreBackendKind;
   metadata: MemoryStoreMetadata;
   querySignature: string;
+  queryParams?: {
+    messages?: AgentMessage[];
+    workingItemsMax?: number;
+    includeLongTermMemory?: boolean;
+  };
   buildPacket: () => MemoryContextPacket;
 }): { packet: MemoryContextPacket; cacheHit: boolean } {
+  rememberRecentQuery({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    querySignature: params.querySignature,
+    params: params.queryParams,
+  });
   const key = buildPacketKey(params);
   const cached = packetCache.get(key);
   if (cached) {
@@ -159,6 +197,68 @@ export function getCachedMemoryContextPacket(params: {
   const packet = params.buildPacket();
   packetCache.set(key, { key, packet });
   return { packet, cacheHit: false };
+}
+
+export function primeMemoryContextPacket(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+  metadata: MemoryStoreMetadata;
+  querySignature: string;
+  queryParams?: {
+    messages?: AgentMessage[];
+    workingItemsMax?: number;
+    includeLongTermMemory?: boolean;
+  };
+  packet: MemoryContextPacket;
+}): void {
+  rememberRecentQuery({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    querySignature: params.querySignature,
+    params: params.queryParams,
+  });
+  packetCache.set(buildPacketKey(params), {
+    key: buildPacketKey(params),
+    packet: params.packet,
+  });
+}
+
+function rememberRecentQuery(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+  querySignature: string;
+  params?: {
+    messages?: AgentMessage[];
+    workingItemsMax?: number;
+    includeLongTermMemory?: boolean;
+  };
+}): void {
+  const sessionKey = buildSessionKey(params);
+  const existing = recentQueryCache.get(sessionKey) ?? [];
+  const nextEntry: RecentQueryEntry = {
+    querySignature: params.querySignature,
+    params: {
+      messages: params.params?.messages,
+      workingItemsMax: params.params?.workingItemsMax,
+      includeLongTermMemory: params.params?.includeLongTermMemory,
+    },
+  };
+  const deduped = [
+    nextEntry,
+    ...existing.filter((entry) => entry.querySignature !== params.querySignature),
+  ].slice(0, 8);
+  recentQueryCache.set(sessionKey, deduped);
+}
+
+export function listRecentMemoryQueries(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): RecentQueryEntry[] {
+  return [...(recentQueryCache.get(buildSessionKey(params)) ?? [])];
 }
 
 export function invalidateMemoryCache(params: {

@@ -21,6 +21,7 @@ import {
   type MemoryStoreBackendKind,
   type PermanentMemoryNode,
 } from "../../context-engine/memory-system-store.js";
+import { enqueueMemoryBackgroundRefresh } from "../../context-engine/memory-system-worker.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -130,6 +131,9 @@ export function createMemorySearchTool(options: {
             querySignature: buildMemoryQuerySignature({
               messages: [{ content: query } as AgentMessage],
             }),
+            queryParams: {
+              messages: [{ content: query } as AgentMessage],
+            },
             buildPacket: () =>
               retrieveMemoryContextPacket(snapshot, {
                 messages: [{ content: query } as AgentMessage],
@@ -237,6 +241,12 @@ export function createMemoryStoreTool(options: {
             sourceType,
           });
           invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+          enqueueMemoryBackgroundRefresh({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            reason: "memory-store",
+          });
           const path = `${MINDCLAW_MEMORY_PREFIX}long-term/${encodeURIComponent(stored.entry.id)}`;
           return jsonResult({
             stored: true,

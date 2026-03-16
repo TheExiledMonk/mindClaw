@@ -10,6 +10,7 @@ import {
   type PermanentMemoryNode,
   type WorkingMemorySnapshot,
 } from "../../context-engine/memory-system-store.js";
+import { waitForMemoryBackgroundWorkerIdle } from "../../context-engine/memory-system-worker.js";
 import {
   asOpenClawConfig,
   createMemoryGetToolOrThrow,
@@ -45,6 +46,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await waitForMemoryBackgroundWorkerIdle();
   if (workspaceDir) {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   }

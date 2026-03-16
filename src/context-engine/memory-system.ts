@@ -18,6 +18,7 @@ import {
   runMemorySleepReview,
   touchRetrievedMemories,
 } from "./memory-system-store.js";
+import { enqueueMemoryBackgroundRefresh } from "./memory-system-worker.js";
 import { registerContextEngine } from "./registry.js";
 import type {
   AssembleResult,
@@ -199,6 +200,11 @@ export class MemorySystemContextEngine implements ContextEngine {
         workingItemsMax: workingSetPolicy.importantItemsMax,
         includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
       }),
+      queryParams: {
+        messages: assembledMessages,
+        workingItemsMax: workingSetPolicy.importantItemsMax,
+        includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
+      },
       buildPacket: () =>
         retrieveMemoryContextPacket(snapshot, {
           messages: assembledMessages,
@@ -218,6 +224,12 @@ export class MemorySystemContextEngine implements ContextEngine {
         graph: snapshot.graph,
       });
       invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+      enqueueMemoryBackgroundRefresh({
+        workspaceDir,
+        sessionId,
+        backendKind,
+        reason: "review",
+      });
     }
     return {
       messages: assembledMessages,
@@ -275,6 +287,12 @@ export class MemorySystemContextEngine implements ContextEngine {
       graph: incremental.graph,
     });
     invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+    enqueueMemoryBackgroundRefresh({
+      workspaceDir,
+      sessionId,
+      backendKind,
+      reason: "after-turn",
+    });
   }
 
   async compact(params: {
@@ -326,6 +344,12 @@ export class MemorySystemContextEngine implements ContextEngine {
         graph: compiled.graph,
       });
       invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+      enqueueMemoryBackgroundRefresh({
+        workspaceDir,
+        sessionId,
+        backendKind,
+        reason: "compact",
+      });
     }
     await this.review({
       sessionId: params.sessionId,
@@ -362,6 +386,12 @@ export class MemorySystemContextEngine implements ContextEngine {
       graph: reviewed.graph,
     });
     invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+    enqueueMemoryBackgroundRefresh({
+      workspaceDir,
+      sessionId,
+      backendKind,
+      reason: "review",
+    });
     return {
       reviewed: true,
       summary:

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import * as workspaceTemplates from "./workspace-templates.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -20,12 +21,37 @@ import {
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
   it("uses OPENCLAW_HOME for default workspace resolution", () => {
+    const dir = resolveDefaultAgentWorkspaceDir(
+      {
+        OPENCLAW_HOME: "/srv/openclaw-home",
+        HOME: "/home/other",
+      } as NodeJS.ProcessEnv,
+      undefined,
+      () => false,
+    );
+
+    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".mindclaw", "workspace"));
+  });
+
+  it("prefers an existing .openclaw workspace home before .mindclaw", () => {
+    const dir = resolveDefaultAgentWorkspaceDir(
+      {
+        HOME: "/home/other",
+      } as NodeJS.ProcessEnv,
+      undefined,
+      (filePath) => filePath === path.join("/home/other", ".openclaw"),
+    );
+
+    expect(dir).toBe(path.join("/home/other", ".openclaw", "workspace"));
+  });
+
+  it("honors OPENCLAW_WORKSPACE_DIR overrides", () => {
     const dir = resolveDefaultAgentWorkspaceDir({
-      OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
+      OPENCLAW_WORKSPACE_DIR: "~/custom-workspace",
     } as NodeJS.ProcessEnv);
 
-    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
+    expect(dir).toBe(path.join("/home/other", "custom-workspace"));
   });
 });
 
@@ -149,6 +175,32 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectCompletedWithoutBootstrap(tempDir);
+  });
+
+  it("does not require repo templates for populated existing workspaces", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+
+    const brokenTemplateDir = await fs.mkdtemp(path.join(os.tmpdir(), "mindclaw-templates-"));
+    const resolveWorkspaceTemplateDirSpy = vi
+      .spyOn(workspaceTemplates, "resolveWorkspaceTemplateDir")
+      .mockResolvedValue(brokenTemplateDir);
+
+    try {
+      await expect(
+        ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+      ).resolves.toMatchObject({ dir: tempDir });
+    } finally {
+      resolveWorkspaceTemplateDirSpy.mockRestore();
+      await fs.rm(brokenTemplateDir, { recursive: true, force: true });
+    }
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 

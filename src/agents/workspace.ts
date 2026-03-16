@@ -12,13 +12,34 @@ import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
+  existsSync: (filePath: string) => boolean = syncFs.existsSync,
 ): string {
+  const explicitWorkspace =
+    env.OPENCLAW_WORKSPACE_DIR?.trim() || env.MINDCLAW_WORKSPACE_DIR?.trim();
+  if (explicitWorkspace) {
+    return resolveUserPath(explicitWorkspace, env, homedir);
+  }
   const home = resolveRequiredHomeDir(env, homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
+  const openClawHome = path.join(home, ".openclaw");
+  const mindClawHome = path.join(home, ".mindclaw");
+  const rootDir = (() => {
+    try {
+      if (existsSync(openClawHome)) {
+        return openClawHome;
+      }
+      if (existsSync(mindClawHome)) {
+        return mindClawHome;
+      }
+    } catch {
+      // Best-effort existence checks; default to the MindClaw-specific home.
+    }
+    return mindClawHome;
+  })();
   if (profile && profile.toLowerCase() !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
+    return path.join(rootDir, `workspace-${profile}`);
   }
-  return path.join(home, ".openclaw", "workspace");
+  return path.join(rootDir, "workspace");
 }
 
 export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();
@@ -369,19 +390,6 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v);
   })();
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
-
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceOnboardingState>) => {
@@ -403,10 +411,6 @@ export async function ensureAgentWorkspace(params?: {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat onboarding as complete and avoid recreating BOOTSTRAP for
     // already-onboarded workspaces.
-    const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
-    ]);
     const hasUserContent = await (async () => {
       const indicators = [
         path.join(dir, "memory"),
@@ -423,22 +427,58 @@ export async function ensureAgentWorkspace(params?: {
       }
       return false;
     })();
-    const legacyOnboardingCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
-    if (legacyOnboardingCompleted) {
+    if (hasUserContent) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
-      const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
-      if (!wroteBootstrap) {
-        bootstrapExists = await fileExists(bootstrapPath);
+      const [identityExists, userExists] = await Promise.all([
+        fileExists(identityPath),
+        fileExists(userPath),
+      ]);
+      const [identityTemplate, userTemplate, identityContent, userContent] = await Promise.all([
+        loadTemplate(DEFAULT_IDENTITY_FILENAME),
+        loadTemplate(DEFAULT_USER_FILENAME),
+        identityExists ? fs.readFile(identityPath, "utf-8") : Promise.resolve<string | null>(null),
+        userExists ? fs.readFile(userPath, "utf-8") : Promise.resolve<string | null>(null),
+      ]);
+      const legacyOnboardingCompleted =
+        (identityContent ?? identityTemplate) !== identityTemplate ||
+        (userContent ?? userTemplate) !== userTemplate;
+      if (legacyOnboardingCompleted) {
+        markState({ onboardingCompletedAt: nowIso() });
       } else {
-        bootstrapExists = true;
-      }
-      if (bootstrapExists && !state.bootstrapSeededAt) {
-        markState({ bootstrapSeededAt: nowIso() });
+        const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+        const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+        if (!wroteBootstrap) {
+          bootstrapExists = await fileExists(bootstrapPath);
+        } else {
+          bootstrapExists = true;
+        }
+        if (bootstrapExists && !state.bootstrapSeededAt) {
+          markState({ bootstrapSeededAt: nowIso() });
+        }
       }
     }
+  }
+
+  const coreFiles: Array<[string, WorkspaceBootstrapFileName]> = [
+    [agentsPath, DEFAULT_AGENTS_FILENAME],
+    [soulPath, DEFAULT_SOUL_FILENAME],
+    [toolsPath, DEFAULT_TOOLS_FILENAME],
+    [identityPath, DEFAULT_IDENTITY_FILENAME],
+    [userPath, DEFAULT_USER_FILENAME],
+    [heartbeatPath, DEFAULT_HEARTBEAT_FILENAME],
+  ];
+  const missingCoreFiles = await Promise.all(
+    coreFiles.map(async ([filePath, templateName]) =>
+      (await fileExists(filePath)) ? null : { filePath, templateName },
+    ),
+  );
+  for (const entry of missingCoreFiles) {
+    if (!entry) {
+      continue;
+    }
+    const template = await loadTemplate(entry.templateName);
+    await writeFileIfMissing(entry.filePath, template);
   }
 
   if (stateDirty) {

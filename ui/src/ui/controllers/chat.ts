@@ -52,6 +52,13 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type OptimisticUserMessage = Record<string, unknown> & {
+  role: "user";
+  pending?: boolean;
+  localOnly?: boolean;
+  clientRequestId?: string;
+};
+
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -62,6 +69,77 @@ function maybeResetToolStream(state: ChatState) {
   ) {
     resetToolStream(toolHost as Parameters<typeof resetToolStream>[0]);
   }
+}
+
+function getImageAttachmentCount(message: unknown): number {
+  if (!message || typeof message !== "object") {
+    return 0;
+  }
+  const content = (message as Record<string, unknown>).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  return content.filter((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    return (item as Record<string, unknown>).type === "image";
+  }).length;
+}
+
+function getOptimisticUserMessages(messages: unknown[]): OptimisticUserMessage[] {
+  return messages.filter((message): message is OptimisticUserMessage => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const record = message as Record<string, unknown>;
+    return record.role === "user" && record.pending === true && record.localOnly === true;
+  });
+}
+
+function sameUserMessage(a: unknown, b: unknown): boolean {
+  if (!a || typeof a !== "object" || !b || typeof b !== "object") {
+    return false;
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const leftRole = typeof left.role === "string" ? left.role.toLowerCase() : "";
+  const rightRole = typeof right.role === "string" ? right.role.toLowerCase() : "";
+  if (leftRole !== "user" || rightRole !== "user") {
+    return false;
+  }
+  const leftRequestId =
+    typeof left.clientRequestId === "string" && left.clientRequestId.trim()
+      ? left.clientRequestId.trim()
+      : "";
+  const rightRequestId =
+    typeof right.clientRequestId === "string" && right.clientRequestId.trim()
+      ? right.clientRequestId.trim()
+      : "";
+  if (leftRequestId && rightRequestId) {
+    return leftRequestId === rightRequestId;
+  }
+  const leftText = extractText(left)?.trim() ?? "";
+  const rightText = extractText(right)?.trim() ?? "";
+  if (leftText !== rightText) {
+    return false;
+  }
+  return getImageAttachmentCount(left) === getImageAttachmentCount(right);
+}
+
+function mergePendingUserMessages(history: unknown[], current: unknown[]): unknown[] {
+  const pending = getOptimisticUserMessages(current);
+  if (pending.length === 0) {
+    return history;
+  }
+  const merged = [...history];
+  for (const pendingMessage of pending) {
+    if (history.some((message) => sameUserMessage(message, pendingMessage))) {
+      continue;
+    }
+    merged.push(pendingMessage);
+  }
+  return merged;
 }
 
 export async function loadChatHistory(state: ChatState) {
@@ -79,7 +157,8 @@ export async function loadChatHistory(state: ChatState) {
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const filteredMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    state.chatMessages = mergePendingUserMessages(filteredMessages, state.chatMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -165,6 +244,7 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
+  const runId = generateUUID();
 
   // Build user message content blocks
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
@@ -187,12 +267,14 @@ export async function sendChatMessage(
       role: "user",
       content: contentBlocks,
       timestamp: now,
+      pending: true,
+      localOnly: true,
+      clientRequestId: runId,
     },
   ];
 
   state.chatSending = true;
   state.lastError = null;
-  const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;

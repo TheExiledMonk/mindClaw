@@ -545,6 +545,33 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("adds an immediate optimistic user message while the request is in flight", async () => {
+    let resolveRequest: (() => void) | null = null;
+    const request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = () => resolve({ ok: true });
+        }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const sendPromise = sendChatMessage(state, "hello");
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "user",
+      pending: true,
+      localOnly: true,
+      content: [{ type: "text", text: "hello" }],
+    });
+
+    resolveRequest?.();
+    await sendPromise;
+  });
+
   it("formats structured non-auth connect failures for chat send", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
@@ -629,5 +656,62 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+
+  it("preserves pending optimistic user messages until history catches up", async () => {
+    const optimistic = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block" }],
+      timestamp: 123,
+      pending: true,
+      localOnly: true,
+      clientRequestId: "run-1",
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Working..." }] }],
+      thinkingLevel: "medium",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimistic],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Working..." }] },
+      optimistic,
+    ]);
+  });
+
+  it("drops the optimistic duplicate once history contains the same user message", async () => {
+    const optimistic = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block" }],
+      timestamp: 123,
+      pending: true,
+      localOnly: true,
+      clientRequestId: "run-1",
+    };
+    const persisted = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block" }],
+      timestamp: 124,
+      clientRequestId: "run-1",
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persisted],
+      thinkingLevel: "medium",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimistic],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persisted]);
   });
 });

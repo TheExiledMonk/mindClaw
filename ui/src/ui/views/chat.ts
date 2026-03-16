@@ -891,7 +891,7 @@ export function renderChat(props: ChatProps) {
                     props.onLoadOlderHistory?.(container);
                   }}
                 >
-                  ${icons.chevronUp}
+                  ${icons.chevronRight}
                   <span>Show older messages</span>
                   <span class="chat-history-window-notice__detail">${hiddenHistoryCount} hidden</span>
                 </button>

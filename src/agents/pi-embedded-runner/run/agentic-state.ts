@@ -348,6 +348,11 @@ export type AgenticHandoffReport = {
   activeArtifacts: string[];
   blockers: string[];
   operatorMode: "continue" | "pause" | "approval_required" | "escalate";
+  operatorActionPolicy:
+    | "continue_safe"
+    | "pause_for_prerequisites"
+    | "approval_gate"
+    | "escalate_now";
   resumabilityStatus: "ready" | "approval_gated" | "prerequisite_gated" | "escalation_gated";
   resumeBarrierProfile:
     | "none"
@@ -358,6 +363,9 @@ export type AgenticHandoffReport = {
     | "generic_prerequisite"
     | "escalation";
   operatorReason?: string;
+  assumptionStatus: "none" | "surfaced";
+  assumptionHighlights: string[];
+  clarificationDemand: "none" | "specific" | "generic";
   nextAction?: string;
   suggestedSkill?: string;
   resumePrompt?: string;
@@ -505,6 +513,9 @@ export type AgenticQualityGateReport = {
   validationReadinessStatus: "unknown" | "observed";
   handoffResumabilityStatus: "unknown" | "guarded_resume_paths";
   soakResumeBarrierProfile: AgenticHandoffReport["resumeBarrierProfile"];
+  assumptionSurfacingStatus: "none" | "surfaced";
+  operatorActionPolicyStatus: "aligned" | "review";
+  clarificationEfficiencyStatus: "efficient" | "needs_tightening";
   failureLearningStatus: AgenticFailureLearningState["failurePattern"];
   capabilityGapStatus: "none" | "present";
   dominantCapabilityGap?: string;
@@ -672,6 +683,71 @@ function mapClarificationReasonToProfile(
       : reason === "missing_information:external_input"
         ? "external_input"
         : undefined;
+}
+
+function deriveClarificationDemand(
+  clarificationSummary?: string,
+): AgenticHandoffReport["clarificationDemand"] {
+  if (!clarificationSummary) {
+    return "none";
+  }
+  const normalized = clarificationSummary.toLowerCase();
+  return normalized.includes("environment variable") ||
+    normalized.includes("operator approval") ||
+    normalized.includes("external input") ||
+    normalized.includes("/") ||
+    normalized.includes(".json") ||
+    normalized.includes(".ts") ||
+    normalized.includes(".csv")
+    ? "specific"
+    : "generic";
+}
+
+function deriveOperatorActionPolicy(
+  operatorMode: AgenticHandoffReport["operatorMode"],
+): AgenticHandoffReport["operatorActionPolicy"] {
+  return operatorMode === "approval_required"
+    ? "approval_gate"
+    : operatorMode === "escalate"
+      ? "escalate_now"
+      : operatorMode === "pause"
+        ? "pause_for_prerequisites"
+        : "continue_safe";
+}
+
+function deriveQualityCollaborationRollups(params: {
+  handoff: AgenticHandoffReport;
+  diagnostics: AgenticExecutionObservabilityReport;
+  soak: AgenticSoakReport;
+}): Pick<
+  AgenticQualityGateReport,
+  "assumptionSurfacingStatus" | "operatorActionPolicyStatus" | "clarificationEfficiencyStatus"
+> {
+  const assumptionSurfacingStatus =
+    params.handoff.assumptionStatus === "surfaced" || params.diagnostics.assumptions.length > 0
+      ? "surfaced"
+      : "none";
+  const operatorActionPolicyStatus =
+    (params.handoff.operatorMode === "continue" &&
+      params.handoff.operatorActionPolicy === "continue_safe") ||
+    (params.handoff.operatorMode === "pause" &&
+      params.handoff.operatorActionPolicy === "pause_for_prerequisites") ||
+    (params.handoff.operatorMode === "approval_required" &&
+      params.handoff.operatorActionPolicy === "approval_gate") ||
+    (params.handoff.operatorMode === "escalate" &&
+      params.handoff.operatorActionPolicy === "escalate_now")
+      ? "aligned"
+      : "review";
+  const clarificationEfficiencyStatus =
+    params.handoff.clarificationDemand === "generic" ||
+    (params.soak.clarificationTrendSignals ?? []).some((trend) => trend.includes(":rising("))
+      ? "needs_tightening"
+      : "efficient";
+  return {
+    assumptionSurfacingStatus,
+    operatorActionPolicyStatus,
+    clarificationEfficiencyStatus,
+  };
 }
 
 function summarizeClarificationProfiles(
@@ -4410,6 +4486,7 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
         : state.plannerState.retryClass === "clarify"
           ? "pause"
           : "continue";
+  const operatorActionPolicy = deriveOperatorActionPolicy(operatorMode);
   const resumabilityStatus: AgenticHandoffReport["resumabilityStatus"] =
     operatorMode === "approval_required"
       ? "approval_gated"
@@ -4460,15 +4537,37 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
             : state.plannerState.nextAction
               ? `Resume with next action: ${state.plannerState.nextAction}`
               : undefined;
+  const assumptionHighlights = uniqueCompact(
+    [
+      ...state.taskState.assumptions.map((assumption) => truncate(assumption, 80)),
+      ...(state.taskState.assumptions.length === 0 && clarificationSummary
+        ? [
+            truncate(
+              `Awaiting ${clarificationSummary.replace(/^Need clarification on:\s*/i, "")}`,
+              80,
+            ),
+          ]
+        : []),
+      ...(state.taskState.assumptions.length === 0 && state.taskState.blockers.length > 0
+        ? [truncate(`Blocked by ${state.taskState.blockers[0]}`, 80)]
+        : []),
+    ],
+    4,
+  );
+  const assumptionStatus: AgenticHandoffReport["assumptionStatus"] =
+    assumptionHighlights.length > 0 ? "surfaced" : "none";
+  const clarificationDemand = deriveClarificationDemand(clarificationSummary);
   const summaryParts = uniqueCompact(
     [
       state.taskState.objective
         ? `objective=${truncate(state.taskState.objective, 80)}`
         : undefined,
       `operator=${operatorMode}`,
+      `policy=${operatorActionPolicy}`,
       completedSteps.length > 0 ? `completed=${completedSteps.length}` : undefined,
       pendingSteps.length > 0 ? `pending=${pendingSteps.length}` : undefined,
       blockedSteps.length > 0 ? `blocked=${blockedSteps.length}` : undefined,
+      assumptionStatus === "surfaced" ? `assumptions=${assumptionHighlights.length}` : undefined,
       state.plannerState.suggestedSkill
         ? `suggested=${state.plannerState.suggestedSkill}`
         : undefined,
@@ -4486,9 +4585,13 @@ export function buildAgenticHandoffReport(state: AgenticExecutionState): Agentic
     activeArtifacts: state.taskState.activeArtifacts,
     blockers: state.taskState.blockers,
     operatorMode,
+    operatorActionPolicy,
     resumabilityStatus,
     resumeBarrierProfile,
     operatorReason,
+    assumptionStatus,
+    assumptionHighlights,
+    clarificationDemand,
     nextAction: state.plannerState.nextAction,
     suggestedSkill: state.plannerState.suggestedSkill,
     resumePrompt,
@@ -4512,8 +4615,14 @@ export function formatAgenticHandoffReport(
         ? `clarification=${report.clarificationSummary}`
         : "clarification=none",
       `operator=${report.operatorMode}${report.operatorReason ? ` reason=${report.operatorReason}` : ""}`,
+      `operator_policy=${report.operatorActionPolicy}`,
       `resumability=${report.resumabilityStatus}`,
       `resume_barrier=${report.resumeBarrierProfile}`,
+      `clarification_demand=${report.clarificationDemand}`,
+      `assumption_status=${report.assumptionStatus}`,
+      report.assumptionHighlights.length > 0
+        ? `assumption_highlights=${report.assumptionHighlights.join(" | ")}`
+        : "assumption_highlights=none",
       report.nextAction ? `next=${report.nextAction}` : "next=none",
       report.pendingSteps.length > 0
         ? `pending=${report.pendingSteps.join(" | ")}`
@@ -4536,8 +4645,10 @@ export function formatAgenticHandoffReport(
     `- Clarification: ${report.clarificationSummary ?? "none"}`,
     `- Objective: ${report.objective ?? "none"}`,
     `- Operator mode: ${report.operatorMode}`,
+    `- Operator policy: ${report.operatorActionPolicy}`,
     `- Resumability status: ${report.resumabilityStatus}`,
     `- Resume barrier: ${report.resumeBarrierProfile}`,
+    `- Clarification demand: ${report.clarificationDemand}`,
     `- Operator reason: ${report.operatorReason ?? "none"}`,
     `- Next action: ${report.nextAction ?? "none"}`,
     `- Suggested skill: ${report.suggestedSkill ?? "none"}`,
@@ -4545,6 +4656,8 @@ export function formatAgenticHandoffReport(
     `- Resume prompt: ${report.resumePrompt ?? "none"}`,
     `- Active artifacts: ${report.activeArtifacts.length > 0 ? report.activeArtifacts.join(", ") : "none"}`,
     `- Blockers: ${report.blockers.length > 0 ? report.blockers.join(" | ") : "none"}`,
+    `- Assumption status: ${report.assumptionStatus}`,
+    `- Assumption highlights: ${report.assumptionHighlights.length > 0 ? report.assumptionHighlights.join(" | ") : "none"}`,
     `- Assumptions: ${report.assumptions.length > 0 ? report.assumptions.join(" | ") : "none"}`,
     "",
     "## Completed Steps",
@@ -8555,13 +8668,98 @@ export function runAgenticQualityGate(params?: {
 }): AgenticQualityGateReport {
   const acceptance = params?.acceptanceOverride ?? runAgenticAcceptanceSuite();
   const soak = params?.soakOverride ?? runAgenticSoakSuite();
+  const executionState = params?.diagnosticsOverride
+    ? undefined
+    : buildAgenticExecutionState({
+        messages: params?.messages ?? [],
+      });
   const diagnostics =
     params?.diagnosticsOverride ??
-    inspectAgenticExecutionObservability(
-      buildAgenticExecutionState({
-        messages: params?.messages ?? [],
-      }),
-    );
+    inspectAgenticExecutionObservability(executionState as AgenticExecutionState);
+  const handoff =
+    executionState !== undefined
+      ? buildAgenticHandoffReport(executionState)
+      : ({
+          summary: diagnostics.summary,
+          progressSummary: diagnostics.progressSummary,
+          clarificationSummary: diagnostics.clarificationSummary,
+          completedSteps: diagnostics.planSteps
+            .filter((step) => step.status === "completed")
+            .map((step) => step.title),
+          pendingSteps: diagnostics.planSteps
+            .filter((step) => step.status === "pending" || step.status === "in_progress")
+            .map(
+              (step) => `${step.status === "in_progress" ? "active" : "pending"}: ${step.title}`,
+            ),
+          blockedSteps: diagnostics.planSteps
+            .filter((step) => step.status === "blocked")
+            .map((step) => step.title),
+          activeArtifacts: [],
+          blockers: [],
+          operatorMode:
+            diagnostics.autonomyMode === "approval_required"
+              ? "approval_required"
+              : diagnostics.escalationRequired
+                ? "escalate"
+                : diagnostics.retryClass === "clarify"
+                  ? "pause"
+                  : "continue",
+          operatorActionPolicy:
+            diagnostics.autonomyMode === "approval_required"
+              ? "approval_gate"
+              : diagnostics.escalationRequired
+                ? "escalate_now"
+                : diagnostics.retryClass === "clarify"
+                  ? "pause_for_prerequisites"
+                  : "continue_safe",
+          resumabilityStatus:
+            diagnostics.autonomyMode === "approval_required"
+              ? "approval_gated"
+              : diagnostics.escalationRequired
+                ? "escalation_gated"
+                : diagnostics.retryClass === "clarify"
+                  ? "prerequisite_gated"
+                  : "ready",
+          resumeBarrierProfile:
+            diagnostics.autonomyMode === "approval_required"
+              ? "operator_approval"
+              : diagnostics.escalationRequired
+                ? "escalation"
+                : diagnostics.clarificationReason === "missing_information:environment_variable"
+                  ? "environment_variable"
+                  : diagnostics.clarificationReason === "missing_information:approval"
+                    ? "approval"
+                    : diagnostics.clarificationReason === "missing_information:external_input"
+                      ? "external_input"
+                      : diagnostics.retryClass === "clarify"
+                        ? "generic_prerequisite"
+                        : "none",
+          operatorReason: undefined,
+          assumptionStatus:
+            diagnostics.assumptions.length > 0 || diagnostics.clarificationSummary
+              ? "surfaced"
+              : "none",
+          assumptionHighlights: uniqueCompact(
+            [
+              ...diagnostics.assumptions.map((assumption) => truncate(assumption, 80)),
+              ...(diagnostics.assumptions.length === 0 && diagnostics.clarificationSummary
+                ? [
+                    truncate(
+                      `Awaiting ${diagnostics.clarificationSummary.replace(/^Need clarification on:\s*/i, "")}`,
+                      80,
+                    ),
+                  ]
+                : []),
+            ],
+            4,
+          ),
+          clarificationDemand: deriveClarificationDemand(diagnostics.clarificationSummary),
+          nextAction: undefined,
+          suggestedSkill: diagnostics.suggestedSkill,
+          resumePrompt: undefined,
+          resumeCondition: undefined,
+          assumptions: diagnostics.assumptions,
+        } satisfies AgenticHandoffReport);
   const weakeningSkills = uniqueCompact(params?.memoryTrend?.weakeningSkills ?? [], 6);
   const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
   const recoveringSkills = uniqueCompact(params?.memoryTrend?.recoveringSkills ?? [], 6);
@@ -8616,6 +8814,11 @@ export function runAgenticQualityGate(params?: {
   const qualityEnvironmentRollups = deriveQualityEnvironmentRollups(diagnostics);
   const qualityHandoffRollups = deriveQualityHandoffRollups({ acceptance, soak });
   const qualityFailureLearningRollups = deriveQualityFailureLearningRollups(diagnostics);
+  const qualityCollaborationRollups = deriveQualityCollaborationRollups({
+    handoff,
+    diagnostics,
+    soak,
+  });
   const failReasons = [
     !acceptance.passed ? "acceptance_failed" : undefined,
     !soak.passed ? "soak_failed" : undefined,
@@ -8658,6 +8861,9 @@ export function runAgenticQualityGate(params?: {
       diagnostics.clarificationReason !== "missing_information:file_or_input"
         ? diagnostics.clarificationSummary
         : undefined,
+      handoff.assumptionStatus === "surfaced"
+        ? `Assumptions are surfaced for operator handoff: ${handoff.assumptionHighlights.join(" | ")}`
+        : undefined,
       diagnostics.retryClass === "clarify" &&
       soakClarificationProfile !== "none" &&
       soakClarificationProfile !== "mixed" &&
@@ -8666,6 +8872,9 @@ export function runAgenticQualityGate(params?: {
         : undefined,
       risingClarificationTrend
         ? `Long-run clarification blocker trend is rising: ${risingClarificationTrend}.`
+        : undefined,
+      qualityCollaborationRollups.clarificationEfficiencyStatus === "needs_tightening"
+        ? "Clarification prompts should be made more specific and lower-noise before future pause/resume cycles."
         : undefined,
       clarificationTrendPolicyAlignment === "drift"
         ? `Clarification trend policy diverges from soak trend policy: quality=${clarificationTrendPolicy} soak=${soakClarificationTrendPolicy}.`
@@ -8712,7 +8921,7 @@ export function runAgenticQualityGate(params?: {
         ? "Promote stabilized scoped skills for stable reuse or extend-existing decisions."
         : undefined,
     ],
-    6,
+    8,
   );
   const passed = acceptance.passed && soak.passed && diagnosticsPassed && effectivenessPassed;
   return {
@@ -8733,6 +8942,9 @@ export function runAgenticQualityGate(params?: {
     validationReadinessStatus: qualityEnvironmentRollups.validationReadinessStatus,
     handoffResumabilityStatus: qualityHandoffRollups.handoffResumabilityStatus,
     soakResumeBarrierProfile: qualityHandoffRollups.soakResumeBarrierProfile,
+    assumptionSurfacingStatus: qualityCollaborationRollups.assumptionSurfacingStatus,
+    operatorActionPolicyStatus: qualityCollaborationRollups.operatorActionPolicyStatus,
+    clarificationEfficiencyStatus: qualityCollaborationRollups.clarificationEfficiencyStatus,
     failureLearningStatus: qualityFailureLearningRollups.failureLearningStatus,
     capabilityGapStatus: qualityFailureLearningRollups.capabilityGapStatus,
     dominantCapabilityGap: qualityFailureLearningRollups.dominantCapabilityGap,
@@ -8788,6 +9000,9 @@ export function formatAgenticQualityGateReport(
       `validation_readiness_status=${report.validationReadinessStatus}`,
       `handoff_resumability_status=${report.handoffResumabilityStatus}`,
       `soak_resume_barrier_profile=${report.soakResumeBarrierProfile}`,
+      `assumption_surfacing_status=${report.assumptionSurfacingStatus}`,
+      `operator_action_policy_status=${report.operatorActionPolicyStatus}`,
+      `clarification_efficiency_status=${report.clarificationEfficiencyStatus}`,
       `failure_learning_status=${report.failureLearningStatus}`,
       `capability_gap_status=${report.capabilityGapStatus}`,
       `dominant_capability_gap=${report.dominantCapabilityGap ?? "none"}`,
@@ -8846,6 +9061,9 @@ export function formatAgenticQualityGateReport(
     `- Validation readiness status: ${report.validationReadinessStatus}`,
     `- Handoff resumability status: ${report.handoffResumabilityStatus}`,
     `- Soak resume barrier profile: ${report.soakResumeBarrierProfile}`,
+    `- Assumption surfacing status: ${report.assumptionSurfacingStatus}`,
+    `- Operator action policy status: ${report.operatorActionPolicyStatus}`,
+    `- Clarification efficiency status: ${report.clarificationEfficiencyStatus}`,
     `- Failure learning status: ${report.failureLearningStatus}`,
     `- Capability gap status: ${report.capabilityGapStatus}`,
     `- Dominant capability gap: ${report.dominantCapabilityGap ?? "none"}`,

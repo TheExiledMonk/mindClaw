@@ -115,6 +115,15 @@ describe("agentic quality gate", () => {
       "handoff_resumability_status=",
     );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "assumption_surfacing_status=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "operator_action_policy_status=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "clarification_efficiency_status=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_resume_barrier_profile=",
     );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("failure_learning_status=");
@@ -160,6 +169,15 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Handoff resumability status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Assumption surfacing status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Operator action policy status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Clarification efficiency status:",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Soak resume barrier profile:",
@@ -429,6 +447,49 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(clarificationReport, "markdown")).toContain(
       "Need clarification on: config/runtime.json",
+    );
+  });
+
+  it("tracks operator-quality rollups for surfaced assumptions and generic clarification pauses", () => {
+    const report = runAgenticQualityGate({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Update the diagnostics formatter and pause until the validation command is known.",
+          timestamp: Date.now(),
+        },
+      ],
+      diagnosticsOverride: inspectAgenticExecutionObservability(
+        buildAgenticExecutionState({
+          messages: [
+            {
+              role: "user",
+              content:
+                "Update the diagnostics formatter and pause until the validation command is known.",
+              timestamp: Date.now(),
+            },
+          ],
+          toolSignals: [
+            {
+              toolName: "read",
+              status: "success",
+              summary: "Reviewed the formatter implementation.",
+            },
+          ],
+          workspaceTags: ["workspace"],
+        }),
+      ),
+    });
+
+    expect(report.assumptionSurfacingStatus).toBe("surfaced");
+    expect(report.operatorActionPolicyStatus).toBe("aligned");
+    expect(report.clarificationEfficiencyStatus).toBe("needs_tightening");
+    expect(report.recommendations).toContain(
+      "Clarification prompts should be made more specific and lower-noise before future pause/resume cycles.",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "clarification_efficiency_status=needs_tightening",
     );
   });
 

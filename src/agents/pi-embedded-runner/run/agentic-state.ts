@@ -492,6 +492,8 @@ export type AgenticSoakReport = {
   handoffResumabilityStatus?: "unknown" | "guarded_resume_paths";
   dominantResumeBarrierProfile?: AgenticHandoffReport["resumeBarrierProfile"];
   resumeBarrierCounts?: string[];
+  releaseGateStatus?: "ready" | "gated_for_trend_watch" | "blocked";
+  operatorConfidenceStatus?: "high" | "medium" | "low";
   summary: string;
 };
 
@@ -516,6 +518,9 @@ export type AgenticQualityGateReport = {
   assumptionSurfacingStatus: "none" | "surfaced";
   operatorActionPolicyStatus: "aligned" | "review";
   clarificationEfficiencyStatus: "efficient" | "needs_tightening";
+  releaseGateStatus: "ready" | "gated" | "blocked";
+  operatorConfidenceStatus: "high" | "medium" | "low";
+  confidenceSignals: string[];
   failureLearningStatus: AgenticFailureLearningState["failurePattern"];
   capabilityGapStatus: "none" | "present";
   dominantCapabilityGap?: string;
@@ -835,6 +840,26 @@ function deriveTrendPolicyPromotionStatus(
   return policy === "blocking" ? "gated_for_trend_watch" : "promotion_safe";
 }
 
+function deriveSoakReleaseHardeningRollups(params: {
+  passed: boolean;
+  trendPolicyPromotionStatus: NonNullable<AgenticSoakReport["trendPolicyPromotionStatus"]>;
+}): Pick<AgenticSoakReport, "releaseGateStatus" | "operatorConfidenceStatus"> {
+  const releaseGateStatus = !params.passed
+    ? "blocked"
+    : params.trendPolicyPromotionStatus === "gated_for_trend_watch"
+      ? "gated_for_trend_watch"
+      : "ready";
+  return {
+    releaseGateStatus,
+    operatorConfidenceStatus:
+      releaseGateStatus === "blocked"
+        ? "low"
+        : releaseGateStatus === "gated_for_trend_watch"
+          ? "medium"
+          : "high",
+  };
+}
+
 function deriveCrossLayerTrendPolicyStatus(
   alignment: AgenticQualityGateReport["clarificationTrendPolicyAlignment"],
 ): AgenticQualityGateReport["crossLayerTrendPolicyStatus"] {
@@ -977,6 +1002,72 @@ function deriveQualityFailureLearningRollups(
     partialSuccessStatus: diagnostics.partialSuccessSignals.length > 0 ? "present" : "none",
     executionEfficiencyStatus:
       diagnostics.inefficientSuccessSignals.length > 0 ? "inefficient" : "efficient",
+  };
+}
+
+function deriveQualityReleaseHardeningRollups(params: {
+  acceptancePassed: boolean;
+  soakPassed: boolean;
+  diagnosticsPassed: boolean;
+  effectivenessPassed: boolean;
+  clarificationTrendPolicyStatus: AgenticQualityGateReport["clarificationTrendPolicyStatus"];
+  crossLayerTrendPolicyStatus: AgenticQualityGateReport["crossLayerTrendPolicyStatus"];
+  protectedBranchGovernanceStatus: AgenticQualityGateReport["protectedBranchGovernanceStatus"];
+  validationReadinessStatus: AgenticQualityGateReport["validationReadinessStatus"];
+  handoffResumabilityStatus: AgenticQualityGateReport["handoffResumabilityStatus"];
+  operatorActionPolicyStatus: AgenticQualityGateReport["operatorActionPolicyStatus"];
+  clarificationEfficiencyStatus: AgenticQualityGateReport["clarificationEfficiencyStatus"];
+  blockedWorkStatus: AgenticQualityGateReport["blockedWorkStatus"];
+  partialSuccessStatus: AgenticQualityGateReport["partialSuccessStatus"];
+  executionEfficiencyStatus: AgenticQualityGateReport["executionEfficiencyStatus"];
+  capabilityGapStatus: AgenticQualityGateReport["capabilityGapStatus"];
+  effectivenessTrend?: AgenticQualityGateReport["effectivenessTrend"];
+  soakReleaseGateStatus?: AgenticSoakReport["releaseGateStatus"];
+}): Pick<
+  AgenticQualityGateReport,
+  "releaseGateStatus" | "operatorConfidenceStatus" | "confidenceSignals"
+> {
+  const confidenceSignals = uniqueCompact(
+    [
+      !params.acceptancePassed ? "acceptance_failed" : undefined,
+      !params.soakPassed ? "soak_failed" : undefined,
+      !params.diagnosticsPassed ? "diagnostics_failed" : undefined,
+      !params.effectivenessPassed ? "effectiveness_failed" : undefined,
+      params.soakReleaseGateStatus === "gated_for_trend_watch" ? "soak_trend_watch" : undefined,
+      params.clarificationTrendPolicyStatus === "blocking"
+        ? "clarification_trend_watch"
+        : undefined,
+      params.crossLayerTrendPolicyStatus === "divergent" ? "cross_layer_policy_drift" : undefined,
+      params.operatorActionPolicyStatus === "review" ? "operator_policy_review" : undefined,
+      params.clarificationEfficiencyStatus === "needs_tightening"
+        ? "clarification_noise"
+        : undefined,
+      params.blockedWorkStatus === "present" ? "blocked_work_open" : undefined,
+      params.partialSuccessStatus === "present" ? "partial_success_open" : undefined,
+      params.executionEfficiencyStatus === "inefficient" ? "inefficient_success" : undefined,
+      params.capabilityGapStatus === "present" ? "capability_gap_present" : undefined,
+      params.effectivenessTrend === "watch"
+        ? "effectiveness_watch"
+        : params.effectivenessTrend === "regressing"
+          ? "effectiveness_regressing"
+          : undefined,
+    ],
+    12,
+  );
+  const releaseGateStatus =
+    !params.acceptancePassed ||
+    !params.soakPassed ||
+    !params.diagnosticsPassed ||
+    !params.effectivenessPassed
+      ? "blocked"
+      : confidenceSignals.length > 0
+        ? "gated"
+        : "ready";
+  return {
+    releaseGateStatus,
+    operatorConfidenceStatus:
+      releaseGateStatus === "blocked" ? "low" : releaseGateStatus === "gated" ? "medium" : "high",
+    confidenceSignals,
   };
 }
 
@@ -8559,6 +8650,11 @@ export function runAgenticSoakSuite(params?: {
   );
   const soakEnvironmentRollups = deriveSoakEnvironmentRollups(scenarios);
   const soakHandoffRollups = deriveSoakHandoffRollups(scenarios);
+  const trendPolicyPromotionStatus = deriveTrendPolicyPromotionStatus(clarificationTrendPolicy);
+  const soakReleaseHardeningRollups = deriveSoakReleaseHardeningRollups({
+    passed: failedScenarioIds.length === 0,
+    trendPolicyPromotionStatus,
+  });
   return {
     passed: failedScenarioIds.length === 0,
     totalScenarios: scenarios.length,
@@ -8570,11 +8666,13 @@ export function runAgenticSoakSuite(params?: {
     clarificationTrendSignals,
     clarificationTrendPolicy,
     clarificationTrendPolicyStatus: deriveClarificationTrendPolicyStatus(clarificationTrendPolicy),
-    trendPolicyPromotionStatus: deriveTrendPolicyPromotionStatus(clarificationTrendPolicy),
+    trendPolicyPromotionStatus,
     environmentBoundaryStatus: soakEnvironmentRollups.environmentBoundaryStatus,
     handoffResumabilityStatus: soakHandoffRollups.handoffResumabilityStatus,
     dominantResumeBarrierProfile: soakHandoffRollups.dominantResumeBarrierProfile,
     resumeBarrierCounts: soakHandoffRollups.resumeBarrierCounts,
+    releaseGateStatus: soakReleaseHardeningRollups.releaseGateStatus,
+    operatorConfidenceStatus: soakReleaseHardeningRollups.operatorConfidenceStatus,
     summary: `agentic soak ${passedScenarios}/${scenarios.length} passed`,
   };
 }
@@ -8598,6 +8696,8 @@ export function formatAgenticSoakReport(
       `clarification_trend_policy=${report.clarificationTrendPolicy ?? "none"}`,
       `clarification_trend_policy_status=${report.clarificationTrendPolicyStatus ?? "none"}`,
       `trend_policy_promotion_status=${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
+      `release_gate_status=${report.releaseGateStatus ?? "ready"}`,
+      `operator_confidence_status=${report.operatorConfidenceStatus ?? "high"}`,
       `environment_boundary_status=${report.environmentBoundaryStatus ?? "unknown"}`,
       `handoff_resumability_status=${report.handoffResumabilityStatus ?? "unknown"}`,
       `resume_barrier_profile=${report.dominantResumeBarrierProfile ?? "none"}`,
@@ -8624,6 +8724,8 @@ export function formatAgenticSoakReport(
     `Clarification trend policy: ${report.clarificationTrendPolicy ?? "none"}`,
     `Clarification trend policy status: ${report.clarificationTrendPolicyStatus ?? "none"}`,
     `Trend policy promotion status: ${report.trendPolicyPromotionStatus ?? "promotion_safe"}`,
+    `Release gate status: ${report.releaseGateStatus ?? "ready"}`,
+    `Operator confidence status: ${report.operatorConfidenceStatus ?? "high"}`,
     `Environment boundary status: ${report.environmentBoundaryStatus ?? "unknown"}`,
     `Handoff resumability status: ${report.handoffResumabilityStatus ?? "unknown"}`,
     `Resume barrier profile: ${report.dominantResumeBarrierProfile ?? "none"}`,
@@ -8845,6 +8947,25 @@ export function runAgenticQualityGate(params?: {
   const effectivenessPassed =
     (!params?.failOnWeakeningSkills || weakeningSkills.length === 0) &&
     (!params?.failOnRecoveringSkills || recoveringSkills.length === 0);
+  const qualityReleaseHardeningRollups = deriveQualityReleaseHardeningRollups({
+    acceptancePassed: acceptance.passed,
+    soakPassed: soak.passed,
+    diagnosticsPassed,
+    effectivenessPassed,
+    clarificationTrendPolicyStatus,
+    crossLayerTrendPolicyStatus,
+    protectedBranchGovernanceStatus: qualityEnvironmentRollups.protectedBranchGovernanceStatus,
+    validationReadinessStatus: qualityEnvironmentRollups.validationReadinessStatus,
+    handoffResumabilityStatus: qualityHandoffRollups.handoffResumabilityStatus,
+    operatorActionPolicyStatus: qualityCollaborationRollups.operatorActionPolicyStatus,
+    clarificationEfficiencyStatus: qualityCollaborationRollups.clarificationEfficiencyStatus,
+    blockedWorkStatus: qualityFailureLearningRollups.blockedWorkStatus,
+    partialSuccessStatus: qualityFailureLearningRollups.partialSuccessStatus,
+    executionEfficiencyStatus: qualityFailureLearningRollups.executionEfficiencyStatus,
+    capabilityGapStatus: qualityFailureLearningRollups.capabilityGapStatus,
+    effectivenessTrend,
+    soakReleaseGateStatus: soak.releaseGateStatus,
+  });
   const recommendations = uniqueCompact(
     [
       diagnostics.autonomyMode === "approval_required"
@@ -8875,6 +8996,15 @@ export function runAgenticQualityGate(params?: {
         : undefined,
       qualityCollaborationRollups.clarificationEfficiencyStatus === "needs_tightening"
         ? "Clarification prompts should be made more specific and lower-noise before future pause/resume cycles."
+        : undefined,
+      qualityReleaseHardeningRollups.releaseGateStatus === "blocked"
+        ? "Release readiness is blocked until failing acceptance, soak, diagnostics, or effectiveness signals are resolved."
+        : undefined,
+      qualityReleaseHardeningRollups.releaseGateStatus === "gated"
+        ? `Release readiness remains gated by: ${qualityReleaseHardeningRollups.confidenceSignals.join(", ")}.`
+        : undefined,
+      qualityReleaseHardeningRollups.operatorConfidenceStatus === "medium"
+        ? "Operator confidence is still medium; require repeated clean runs before promotion."
         : undefined,
       clarificationTrendPolicyAlignment === "drift"
         ? `Clarification trend policy diverges from soak trend policy: quality=${clarificationTrendPolicy} soak=${soakClarificationTrendPolicy}.`
@@ -8945,6 +9075,9 @@ export function runAgenticQualityGate(params?: {
     assumptionSurfacingStatus: qualityCollaborationRollups.assumptionSurfacingStatus,
     operatorActionPolicyStatus: qualityCollaborationRollups.operatorActionPolicyStatus,
     clarificationEfficiencyStatus: qualityCollaborationRollups.clarificationEfficiencyStatus,
+    releaseGateStatus: qualityReleaseHardeningRollups.releaseGateStatus,
+    operatorConfidenceStatus: qualityReleaseHardeningRollups.operatorConfidenceStatus,
+    confidenceSignals: qualityReleaseHardeningRollups.confidenceSignals,
     failureLearningStatus: qualityFailureLearningRollups.failureLearningStatus,
     capabilityGapStatus: qualityFailureLearningRollups.capabilityGapStatus,
     dominantCapabilityGap: qualityFailureLearningRollups.dominantCapabilityGap,
@@ -8963,7 +9096,7 @@ export function runAgenticQualityGate(params?: {
     mergeFamilies,
     effectivenessTrend,
     recommendations,
-    summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"} effectiveness=${effectivenessPassed ? "pass" : "fail"}`,
+    summary: `agentic quality gate acceptance=${acceptance.passed ? "pass" : "fail"} soak=${soak.passed ? "pass" : "fail"} diagnostics=${diagnosticsPassed ? "pass" : "fail"} effectiveness=${effectivenessPassed ? "pass" : "fail"} release=${qualityReleaseHardeningRollups.releaseGateStatus} confidence=${qualityReleaseHardeningRollups.operatorConfidenceStatus}`,
   };
 }
 
@@ -9003,6 +9136,9 @@ export function formatAgenticQualityGateReport(
       `assumption_surfacing_status=${report.assumptionSurfacingStatus}`,
       `operator_action_policy_status=${report.operatorActionPolicyStatus}`,
       `clarification_efficiency_status=${report.clarificationEfficiencyStatus}`,
+      `release_gate_status=${report.releaseGateStatus}`,
+      `operator_confidence_status=${report.operatorConfidenceStatus}`,
+      `confidence_signals=${report.confidenceSignals.length > 0 ? report.confidenceSignals.join(",") : "none"}`,
       `failure_learning_status=${report.failureLearningStatus}`,
       `capability_gap_status=${report.capabilityGapStatus}`,
       `dominant_capability_gap=${report.dominantCapabilityGap ?? "none"}`,
@@ -9064,6 +9200,9 @@ export function formatAgenticQualityGateReport(
     `- Assumption surfacing status: ${report.assumptionSurfacingStatus}`,
     `- Operator action policy status: ${report.operatorActionPolicyStatus}`,
     `- Clarification efficiency status: ${report.clarificationEfficiencyStatus}`,
+    `- Release gate status: ${report.releaseGateStatus}`,
+    `- Operator confidence status: ${report.operatorConfidenceStatus}`,
+    `- Confidence signals: ${report.confidenceSignals.length > 0 ? report.confidenceSignals.join(", ") : "none"}`,
     `- Failure learning status: ${report.failureLearningStatus}`,
     `- Capability gap status: ${report.capabilityGapStatus}`,
     `- Dominant capability gap: ${report.dominantCapabilityGap ?? "none"}`,

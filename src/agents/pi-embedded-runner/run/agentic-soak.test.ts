@@ -17,6 +17,8 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendPolicy).toBe("observe");
     expect(report.clarificationTrendPolicyStatus).toBe("observe_only");
     expect(report.trendPolicyPromotionStatus).toBe("promotion_safe");
+    expect(report.releaseGateStatus).toBe("ready");
+    expect(report.operatorConfidenceStatus).toBe("high");
     expect(report.environmentBoundaryStatus).toBe("bounded_and_guarded");
     expect(report.handoffResumabilityStatus).toBe("guarded_resume_paths");
     expect(report.resumeBarrierCounts).toContain("operator_approval:1");
@@ -178,6 +180,8 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "trend_policy_promotion_status=promotion_safe",
     );
+    expect(formatAgenticSoakReport(report, "summary")).toContain("release_gate_status=ready");
+    expect(formatAgenticSoakReport(report, "summary")).toContain("operator_confidence_status=high");
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "environment_boundary_status=bounded_and_guarded",
     );
@@ -202,6 +206,10 @@ describe("agentic soak suite", () => {
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Trend policy promotion status: promotion_safe",
     );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain("Release gate status: ready");
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Operator confidence status: high",
+    );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Environment boundary status: bounded_and_guarded",
     );
@@ -225,6 +233,8 @@ describe("agentic soak suite", () => {
     expect(report.clarificationTrendPolicy).toBe("blocking");
     expect(report.clarificationTrendPolicyStatus).toBe("blocking");
     expect(report.trendPolicyPromotionStatus).toBe("gated_for_trend_watch");
+    expect(report.releaseGateStatus).toBe("gated_for_trend_watch");
+    expect(report.operatorConfidenceStatus).toBe("medium");
     expect(report.environmentBoundaryStatus).toBe("bounded_and_guarded");
     expect(report.handoffResumabilityStatus).toBe("guarded_resume_paths");
     expect(formatAgenticSoakReport(report, "summary")).toContain(
@@ -235,6 +245,12 @@ describe("agentic soak suite", () => {
     );
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "trend_policy_promotion_status=gated_for_trend_watch",
+    );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "release_gate_status=gated_for_trend_watch",
+    );
+    expect(formatAgenticSoakReport(report, "summary")).toContain(
+      "operator_confidence_status=medium",
     );
     expect(formatAgenticSoakReport(report, "summary")).toContain(
       "environment_boundary_status=bounded_and_guarded",
@@ -250,6 +266,12 @@ describe("agentic soak suite", () => {
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Trend policy promotion status: gated_for_trend_watch",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Release gate status: gated_for_trend_watch",
+    );
+    expect(formatAgenticSoakReport(report, "markdown")).toContain(
+      "Operator confidence status: medium",
     );
     expect(formatAgenticSoakReport(report, "markdown")).toContain(
       "Environment boundary status: bounded_and_guarded",

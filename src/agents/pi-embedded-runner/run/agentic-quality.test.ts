@@ -24,6 +24,15 @@ describe("agentic quality gate", () => {
     expect(report.soakPassed).toBe(true);
     expect(report.diagnosticsPassed).toBe(true);
     expect(report.failReasons).toEqual([]);
+    expect(report.releaseGateStatus).toBe("gated");
+    expect(report.operatorConfidenceStatus).toBe("medium");
+    expect(report.confidenceSignals).toEqual(
+      expect.arrayContaining([
+        "clarification_noise",
+        "blocked_work_open",
+        "capability_gap_present",
+      ]),
+    );
   });
 
   it("can fail the diagnostics portion when escalation or missing fallback is disallowed", () => {
@@ -44,6 +53,9 @@ describe("agentic quality gate", () => {
     expect(report.soakPassed).toBe(true);
     expect(report.diagnosticsPassed).toBe(false);
     expect(report.failReasons).toContain("diagnostics_missing_fallback");
+    expect(report.releaseGateStatus).toBe("blocked");
+    expect(report.operatorConfidenceStatus).toBe("low");
+    expect(report.confidenceSignals).toContain("diagnostics_failed");
   });
 
   it("can fail the effectiveness portion when weakening scoped skills are disallowed", () => {
@@ -123,6 +135,11 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "clarification_efficiency_status=",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("release_gate_status=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "operator_confidence_status=",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("confidence_signals=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_resume_barrier_profile=",
     );
@@ -179,6 +196,11 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Clarification efficiency status:",
     );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Release gate status:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Operator confidence status:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Confidence signals:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Soak resume barrier profile:",
     );
@@ -945,6 +967,15 @@ describe("agentic quality gate", () => {
     expect(report.clarificationTrendPolicyAlignment).toBe("drift");
     expect(report.clarificationTrendPolicyStatus).toBe("blocking");
     expect(report.crossLayerTrendPolicyStatus).toBe("divergent");
+    expect(report.releaseGateStatus).toBe("blocked");
+    expect(report.operatorConfidenceStatus).toBe("low");
+    expect(report.confidenceSignals).toEqual(
+      expect.arrayContaining([
+        "diagnostics_failed",
+        "clarification_trend_watch",
+        "cross_layer_policy_drift",
+      ]),
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "soak_clarification_trend_policy=observe",
     );
@@ -960,6 +991,13 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "cross_layer_trend_policy_status=divergent",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "release_gate_status=blocked",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "operator_confidence_status=low",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("confidence_signals=");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Soak clarification trend policy: observe",
     );
@@ -975,6 +1013,64 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Cross-layer trend policy status: divergent",
     );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Release gate status: blocked",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Operator confidence status: low",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Confidence signals:");
+  });
+
+  it("keeps release readiness gated when watch-level signals remain even after pass conditions hold", () => {
+    const report = runAgenticQualityGate({
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        clarificationProfileCounts: ["approval:1"],
+        dominantClarificationProfile: "approval",
+        clarificationTrendSignals: ["approval:rising(0->1)"],
+        clarificationTrendPolicy: "blocking",
+        clarificationTrendPolicyStatus: "blocking",
+        trendPolicyPromotionStatus: "gated_for_trend_watch",
+        releaseGateStatus: "gated_for_trend_watch",
+        operatorConfidenceStatus: "medium",
+        summary: "agentic soak 0/0 passed",
+      },
+      memoryTrend: {
+        trend: "watch",
+      },
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.releaseGateStatus).toBe("gated");
+    expect(report.operatorConfidenceStatus).toBe("medium");
+    expect(report.confidenceSignals).toEqual(
+      expect.arrayContaining([
+        "soak_trend_watch",
+        "cross_layer_policy_drift",
+        "effectiveness_watch",
+      ]),
+    );
+    expect(report.recommendations).toContain(
+      "Operator confidence is still medium; require repeated clean runs before promotion.",
+    );
+    expect(
+      report.recommendations.some((recommendation) =>
+        recommendation.startsWith("Release readiness remains gated by:"),
+      ),
+    ).toBe(true);
   });
 
   it("surfaces template-ready and merge-ready consolidation recommendations in the quality gate", () => {

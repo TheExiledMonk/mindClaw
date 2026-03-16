@@ -17,6 +17,11 @@ const MAX_WORKING_ITEMS = 6;
 const MAX_LONG_TERM_ITEMS = 48;
 const MAX_PENDING_ITEMS = 64;
 const MAX_PACKET_ITEMS = 4;
+const MAX_LONG_TERM_EVIDENCE_ITEMS = 4;
+const MAX_LONG_TERM_PROVENANCE_ITEMS = 4;
+const MAX_LONG_TERM_ARTIFACT_REFS = 4;
+const MAX_PERMANENT_NODE_EVIDENCE_ITEMS = 4;
+const MAX_PERMANENT_SOURCE_IDS = 6;
 const RECURRENCE_PROMOTION_OVERLAP = 4;
 const COMPRESS_AFTER_MS = 1000 * 60 * 60 * 24 * 7;
 const LATENT_AFTER_MS = 1000 * 60 * 60 * 24 * 30;
@@ -1600,6 +1605,7 @@ function uniqueStrings(items: string[]): string[] {
 function mergeProvenance(
   existing: MemoryProvenanceRecord[],
   incoming: MemoryProvenanceRecord[],
+  limit = MAX_LONG_TERM_PROVENANCE_ITEMS,
 ): MemoryProvenanceRecord[] {
   const seen = new Set<string>();
   const merged: MemoryProvenanceRecord[] = [];
@@ -1614,7 +1620,15 @@ function mergeProvenance(
       derivedFromMemoryIds: uniqueIds(item.derivedFromMemoryIds ?? []),
     });
   }
-  return merged.slice(-MAX_WORKING_ITEMS);
+  return merged.slice(-limit);
+}
+
+function compactArtifactRefs(refs: string[], limit = MAX_LONG_TERM_ARTIFACT_REFS): string[] {
+  return uniqueStrings(refs).slice(-limit);
+}
+
+function compactSourceMemoryIds(ids: string[], limit = MAX_PERMANENT_SOURCE_IDS): string[] {
+  return uniqueIds(ids).slice(-limit);
 }
 
 function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
@@ -1624,6 +1638,8 @@ function cloneLongTermEntry(entry: LongTermMemoryEntry): LongTermMemoryEntry {
     entityAliases: [...(entry.entityAliases ?? [])],
     entityIds: [...(entry.entityIds ?? [])],
     evidence: [...entry.evidence],
+    environmentTags: [...(entry.environmentTags ?? [])],
+    artifactRefs: [...(entry.artifactRefs ?? [])],
     permanenceReasons: [...(entry.permanenceReasons ?? [])],
     provenance: entry.provenance.map((item) => ({
       ...item,
@@ -1638,6 +1654,8 @@ function clonePendingEntry(entry: PendingMemoryEntry): PendingMemoryEntry {
   return {
     ...entry,
     evidence: [...entry.evidence],
+    environmentTags: [...(entry.environmentTags ?? [])],
+    artifactRefs: [...(entry.artifactRefs ?? [])],
     provenance: entry.provenance.map((item) => ({
       ...item,
       derivedFromMemoryIds: [...(item.derivedFromMemoryIds ?? [])],
@@ -1670,7 +1688,10 @@ function dedupeLongTermCandidates(entries: LongTermMemoryEntry[]): LongTermMemor
       bySemanticKey.set(key, cloneLongTermEntry(entry));
       continue;
     }
-    current.evidence = dedupeTexts([...current.evidence, ...entry.evidence], MAX_WORKING_ITEMS);
+    current.evidence = dedupeTexts(
+      [...current.evidence, ...entry.evidence],
+      MAX_LONG_TERM_EVIDENCE_ITEMS,
+    );
     current.provenance = mergeProvenance(current.provenance, entry.provenance);
     current.strength = Math.max(current.strength, entry.strength);
     current.confidence = Math.max(current.confidence, entry.confidence);
@@ -1685,6 +1706,10 @@ function dedupeLongTermCandidates(entries: LongTermMemoryEntry[]): LongTermMemor
       ...buildResolvedEntityAliases(entry),
     ]);
     current.entityIds = uniqueIds([...(current.entityIds ?? []), ...(entry.entityIds ?? [])]);
+    current.artifactRefs = compactArtifactRefs([
+      ...(current.artifactRefs ?? []),
+      ...(entry.artifactRefs ?? []),
+    ]);
     current.updatedAt = Math.max(current.updatedAt, entry.updatedAt);
   }
   return [...bySemanticKey.values()].toSorted((a, b) => b.updatedAt - a.updatedAt);
@@ -4487,9 +4512,11 @@ export function mergeLongTermMemory(
           ...buildResolvedEntityAliases(item),
         ]),
         entityIds: uniqueIds(item.entityIds ?? []),
-        evidence: dedupeTexts(item.evidence, MAX_WORKING_ITEMS),
+        evidence: dedupeTexts(item.evidence, MAX_LONG_TERM_EVIDENCE_ITEMS),
+        provenance: mergeProvenance([], item.provenance),
         permanenceStatus: permanence.status,
         permanenceReasons: permanence.reasons,
+        artifactRefs: compactArtifactRefs(item.artifactRefs ?? []),
       });
       continue;
     }
@@ -4527,7 +4554,10 @@ export function mergeLongTermMemory(
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
     current.revisionCount = (current.revisionCount ?? 0) + 1;
     current.lastRevisionKind = revisionKind;
-    current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
+    current.evidence = dedupeTexts(
+      [...current.evidence, ...item.evidence],
+      MAX_LONG_TERM_EVIDENCE_ITEMS,
+    );
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
     current.relations = mergeRelations(current.relations, item.relations);
@@ -4538,7 +4568,7 @@ export function mergeLongTermMemory(
       ...(current.environmentTags ?? []),
       ...(item.environmentTags ?? []),
     ]);
-    current.artifactRefs = uniqueStrings([
+    current.artifactRefs = compactArtifactRefs([
       ...(current.artifactRefs ?? []),
       ...(item.artifactRefs ?? []),
     ]);
@@ -4553,7 +4583,10 @@ export function mergeLongTermMemory(
       ) {
         current.sourceType = item.sourceType;
       }
-      current.evidence = dedupeTexts([item.text, ...current.evidence], MAX_WORKING_ITEMS);
+      current.evidence = dedupeTexts(
+        [item.text, ...current.evidence],
+        MAX_LONG_TERM_EVIDENCE_ITEMS,
+      );
     }
     if (revisionKind === "contested") {
       current.activeStatus = "pending";
@@ -4608,14 +4641,19 @@ export function mergePendingSignificance(
     if (!current) {
       byText.set(key, {
         ...item,
-        evidence: dedupeTexts(item.evidence, MAX_WORKING_ITEMS),
+        evidence: dedupeTexts(item.evidence, MAX_LONG_TERM_EVIDENCE_ITEMS),
+        provenance: mergeProvenance([], item.provenance),
+        artifactRefs: compactArtifactRefs(item.artifactRefs ?? []),
       });
       continue;
     }
     current.updatedAt = Date.now();
     current.strength = Math.min(1, Math.max(current.strength, item.strength) + 0.02);
     current.confidence = Math.min(1, Math.max(current.confidence, item.confidence) + 0.02);
-    current.evidence = dedupeTexts([...current.evidence, ...item.evidence], MAX_WORKING_ITEMS);
+    current.evidence = dedupeTexts(
+      [...current.evidence, ...item.evidence],
+      MAX_LONG_TERM_EVIDENCE_ITEMS,
+    );
     current.provenance = mergeProvenance(current.provenance, item.provenance);
     current.relatedMemoryIds = uniqueIds([...current.relatedMemoryIds, ...item.relatedMemoryIds]);
     current.relations = mergeRelations(current.relations, item.relations);
@@ -4626,7 +4664,7 @@ export function mergePendingSignificance(
       ...(current.environmentTags ?? []),
       ...(item.environmentTags ?? []),
     ]);
-    current.artifactRefs = uniqueStrings([
+    current.artifactRefs = compactArtifactRefs([
       ...(current.artifactRefs ?? []),
       ...(item.artifactRefs ?? []),
     ]);
@@ -5061,7 +5099,7 @@ function reconcilePermanentMemoryTree(params: {
         (item) => item.resolutionKind === "scoped_alternative",
       );
 
-      node.sourceMemoryIds = uniqueIds(sourceEntries.map((entry) => entry.id));
+      node.sourceMemoryIds = compactSourceMemoryIds(sourceEntries.map((entry) => entry.id));
       node.confidence = Math.max(
         node.confidence,
         ...sourceEntries.map((entry) => entry.confidence),
@@ -5077,7 +5115,7 @@ function reconcilePermanentMemoryTree(params: {
           allBlocked ? "Archived after permanent invalidation review." : "",
           hasScopedAlternatives ? "Permanent branch has scoped alternatives." : "",
         ].filter(Boolean),
-        MAX_WORKING_ITEMS,
+        MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
       );
 
       if (
@@ -5100,9 +5138,9 @@ function reconcilePermanentMemoryTree(params: {
           node.activeStatus === "superseded" ? "superseded_by" : "derived_from";
         historyNode.evidence = dedupeTexts(
           [...node.evidence, "Retained in permanent history after invalidation review."],
-          MAX_WORKING_ITEMS,
+          MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
         );
-        historyNode.sourceMemoryIds = [...node.sourceMemoryIds];
+        historyNode.sourceMemoryIds = compactSourceMemoryIds([...node.sourceMemoryIds]);
         historyNode.confidence = node.confidence;
         historyNode.activeStatus = "archived";
         historyNode.updatedAt = node.updatedAt;
@@ -5186,6 +5224,53 @@ function collectRelevantPermanentNodes(params: {
       );
     })
     .slice(0, MAX_PACKET_ITEMS);
+}
+
+function collectPermanentSourceAnchors(params: {
+  permanentNodes: PermanentMemoryNode[];
+  longTermMemory: LongTermMemoryEntry[];
+  queryTokens: Set<string>;
+  taskMode: MemoryTaskMode;
+  scopeContext?: MemoryScopeContext;
+  adjudications?: PersistedMemoryAdjudication[];
+  excludeIds: string[];
+}): Array<{ entry: LongTermMemoryEntry; via: string }> {
+  const entriesById = new Map(params.longTermMemory.map((entry) => [entry.id, entry]));
+  const seen = new Set(params.excludeIds);
+  return params.permanentNodes
+    .flatMap((node) =>
+      node.sourceMemoryIds.map((id) => ({
+        entry: entriesById.get(id),
+        via: node.summary ?? node.label,
+      })),
+    )
+    .filter((item): item is { entry: LongTermMemoryEntry; via: string } => {
+      const entry = item.entry;
+      return entry != null && !seen.has(entry.id);
+    })
+    .filter(({ entry }) =>
+      shouldIncludeScopedEntry({
+        entry,
+        taskMode: params.taskMode,
+        scopeContext: params.scopeContext,
+        adjudications: params.adjudications,
+      }),
+    )
+    .map(({ entry, via }) => ({
+      entry,
+      via,
+      score:
+        computeOverlapScore(entry.text, params.queryTokens) +
+        countExplicitScopeMatches(entry, params.scopeContext) +
+        entry.confidence +
+        entry.strength,
+    }))
+    .toSorted((a, b) => b.score - a.score || b.entry.updatedAt - a.entry.updatedAt)
+    .slice(0, MAX_PACKET_ITEMS)
+    .map(({ entry, via }) => {
+      seen.add(entry.id);
+      return { entry, via };
+    });
 }
 
 function selectPermanentBranch(
@@ -5725,9 +5810,12 @@ export function mergePermanentMemoryTree(
       existing.updatedAt = Date.now();
       existing.evidence = dedupeTexts(
         [...existing.evidence, ...candidate.evidence],
-        MAX_WORKING_ITEMS,
+        MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
       );
-      existing.sourceMemoryIds = uniqueIds([...existing.sourceMemoryIds, candidate.id]);
+      existing.sourceMemoryIds = compactSourceMemoryIds([
+        ...existing.sourceMemoryIds,
+        candidate.id,
+      ]);
       existing.confidence = Math.min(1, Math.max(existing.confidence, candidate.confidence));
       existing.activeStatus = candidate.activeStatus;
       if (candidate.activeStatus === "superseded" && candidate.supersededById) {
@@ -5751,7 +5839,7 @@ export function mergePermanentMemoryTree(
             ? `Contradicted durable memory count: ${candidate.contradictionCount}.`
             : "",
         ].filter(Boolean),
-        MAX_WORKING_ITEMS,
+        MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
       ),
       sourceMemoryIds: [candidate.id],
       confidence: candidate.confidence,
@@ -5778,9 +5866,12 @@ export function mergePermanentMemoryTree(
           artifactNode.updatedAt = Date.now();
           artifactNode.evidence = dedupeTexts(
             [...artifactNode.evidence, candidate.text, ...candidate.evidence],
-            MAX_WORKING_ITEMS,
+            MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
           );
-          artifactNode.sourceMemoryIds = uniqueIds([...artifactNode.sourceMemoryIds, candidate.id]);
+          artifactNode.sourceMemoryIds = compactSourceMemoryIds([
+            ...artifactNode.sourceMemoryIds,
+            candidate.id,
+          ]);
           artifactNode.confidence = Math.min(
             1,
             Math.max(artifactNode.confidence, candidate.confidence),
@@ -5792,7 +5883,10 @@ export function mergePermanentMemoryTree(
             nodeType: "artifact",
             relationToParent: "linked_to",
             summary: ref,
-            evidence: dedupeTexts([candidate.text, ...candidate.evidence], MAX_WORKING_ITEMS),
+            evidence: dedupeTexts(
+              [candidate.text, ...candidate.evidence],
+              MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
+            ),
             sourceMemoryIds: [candidate.id],
             confidence: candidate.confidence,
             activeStatus: candidate.activeStatus,
@@ -5807,9 +5901,12 @@ export function mergePermanentMemoryTree(
         facetNode.relationToParent = facet.relationToParent;
         facetNode.evidence = dedupeTexts(
           [...facetNode.evidence, candidate.text, ...candidate.evidence],
-          MAX_WORKING_ITEMS,
+          MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
         );
-        facetNode.sourceMemoryIds = uniqueIds([...facetNode.sourceMemoryIds, candidate.id]);
+        facetNode.sourceMemoryIds = compactSourceMemoryIds([
+          ...facetNode.sourceMemoryIds,
+          candidate.id,
+        ]);
         facetNode.confidence = Math.min(1, Math.max(facetNode.confidence, candidate.confidence));
         facetNode.activeStatus = candidate.activeStatus;
         if (candidate.activeStatus === "superseded") {
@@ -5825,9 +5922,9 @@ export function mergePermanentMemoryTree(
           existingFacetLeaf.summary = candidate.text;
           existingFacetLeaf.evidence = dedupeTexts(
             [...existingFacetLeaf.evidence, ...candidate.evidence],
-            MAX_WORKING_ITEMS,
+            MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
           );
-          existingFacetLeaf.sourceMemoryIds = uniqueIds([
+          existingFacetLeaf.sourceMemoryIds = compactSourceMemoryIds([
             ...existingFacetLeaf.sourceMemoryIds,
             candidate.id,
           ]);
@@ -5859,7 +5956,7 @@ export function mergePermanentMemoryTree(
                 ? `Contradicted durable memory count: ${candidate.contradictionCount}.`
                 : "",
             ].filter(Boolean),
-            MAX_WORKING_ITEMS,
+            MAX_PERMANENT_NODE_EVIDENCE_ITEMS,
           ),
           sourceMemoryIds: [candidate.id],
           confidence: candidate.confidence,
@@ -7381,6 +7478,33 @@ export function retrieveMemoryContextPacket(
     );
     sections.push(
       `Relevant entities, constraints, and structural memory:\n- ${permanent.join("\n- ")}`,
+    );
+  }
+  const permanentSourceAnchors = collectPermanentSourceAnchors({
+    permanentNodes,
+    longTermMemory: snapshot.longTermMemory,
+    queryTokens,
+    taskMode,
+    scopeContext,
+    adjudications,
+    excludeIds: accessedLongTermIds,
+  });
+  if (permanentSourceAnchors.length > 0) {
+    retrievalItems.push(
+      ...permanentSourceAnchors.map((item) => ({
+        kind: "long-term" as const,
+        text: formatMemoryWithState(item.entry),
+        reason: `permanent source anchor via ${clipText(item.via, 80)}${describeMemoryStateDowngrade(item.entry).length > 0 ? ` downgraded=${describeMemoryStateDowngrade(item.entry).join(",")}` : ""}`,
+        memoryId: item.entry.id,
+        conceptId: getEntryConceptId(item.entry),
+      })),
+    );
+    accessedLongTermIds.push(...permanentSourceAnchors.map((item) => item.entry.id));
+    accessedConceptIds.push(...permanentSourceAnchors.map((item) => getEntryConceptId(item.entry)));
+    sections.push(
+      `Permanent node source anchors:\n- ${permanentSourceAnchors
+        .map((item) => `${formatMemoryWithState(item.entry)} (via ${clipText(item.via, 80)})`)
+        .join("\n- ")}`,
     );
   }
 

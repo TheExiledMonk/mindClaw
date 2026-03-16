@@ -23,6 +23,7 @@ import {
   inspectMemoryRetrievalObservability,
   loadMemoryStoreSnapshot,
   MEMORY_SYSTEM_DIRNAME,
+  mergeLongTermMemory,
   persistMemoryStoreSnapshot,
   recoverMemoryStoreFromBackup,
   recoverMemoryStoreFromBackupWithReport,
@@ -265,6 +266,140 @@ describe("memory system store", () => {
     expect(packet).toContain("Relevant long-term facts and patterns");
     expect(packet).toContain("Relevant entities, constraints, and structural memory");
     expect(packet).toContain("Relevant files and artifacts");
+  });
+
+  it("keeps durable evidence, provenance, and artifact refs lean during repeated merges", () => {
+    let merged: LongTermMemoryEntry[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      merged = mergeLongTermMemory(merged, [
+        longTermEntry({
+          id: `ltm-lean-${index}`,
+          semanticKey: "fact::lean-memory",
+          conceptKey: "concept::fact::lean-memory",
+          text:
+            index === 7
+              ? "Lean memory prefers distilled facts over raw transcripts."
+              : "Lean memory keeps durable facts compact.",
+          evidence: [`evidence-${index}`, `extra-evidence-${index}`],
+          provenance: [
+            {
+              kind: "message",
+              detail: `provenance-${index}`,
+              recordedAt: Date.now() + index,
+              derivedFromMemoryIds: [`origin-${index}`],
+            },
+          ],
+          artifactRefs: [`docs/lessons-${index}.md`, `artifacts/session-${index}.txt`],
+        }),
+      ]);
+    }
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.evidence.length).toBeLessThanOrEqual(4);
+    expect(merged[0]?.provenance.length).toBeLessThanOrEqual(4);
+    expect(merged[0]?.artifactRefs.length).toBeLessThanOrEqual(4);
+    expect(merged[0]?.evidence[0]).toContain("Lean memory prefers distilled facts");
+  });
+
+  it("uses permanent node source memories as bounded associative anchors during retrieval", () => {
+    const entryA = longTermEntry({
+      id: "ltm-anchor-a",
+      semanticKey: "fact::affiliate::lead-source",
+      conceptKey: "concept::fact::affiliate::lead-source",
+      text: "Affiliate course buyers convert best when the landing page frames a concrete outcome.",
+      evidence: ["conversion framing lesson"],
+    });
+    const entryB = longTermEntry({
+      id: "ltm-anchor-b",
+      semanticKey: "pattern::affiliate::email-followup",
+      conceptKey: "concept::pattern::affiliate::email-followup",
+      category: "pattern",
+      ontologyKind: "pattern",
+      text: "Email follow-up converts better when it repeats the lesson promise and next step.",
+      evidence: ["email follow-up lesson"],
+    });
+    const entryC = longTermEntry({
+      id: "ltm-anchor-c",
+      semanticKey: "strategy::affiliate::offer-angle",
+      conceptKey: "concept::strategy::affiliate::offer-angle",
+      text: "Offer angle should promise a practical affiliate outcome instead of generic motivation.",
+      evidence: ["offer angle lesson"],
+    });
+    const entryD = longTermEntry({
+      id: "ltm-anchor-d",
+      semanticKey: "decision::affiliate::cta",
+      conceptKey: "concept::decision::affiliate::cta",
+      category: "decision",
+      ontologyKind: "constraint",
+      text: "CTA should ask for the next concrete step, not a vague commitment.",
+      evidence: ["cta lesson"],
+    });
+    const entryE = longTermEntry({
+      id: "ltm-anchor-e",
+      semanticKey: "pattern::affiliate::lesson-order",
+      conceptKey: "concept::pattern::affiliate::lesson-order",
+      category: "pattern",
+      ontologyKind: "pattern",
+      text: "Keep offer lessons sequenced from promise to proof to activation.",
+      evidence: ["lesson order follow-up sequence"],
+    });
+    const root = permanentRoot([
+      {
+        id: "projects",
+        label: "projects",
+        nodeType: "context",
+        relationToParent: "contains",
+        updatedAt: Date.now(),
+        evidence: [],
+        sourceMemoryIds: [],
+        confidence: 1,
+        activeStatus: "active",
+        children: [
+          {
+            id: "projects/current-bot",
+            label: "current-bot",
+            nodeType: "context",
+            relationToParent: "contains",
+            summary:
+              "Affiliate landing page, lesson order, and follow-up sequence form one conversion path.",
+            updatedAt: Date.now(),
+            evidence: ["structural affiliate conversion memory"],
+            sourceMemoryIds: [entryE.id],
+            confidence: 0.9,
+            activeStatus: "active",
+            children: [],
+          },
+        ],
+      },
+    ]);
+
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "session-anchor",
+          messages: [
+            userMessage("Use what we know about course buyers and follow-up for affiliate offers."),
+          ],
+        }),
+        longTermMemory: [entryA, entryB, entryC, entryD, entryE],
+        pendingSignificance: [],
+        permanentMemory: root,
+        graph: emptyGraph(),
+      },
+      {
+        messages: [
+          userMessage(
+            "What should the affiliate landing page, lesson order, and follow-up emphasize?",
+          ),
+        ],
+      },
+    );
+
+    expect(packet.text).toContain("Relevant entities, constraints, and structural memory");
+    expect(packet.text).toContain("Permanent node source anchors:");
+    expect(
+      packet.retrievalItems.some((item) => item.reason.includes("permanent source anchor via")),
+    ).toBe(true);
   });
 
   it("compiler reconsolidates compaction summaries into long-term and permanent memory", () => {

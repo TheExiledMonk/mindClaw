@@ -34,16 +34,6 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 Compatibility note: the legacy `openclaw` command still works as an alias while the rename settles in.
 
-## Sponsors
-
-| OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](docs/assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg)](https://www.convex.dev/) |
-
-**Subscriptions (OAuth):**
-
-- **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
-
 Model note: while many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
 
 ## Models (selection + auth)
@@ -137,10 +127,6 @@ Run `mindclaw doctor` to surface risky/misconfigured DM policies.
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=openclaw/openclaw&type=date&legend=top-left)](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left)
 
 ## Everything we built so far
 

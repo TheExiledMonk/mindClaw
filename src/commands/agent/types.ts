@@ -82,6 +82,8 @@ export type AgentCommandOpts = {
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Optional event sink for staged progress updates during long runs. */
+  onAgentEvent?: (evt: { stream: string; data?: Record<string, unknown> }) => void;
 };
 
 export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {

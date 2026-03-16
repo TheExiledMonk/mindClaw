@@ -101,6 +101,28 @@ type PersistSessionEntryParams = {
   entry: SessionEntry;
 };
 
+function emitLifecycleUpdate(
+  onAgentEvent: AgentCommandOpts["onAgentEvent"] | undefined,
+  params: {
+    stage: string;
+    message: string;
+    startedAt: number;
+    extra?: Record<string, unknown>;
+  },
+) {
+  onAgentEvent?.({
+    stream: "lifecycle",
+    data: {
+      phase: "update",
+      stage: params.stage,
+      message: params.message,
+      at: Date.now(),
+      elapsedMs: Date.now() - params.startedAt,
+      ...params.extra,
+    },
+  });
+}
+
 type OverrideFieldClearedByDelete =
   | "providerOverride"
   | "modelOverride"
@@ -505,6 +527,7 @@ async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,
 ) {
+  const prepareStartedAt = Date.now();
   const message = opts.message ?? "";
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
@@ -634,11 +657,17 @@ async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
+  log.info(
+    `[startup-trace] stage=workspace_bootstrap:start elapsedMs=${Date.now() - prepareStartedAt} session=${sessionKey ?? sessionResolution.sessionId} workspace=${workspaceDirRaw}`,
+  );
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  log.info(
+    `[startup-trace] stage=workspace_bootstrap:done elapsedMs=${Date.now() - prepareStartedAt} session=${sessionKey ?? sessionResolution.sessionId} workspace=${workspaceDir}`,
+  );
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
@@ -680,6 +709,7 @@ async function agentCommandInternal(
   runtime: RuntimeEnv = defaultRuntime,
   deps: CliDeps = createDefaultDeps(),
 ) {
+  const startupTraceStartedAt = Date.now();
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
@@ -706,6 +736,12 @@ async function agentCommandInternal(
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
+  emitLifecycleUpdate(opts.onAgentEvent, {
+    stage: "workspace_ready",
+    message: "Workspace bootstrap complete. Preparing agent runtime.",
+    startedAt: startupTraceStartedAt,
+    extra: { workspaceDir },
+  });
 
   try {
     if (opts.deliver === true) {
@@ -1144,6 +1180,13 @@ async function agentCommandInternal(
                 (evt.data.phase === "end" || evt.data.phase === "error")
               ) {
                 lifecycleEnded = true;
+              }
+              if (evt.stream === "lifecycle" && evt.data?.phase === "update") {
+                emitAgentEvent({
+                  runId,
+                  stream: evt.stream,
+                  data: evt.data,
+                });
               }
             },
           });

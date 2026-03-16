@@ -118,6 +118,33 @@ import {
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
+
+function emitLifecycleStageUpdate(
+  onAgentEvent: ((evt: { stream: string; data: Record<string, unknown> }) => void) | undefined,
+  params: {
+    runId: string;
+    startedAt: number;
+    stage: string;
+    message: string;
+    extra?: Record<string, unknown>;
+  },
+) {
+  const elapsedMs = Date.now() - params.startedAt;
+  log.info(
+    `[startup-trace] run=${params.runId} stage=${params.stage} elapsedMs=${elapsedMs} ${params.message}`,
+  );
+  onAgentEvent?.({
+    stream: "lifecycle",
+    data: {
+      phase: "update",
+      stage: params.stage,
+      message: params.message,
+      at: Date.now(),
+      elapsedMs,
+      ...params.extra,
+    },
+  });
+}
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
@@ -2002,6 +2029,13 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
+    const startupTraceStartedAt = Date.now();
+    emitLifecycleStageUpdate(params.onAgentEvent, {
+      runId: params.runId,
+      startedAt: startupTraceStartedAt,
+      stage: "prompt_ready",
+      message: "System prompt and workspace bootstrap context prepared.",
+    });
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -2038,6 +2072,13 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
+      emitLifecycleStageUpdate(params.onAgentEvent, {
+        runId: params.runId,
+        startedAt: startupTraceStartedAt,
+        stage: "session_manager_open",
+        message: "Session file opened. Preparing runtime state.",
+        extra: { hadSessionFile },
+      });
 
       if (hadSessionFile && params.contextEngine?.bootstrap) {
         try {
@@ -2057,6 +2098,12 @@ export async function runEmbeddedAttempt(
         hadSessionFile,
         sessionId: params.sessionId,
         cwd: effectiveWorkspace,
+      });
+      emitLifecycleStageUpdate(params.onAgentEvent, {
+        runId: params.runId,
+        startedAt: startupTraceStartedAt,
+        stage: "session_manager_ready",
+        message: "Session manager prepared. Building tool and model runtime.",
       });
 
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
@@ -2140,6 +2187,12 @@ export async function runEmbeddedAttempt(
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
+      emitLifecycleStageUpdate(params.onAgentEvent, {
+        runId: params.runId,
+        startedAt: startupTraceStartedAt,
+        stage: "agent_session_ready",
+        message: "Agent session created. Sanitizing history and assembling memory context.",
+      });
       const activeSession = session;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
@@ -2418,6 +2471,12 @@ export async function runEmbeddedAttempt(
                 `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
               );
             }
+            emitLifecycleStageUpdate(params.onAgentEvent, {
+              runId: params.runId,
+              startedAt: startupTraceStartedAt,
+              stage: "memory_context_ready",
+              message: "Memory/context assembly complete. Finalizing startup state.",
+            });
           } catch (assembleErr) {
             log.warn(
               `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
@@ -2462,6 +2521,12 @@ export async function runEmbeddedAttempt(
           });
           applySystemPromptOverrideToSession(activeSession, systemPromptText);
         }
+        emitLifecycleStageUpdate(params.onAgentEvent, {
+          runId: params.runId,
+          startedAt: startupTraceStartedAt,
+          stage: "model_dispatch",
+          message: "Startup complete. Waiting for the model's first reply.",
+        });
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,

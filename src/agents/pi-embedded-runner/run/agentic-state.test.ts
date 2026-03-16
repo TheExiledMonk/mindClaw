@@ -774,10 +774,33 @@ describe("agentic-state", () => {
     });
 
     expect(state.orchestrationState.consolidationAction).not.toBe("none");
+    expect(state.orchestrationState.overlapSeverity).toBe("family_cluster");
+    expect(state.orchestrationState.skillCreationDecision).toBe("generalize_existing");
+    expect(state.orchestrationState.parameterizationCandidates).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
+    );
     expect(state.orchestrationState.overlappingSkills).toEqual(
       expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
     );
+    expect(state.orchestrationState.skillCreationReason).toContain("parameterization");
     expect(buildAgenticSystemPromptAddition(state)).toContain("Consolidation guidance:");
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Skill creation decision:");
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Parameterization candidates:");
+  });
+
+  it("allows creating a new skill only when overlap evidence is weak", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Create a new migration-planner skill for this database migration.")],
+      availableSkills: ["acceptance-report"],
+      likelySkills: [],
+      availableSkillInfo: [{ name: "acceptance-report", primaryEnv: "node" }],
+    });
+
+    expect(state.orchestrationState.overlapSeverity).toBe("none");
+    expect(state.orchestrationState.skillCreationDecision).toBe("create_new");
+    expect(state.orchestrationState.skillCreationReason).toContain(
+      "explicitly asks for a new specialized skill",
+    );
   });
 
   it("downgrades verified checks when the user goal is still unresolved", () => {
@@ -896,6 +919,15 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "inefficient_success=",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "overlap_severity=",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "parameterization_candidates=",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "skill_creation_decision=",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
@@ -923,6 +955,15 @@ describe("agentic-state", () => {
     );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "Inefficient success:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Overlap severity:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Parameterization candidates:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Skill creation decision:",
     );
   });
 
@@ -1907,8 +1948,13 @@ describe("agentic-state", () => {
     });
 
     expect(record.consolidationAction).toBe("generalize_existing");
+    expect(record.overlapSeverity).toBe("sibling_overlap");
+    expect(record.parameterizationCandidates).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "family:diagnostics"]),
+    );
+    expect(record.skillCreationDecision).toBe("generalize_existing");
     expect(record.templateCandidate).toBe(true);
-    expect(record.nextImprovement).toContain("generalize_existing");
+    expect(record.nextImprovement).toContain("Parameterize the reusable workflow surface");
   });
 
   it("persists merge-guided consolidation separately from template generalization", () => {
@@ -1948,10 +1994,15 @@ describe("agentic-state", () => {
     });
 
     expect(record.consolidationAction).toBe("generalize_existing");
+    expect(record.overlapSeverity).toBe("family_cluster");
     expect(record.mergeCandidate).toBe(true);
     expect(record.mergeSkills).toEqual(
       expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
     );
+    expect(record.parameterizationCandidates).toEqual(
+      expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
+    );
+    expect(record.skillCreationDecision).toBe("generalize_existing");
     expect(record.templateCandidate).toBe(false);
     expect(record.nextImprovement).toContain("Merge overlapping sibling skills");
   });

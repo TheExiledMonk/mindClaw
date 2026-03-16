@@ -402,6 +402,49 @@ describe("memory system store", () => {
     ).toBe(true);
   });
 
+  it("reports retrieval skip and supersession diagnostics", () => {
+    const snapshot = {
+      workingMemory: buildWorkingMemorySnapshot({
+        sessionId: "session-retrieval-diag",
+        messages: [userMessage("Use the current affiliate landing page workflow.")],
+      }),
+      longTermMemory: [
+        longTermEntry({
+          id: "ltm-live",
+          semanticKey: "fact::affiliate::workflow",
+          conceptKey: "concept::affiliate::workflow",
+          text: "Current affiliate landing page workflow starts with a concrete outcome.",
+        }),
+        longTermEntry({
+          id: "ltm-old",
+          semanticKey: "fact::affiliate::workflow-old",
+          conceptKey: "concept::affiliate::workflow-old",
+          text: "Older affiliate workflow started with generic brand positioning.",
+          activeStatus: "superseded",
+          supersededById: "ltm-live",
+        }),
+        longTermEntry({
+          id: "ltm-archived",
+          semanticKey: "fact::affiliate::archived",
+          conceptKey: "concept::affiliate::archived",
+          text: "Archived affiliate note.",
+          activeStatus: "archived",
+        }),
+      ],
+      pendingSignificance: [],
+      permanentMemory: permanentRoot(),
+      graph: emptyGraph(),
+    };
+
+    const report = inspectMemoryRetrievalObservability(snapshot, {
+      messages: [userMessage("What is the current affiliate landing page workflow?")],
+    });
+
+    expect(report.topReasons.length).toBeGreaterThan(0);
+    expect(report.skippedReasonCounts.archived_hidden).toBeGreaterThan(0);
+    expect(report.supersededSamples[0]).toContain("ltm-live");
+  });
+
   it("compiler reconsolidates compaction summaries into long-term and permanent memory", () => {
     const compiled = compileMemoryState({
       sessionId: "session-a",

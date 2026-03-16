@@ -96,6 +96,41 @@ describe("memory background worker", () => {
     });
     expect(warmedPacket.packet.text).toContain("CPA course lessons stay durable");
   });
+
+  it("runs background maintenance to retire stale low-signal memory", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-worker-"));
+    process.chdir(workspaceDir);
+    const sessionId = "agent:worker-maintenance";
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir,
+      sessionId,
+      workingMemory: buildWorkingMemory(),
+      longTermMemory: Array.from({ length: 9 }, (_, index) =>
+        buildLongTermEntry({
+          id: `ltm-stale-${index}`,
+          text: `Stale worker memory ${index}`,
+          activeStatus: index < 6 ? "stale" : "superseded",
+          compressionState: "latent",
+        }),
+      ),
+      pendingSignificance: [],
+      permanentMemory: permanentRoot(),
+      graph: emptyGraph(),
+    });
+
+    enqueueMemoryBackgroundRefresh({
+      workspaceDir,
+      sessionId,
+      reason: "after-turn",
+    });
+    await waitForMemoryBackgroundWorkerIdle();
+
+    const refreshed = await loadMemoryStoreSnapshot({ workspaceDir, sessionId });
+    const stats = getMemoryBackgroundWorkerStats();
+    expect(stats.maintenanceRuns).toBeGreaterThan(0);
+    expect(refreshed.longTermMemory.some((entry) => entry.activeStatus === "archived")).toBe(true);
+  });
 });
 
 function buildWorkingMemory(): WorkingMemorySnapshot {
@@ -112,7 +147,12 @@ function buildWorkingMemory(): WorkingMemorySnapshot {
   };
 }
 
-function buildLongTermEntry(params: { id: string; text: string }): LongTermMemoryEntry {
+function buildLongTermEntry(params: {
+  id: string;
+  text: string;
+  activeStatus?: LongTermMemoryEntry["activeStatus"];
+  compressionState?: LongTermMemoryEntry["compressionState"];
+}): LongTermMemoryEntry {
   const now = Date.now();
   return {
     id: params.id,
@@ -131,8 +171,8 @@ function buildLongTermEntry(params: { id: string; text: string }): LongTermMemor
     sourceType: "user_stated",
     confidence: 0.95,
     importanceClass: "useful",
-    compressionState: "stable",
-    activeStatus: "active",
+    compressionState: params.compressionState ?? "stable",
+    activeStatus: params.activeStatus ?? "active",
     adjudicationStatus: "authoritative",
     revisionCount: 1,
     lastRevisionKind: "new",

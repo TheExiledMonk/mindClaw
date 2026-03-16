@@ -98,6 +98,50 @@ function normalizeComparable(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+const TOPIC_STOPWORDS = new Set([
+  "that",
+  "this",
+  "with",
+  "from",
+  "have",
+  "will",
+  "your",
+  "their",
+  "about",
+  "into",
+  "when",
+  "what",
+  "should",
+  "could",
+  "would",
+  "after",
+  "before",
+  "using",
+  "used",
+  "than",
+  "then",
+  "them",
+  "they",
+  "just",
+  "also",
+  "very",
+  "over",
+  "under",
+  "keep",
+  "make",
+  "made",
+  "need",
+  "must",
+]);
+
+function extractTopicSignature(text: string): string {
+  const tokens = normalizeComparable(text)
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9/_-]/g, "").replace(/(?:ing|ers|er|ed|es|s)$/, ""))
+    .filter((token) => token.length >= 4 && !TOPIC_STOPWORDS.has(token));
+  return [...new Set(tokens)].toSorted().slice(0, 6).join(",");
+}
+
 export function buildMemoryQuerySignature(params: {
   messages?: AgentMessage[];
   workingItemsMax?: number;
@@ -111,7 +155,8 @@ export function buildMemoryQuerySignature(params: {
   return [
     `working=${params.workingItemsMax ?? "default"}`,
     `longTerm=${params.includeLongTermMemory === false ? "off" : "on"}`,
-    ...latestTexts,
+    `topics=${extractTopicSignature(latestTexts.join(" "))}`,
+    `messageCount=${latestTexts.length}`,
   ].join("||");
 }
 

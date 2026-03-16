@@ -16,6 +16,7 @@ import {
   MEMORY_SYSTEM_DIRNAME,
   type MemoryStoreBackendKind,
 } from "../context-engine/memory-system-store.js";
+import { getMemoryBackgroundWorkerStats } from "../context-engine/memory-system-worker.js";
 import { setVerbose } from "../globals.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
@@ -636,6 +637,7 @@ async function runIntegratedMemorySystemStatus(opts: MemoryCommandOptions) {
   }).catch(() => undefined);
   const artifactsDir = path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME, "artifacts");
   const rawArtifactCount = (await fs.readdir(artifactsDir).catch(() => [])).length;
+  const worker = getMemoryBackgroundWorkerStats();
   const payload = {
     agentId,
     workspaceDir,
@@ -646,6 +648,7 @@ async function runIntegratedMemorySystemStatus(opts: MemoryCommandOptions) {
     pendingCount: snapshot?.pendingSignificance.length ?? 0,
     rawArtifactCount,
     health,
+    worker,
   };
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(payload, null, 2));
@@ -660,6 +663,7 @@ async function runIntegratedMemorySystemStatus(opts: MemoryCommandOptions) {
       `${theme.muted("Long-term:")} ${String(payload.longTermCount)}`,
       `${theme.muted("Pending:")} ${String(payload.pendingCount)}`,
       `${theme.muted("Artifacts:")} ${String(rawArtifactCount)}`,
+      `${theme.muted("Worker:")} queued=${worker.queued} completed=${worker.completed} failed=${worker.failed} active=${worker.active} maintenance=${worker.maintenanceRuns}`,
       `${theme.muted("Summary:")} ${health.summary}`,
       health.issues.length > 0 ? `${theme.muted("Issues:")} ${health.issues.join("; ")}` : null,
       health.recommendations.length > 0

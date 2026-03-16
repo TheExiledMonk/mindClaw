@@ -16,6 +16,13 @@ const exportMemoryStoreBundle = vi.fn();
 const importMemoryStoreBundle = vi.fn();
 const inspectMemoryStoreHealth = vi.fn();
 const loadMemoryStoreSnapshot = vi.fn();
+const getMemoryBackgroundWorkerStats = vi.fn(() => ({
+  queued: 0,
+  completed: 0,
+  failed: 0,
+  active: 0,
+  maintenanceRuns: 0,
+}));
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -42,6 +49,10 @@ vi.mock("../context-engine/memory-system-store.js", () => ({
   MEMORY_SYSTEM_DIRNAME: ".openclaw-memory",
 }));
 
+vi.mock("../context-engine/memory-system-worker.js", () => ({
+  getMemoryBackgroundWorkerStats,
+}));
+
 let registerMemoryCli: typeof import("./memory-cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 let isVerbose: typeof import("../globals.js").isVerbose;
@@ -62,6 +73,7 @@ afterEach(() => {
   importMemoryStoreBundle.mockReset();
   inspectMemoryStoreHealth.mockReset();
   loadMemoryStoreSnapshot.mockReset();
+  getMemoryBackgroundWorkerStats.mockClear();
   process.exitCode = undefined;
   setVerbose(false);
 });

@@ -353,8 +353,12 @@ export type MemoryRetrievalObservabilityReport = {
   entityMatchedItemCount: number;
   authoritativeWinnerItemCount: number;
   summaryDerivedItemCount: number;
+  permanentSourceAnchorCount: number;
+  topicMatchedItemCount: number;
   accessedConceptCount: number;
   topReasons: string[];
+  skippedReasonCounts: Record<string, number>;
+  supersededSamples: string[];
   summary: string;
 };
 
@@ -1592,6 +1596,76 @@ function tokenize(text: string): string[] {
   return normalizeComparable(text)
     .split(/\s+/)
     .filter((token) => token.length >= 3);
+}
+
+const TOPIC_STOPWORDS = new Set([
+  "that",
+  "this",
+  "with",
+  "from",
+  "have",
+  "will",
+  "your",
+  "their",
+  "about",
+  "into",
+  "when",
+  "where",
+  "what",
+  "should",
+  "could",
+  "would",
+  "while",
+  "after",
+  "before",
+  "using",
+  "used",
+  "than",
+  "then",
+  "them",
+  "they",
+  "just",
+  "also",
+  "very",
+  "over",
+  "under",
+  "keep",
+  "make",
+  "made",
+  "like",
+  "need",
+  "must",
+  "more",
+  "less",
+  "some",
+  "same",
+  "each",
+  "only",
+  "onto",
+  "does",
+  "dont",
+  "into",
+]);
+
+function normalizeTopicToken(token: string): string {
+  return token.replace(/[^a-z0-9/_-]/g, "").replace(/(?:ing|ers|er|ed|es|s)$/, "");
+}
+
+function extractTopicTokens(text: string): string[] {
+  return tokenize(text)
+    .map((token) => normalizeTopicToken(token))
+    .filter((token) => token.length >= 4 && !TOPIC_STOPWORDS.has(token));
+}
+
+function buildTopicBucketSignature(texts: string[], limit = 6): string[] {
+  const counts = new Map<string, number>();
+  for (const token of texts.flatMap((text) => extractTopicTokens(text))) {
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([token]) => token);
 }
 
 function uniqueIds(ids: string[]): string[] {
@@ -5458,19 +5532,19 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
 } {
   const next = entries.map(cloneLongTermEntry);
   let supersededCount = 0;
+  const hasSupersessionCue = (entry: LongTermMemoryEntry): boolean =>
+    /\b(replaced|replace|no longer|obsolete|superseded)\b/i.test(entry.text) ||
+    /\bfixed permanently\b/i.test(entry.text) ||
+    /\binstead\s+of\b/i.test(entry.text) ||
+    /\b(switched to|updated to|moved to|now use|now uses|prefer(?:red)?|current path)\b/i.test(
+      entry.text,
+    ) ||
+    entry.lastRevisionKind === "updated" ||
+    entry.lastRevisionKind === "narrowed";
 
   for (let i = 0; i < next.length; i += 1) {
     const newer = next[i];
-    if (
-      !(
-        /\b(replaced|replace|no longer|obsolete|superseded)\b/i.test(newer.text) ||
-        /\bfixed permanently\b/i.test(newer.text) ||
-        /\binstead\s+of\b/i.test(newer.text) ||
-        /\b(switched to|updated to|moved to|now use|now uses|prefer(?:red)?|current path)\b/i.test(
-          newer.text,
-        )
-      )
-    ) {
+    if (!hasSupersessionCue(newer)) {
       continue;
     }
     for (let j = 0; j < next.length; j += 1) {
@@ -5486,7 +5560,21 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
         (newer.artifactRefs ?? []).includes(ref),
       ).length;
       const sameCategory = older.category === newer.category;
-      if (overlapScore < 3 && !(sameCategory && artifactOverlap > 0 && overlapScore >= 2)) {
+      const sameConcept = older.conceptKey === newer.conceptKey;
+      const sameEntity =
+        (older.entityIds ?? []).some((id) => (newer.entityIds ?? []).includes(id)) ||
+        (older.entityAliases ?? []).some((alias) => (newer.entityAliases ?? []).includes(alias));
+      const scopeAligned =
+        older.versionScope === newer.versionScope ||
+        older.installProfileScope === newer.installProfileScope ||
+        older.customerScope === newer.customerScope;
+      const shouldSupersede =
+        sameConcept ||
+        (overlapScore >= 4 && sameCategory) ||
+        (sameCategory && artifactOverlap > 0 && overlapScore >= 2) ||
+        (sameEntity && overlapScore >= 3) ||
+        (scopeAligned && sameCategory && overlapScore >= 3);
+      if (!shouldSupersede) {
         continue;
       }
       older.activeStatus = "superseded";
@@ -6357,6 +6445,7 @@ function rankLongTermEntries(
   queryEntityAliases?: Set<string>,
   adjudications?: PersistedMemoryAdjudication[],
 ): LongTermMemoryEntry[] {
+  const queryTopicBuckets = new Set(buildTopicBucketSignature([Array.from(queryTokens).join(" ")]));
   const taskBonus = (entry: LongTermMemoryEntry): number => {
     if (taskMode === "coding" && (entry.category === "strategy" || entry.category === "decision")) {
       return 3;
@@ -6404,6 +6493,18 @@ function rankLongTermEntries(
       });
     })
     .toSorted((a, b) => {
+      const topicBonus = (entry: LongTermMemoryEntry): number => {
+        if (queryTopicBuckets.size === 0) {
+          return 0;
+        }
+        const entryTopicBuckets = buildTopicBucketSignature([
+          entry.text,
+          ...(entry.conceptAliases ?? []),
+          ...(entry.evidence ?? []),
+        ]);
+        const overlap = entryTopicBuckets.filter((token) => queryTopicBuckets.has(token)).length;
+        return overlap * 1.8;
+      };
       const statePenalty = (entry: LongTermMemoryEntry): number => {
         if (entry.activeStatus === "superseded") {
           return 6;
@@ -6458,6 +6559,7 @@ function rankLongTermEntries(
         statePenalty(a) -
         contradictionPenalty(a) +
         entityBonus(a) +
+        topicBonus(a) +
         scopeBonus(a) +
         adjudicationBonus(a);
       const bScore =
@@ -6468,6 +6570,7 @@ function rankLongTermEntries(
         statePenalty(b) -
         contradictionPenalty(b) +
         entityBonus(b) +
+        topicBonus(b) +
         scopeBonus(b) +
         adjudicationBonus(b);
       return bScore - aScore;
@@ -7578,6 +7681,25 @@ export function inspectMemoryRetrievalObservability(
 ): MemoryRetrievalObservabilityReport {
   const packet = retrieveMemoryContextPacket(snapshot, params);
   const entriesById = new Map(snapshot.longTermMemory.map((entry) => [entry.id, entry]));
+  const currentText = [
+    snapshot.workingMemory.rollingSummary,
+    ...snapshot.workingMemory.activeGoals,
+    ...snapshot.workingMemory.recentEvents,
+    ...(params?.messages ?? []).map((message) => extractMessageText(message)).filter(Boolean),
+  ].join(" ");
+  const queryEntityAliases = new Set(
+    buildResolvedEntityAliases({
+      text: currentText,
+      ...buildMemoryScopeContext(currentText),
+    }).map((alias) => normalizeComparable(alias)),
+  );
+  const taskMode = packet.taskMode;
+  const scopeContext = buildMemoryScopeContext(currentText);
+  const adjudications = buildPersistedMemoryAdjudications({
+    sessionId: snapshot.workingMemory.sessionId || "runtime",
+    entries: snapshot.longTermMemory,
+    revisions: collectPersistedMemoryRevisions(snapshot.longTermMemory),
+  });
   const downgradedItemCount = packet.retrievalItems.filter((item) =>
     item.reason.includes("downgraded="),
   ).length;
@@ -7599,6 +7721,51 @@ export function inspectMemoryRetrievalObservability(
   const summaryDerivedItemCount = packet.retrievalItems.filter(
     (item) => item.memoryId && entriesById.get(item.memoryId)?.sourceType === "summary_derived",
   ).length;
+  const permanentSourceAnchorCount = packet.retrievalItems.filter((item) =>
+    item.reason.startsWith("permanent source anchor via"),
+  ).length;
+  const topicMatchedItemCount = packet.retrievalItems.filter((item) =>
+    item.reason.includes("relevance="),
+  ).length;
+  const retrievedIds = new Set(packet.retrievalItems.map((item) => item.memoryId).filter(Boolean));
+  const skippedReasonCounts: Record<string, number> = {};
+  for (const entry of snapshot.longTermMemory) {
+    if (retrievedIds.has(entry.id)) {
+      continue;
+    }
+    let reason = "not_in_top_slice";
+    if (entry.activeStatus === "archived") {
+      reason = "archived_hidden";
+    } else if (!includeMemoryForContext(entry, taskMode)) {
+      reason = "task_mode_filtered";
+    } else if (
+      !shouldIncludeScopedEntry({
+        entry,
+        taskMode,
+        scopeContext,
+        adjudications,
+      })
+    ) {
+      reason = "scope_mismatch";
+    } else if (entry.activeStatus === "superseded") {
+      reason = "superseded_deprioritized";
+    } else if (entry.activeStatus === "stale" || entry.compressionState === "latent") {
+      reason = "stale_or_latent";
+    } else if (
+      queryEntityAliases.size > 0 &&
+      (entry.entityAliases ?? []).length > 0 &&
+      !(entry.entityAliases ?? []).some((alias) =>
+        queryEntityAliases.has(normalizeComparable(alias)),
+      )
+    ) {
+      reason = "entity_mismatch";
+    }
+    skippedReasonCounts[reason] = (skippedReasonCounts[reason] ?? 0) + 1;
+  }
+  const supersededSamples = snapshot.longTermMemory
+    .filter((entry) => entry.activeStatus === "superseded")
+    .slice(0, 4)
+    .map((entry) => `${clipText(entry.text, 100)} -> ${entry.supersededById ?? "unknown"}`);
   const longTermItemCount = packet.retrievalItems.filter(
     (item) => item.kind === "long-term",
   ).length;
@@ -7621,6 +7788,8 @@ export function inspectMemoryRetrievalObservability(
       `scoped-alternatives=${scopedAlternativeItemCount}`,
       `artifact-anchors=${artifactAnchoredItemCount}`,
       `entity-matched=${entityMatchedItemCount}`,
+      `topic-matched=${topicMatchedItemCount}`,
+      `permanent-source-anchors=${permanentSourceAnchorCount}`,
       `authoritative-winners=${authoritativeWinnerItemCount}`,
       `summary-derived=${summaryDerivedItemCount}`,
       `concepts=${packet.accessedConceptIds.length}`,
@@ -7640,8 +7809,12 @@ export function inspectMemoryRetrievalObservability(
     entityMatchedItemCount,
     authoritativeWinnerItemCount,
     summaryDerivedItemCount,
+    permanentSourceAnchorCount,
+    topicMatchedItemCount,
     accessedConceptCount: packet.accessedConceptIds.length,
     topReasons,
+    skippedReasonCounts,
+    supersededSamples,
     summary,
   };
 }
@@ -9577,6 +9750,18 @@ export function formatMemoryDiagnosticsReport(
     const lines = [`summary: ${report.summary}`, `health: ${report.health.summary}`];
     if (report.retrieval) {
       lines.push(`retrieval: ${report.retrieval.summary}`);
+      if (report.retrieval.supersededSamples.length > 0) {
+        lines.push(
+          `retrieval_superseded_samples: ${report.retrieval.supersededSamples.join(" | ")}`,
+        );
+      }
+      if (Object.keys(report.retrieval.skippedReasonCounts).length > 0) {
+        lines.push(
+          `retrieval_skipped: ${Object.entries(report.retrieval.skippedReasonCounts)
+            .map(([reason, count]) => `${reason}=${count}`)
+            .join(", ")}`,
+        );
+      }
     }
     if (report.acceptance) {
       lines.push(`acceptance: ${report.acceptance.summary}`);
@@ -9675,6 +9860,16 @@ export function formatMemoryDiagnosticsReport(
       `- Long-term items: ${report.retrieval.longTermItemCount}`,
       `- Permanent items: ${report.retrieval.permanentItemCount}`,
       `- Contested items: ${report.retrieval.contestedItemCount}`,
+      `- Topic-matched items: ${report.retrieval.topicMatchedItemCount}`,
+      `- Permanent source anchors: ${report.retrieval.permanentSourceAnchorCount}`,
+      `- Skipped reasons: ${
+        Object.keys(report.retrieval.skippedReasonCounts).length > 0
+          ? Object.entries(report.retrieval.skippedReasonCounts)
+              .map(([reason, count]) => `${reason}=${count}`)
+              .join("; ")
+          : "none"
+      }`,
+      `- Superseded samples: ${report.retrieval.supersededSamples.length > 0 ? report.retrieval.supersededSamples.join("; ") : "none"}`,
       `- Top reasons: ${report.retrieval.topReasons.length > 0 ? report.retrieval.topReasons.join("; ") : "none"}`,
       "",
     );

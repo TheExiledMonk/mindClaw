@@ -21,33 +21,33 @@ When the operator says “release”, immediately do this preflight (no extra qu
 
 ## Versioning
 
-Current OpenClaw releases use date-based versioning.
+MindClaw releases use a monthly release-number scheme.
 
-- Stable release version: `YYYY.M.D`
-  - Git tag: `vYYYY.M.D`
-  - Examples from repo history: `v2026.2.26`, `v2026.3.8`
-- Beta prerelease version: `YYYY.M.D-beta.N`
-  - Git tag: `vYYYY.M.D-beta.N`
-  - Examples from repo history: `v2026.2.15-beta.1`, `v2026.3.8-beta.1`
-- Use the same version string everywhere, minus the leading `v` where Git tags are not used:
-  - `package.json`: `2026.3.8`
-  - Git tag: `v2026.3.8`
-  - GitHub release title: `openclaw 2026.3.8`
-- Do not zero-pad month or day. Use `2026.3.8`, not `2026.03.08`.
+- Stable package version: `YYYY.M.R`
+  - Git tag: `vYYYY.M-R`
+  - Example: package `2026.3.1`, tag `v2026.3-1`
+- Beta prerelease version: `YYYY.M.R-beta.N`
+  - Git tag: `vYYYY.M-R-beta.N`
+  - Example: package `2026.3.2-beta.1`, tag `v2026.3-2-beta.1`
+- Use the semver-compatible package version in `package.json`, and the public hyphenated form for Git tags/releases:
+  - `package.json`: `2026.3.1`
+  - Git tag: `v2026.3-1`
+  - GitHub release title: `mindclaw 2026.3-1`
+- Do not zero-pad month or release number. Use `2026.3.1`, not `2026.03.01`.
 - Stable and beta are npm dist-tags, not separate release lines:
   - `latest` = stable
   - `beta` = prerelease/testing
 - Dev is the moving head of `main`, not a normal git-tagged release.
-- The release workflow enforces the current stable/beta tag formats and rejects versions whose CalVer date is more than 2 UTC calendar days away from the release date.
+- The release workflow enforces the package/tag mapping above and rejects mismatched formats.
 
 Historical note:
 
-- Older tags such as `v2026.1.11-1`, `v2026.2.6-3`, and `v2.0.0-beta2` exist in repo history.
-- Treat those as legacy tag patterns. New releases should use `vYYYY.M.D` for stable and `vYYYY.M.D-beta.N` for beta.
+- Older OpenClaw tags such as `v2026.1.11-1`, `v2026.2.6-3`, and `v2.0.0-beta2` exist in repo history.
+- Treat those as upstream legacy patterns. MindClaw releases should use `vYYYY.M-R` for stable and `vYYYY.M-R-beta.N` for beta.
 
 1. **Version & metadata**
 
-- [ ] Bump `package.json` version (e.g., `2026.1.29`).
+- [ ] Bump `package.json` version (e.g., `2026.3.1`).
 - [ ] Run `pnpm plugins:sync` to align extension package versions + changelogs.
 - [ ] Update CLI/version strings in [`src/version.ts`](https://github.com/openclaw/openclaw/blob/main/src/version.ts) and the Baileys user agent in [`src/web/session.ts`](https://github.com/openclaw/openclaw/blob/main/src/web/session.ts).
 - [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs) for `openclaw`.
@@ -97,7 +97,7 @@ Historical note:
 - [ ] Push the matching git tag to trigger `.github/workflows/openclaw-npm-release.yml`.
   - Stable tags publish to npm `latest`.
   - Beta tags publish to npm `beta`.
-  - The workflow rejects tags that do not match `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
+  - The workflow rejects tags that do not match `package.json` or are not on `main`.
 - [ ] Verify the registry: `npm view openclaw version`, `npm view openclaw dist-tags`, and `npx -y openclaw@X.Y.Z --version` (or `--help`).
 
 ### Troubleshooting (notes from 2.0.0-beta2 release)

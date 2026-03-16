@@ -3,7 +3,7 @@
 import { pathToFileURL } from "node:url";
 
 export type SparkleBuildFloors = {
-  dateKey: number;
+  releaseKey: number;
   legacyFloor: number;
   laneFloor: number;
   lane: number;
@@ -21,21 +21,23 @@ export function sparkleBuildFloorsFromShortVersion(
 
   const year = Number.parseInt(match[1], 10);
   const month = Number.parseInt(match[2], 10);
-  const day = Number.parseInt(match[3], 10);
+  const releaseNumber = Number.parseInt(match[3], 10);
   if (
     !Number.isInteger(year) ||
     !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
+    !Number.isInteger(releaseNumber) ||
     month < 1 ||
     month > 12 ||
-    day < 1 ||
-    day > 31
+    releaseNumber < 1 ||
+    releaseNumber > 99
   ) {
     return null;
   }
 
-  const dateKey = Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`);
-  const legacyFloor = Number(`${dateKey}0`);
+  const releaseKey = Number(
+    `${year}${String(month).padStart(2, "0")}${String(releaseNumber).padStart(2, "0")}`,
+  );
+  const legacyFloor = Number(`${releaseKey}0`);
 
   let lane = 90;
   const suffix = match[4] ?? "";
@@ -48,8 +50,8 @@ export function sparkleBuildFloorsFromShortVersion(
     }
   }
 
-  const laneFloor = Number(`${dateKey}${String(lane).padStart(2, "0")}`);
-  return { dateKey, legacyFloor, laneFloor, lane };
+  const laneFloor = Number(`${releaseKey}${String(lane).padStart(2, "0")}`);
+  return { releaseKey, legacyFloor, laneFloor, lane };
 }
 
 export function canonicalSparkleBuildFromVersion(shortVersion: string): number | null {

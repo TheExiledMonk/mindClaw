@@ -3,77 +3,77 @@ import {
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseReleaseVersion,
-  utcCalendarDayDistance,
+  parseReleaseTagVersion,
+  releaseTagFromPackageVersion,
 } from "../scripts/openclaw-npm-release-check.ts";
 
 describe("parseReleaseVersion", () => {
-  it("parses stable CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10")).toMatchObject({
-      version: "2026.3.10",
+  it("parses stable monthly releases", () => {
+    expect(parseReleaseVersion("2026.3.1")).toMatchObject({
+      version: "2026.3.1",
       channel: "stable",
       year: 2026,
       month: 3,
-      day: 10,
+      releaseNumber: 1,
     });
   });
 
-  it("parses beta CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10-beta.2")).toMatchObject({
-      version: "2026.3.10-beta.2",
+  it("parses beta monthly releases", () => {
+    expect(parseReleaseVersion("2026.3.2-beta.2")).toMatchObject({
+      version: "2026.3.2-beta.2",
       channel: "beta",
       year: 2026,
       month: 3,
-      day: 10,
+      releaseNumber: 2,
       betaNumber: 2,
     });
   });
 
   it("rejects legacy and malformed release formats", () => {
-    expect(parseReleaseVersion("2026.3.10-1")).toBeNull();
+    expect(parseReleaseVersion("2026.3-1")).toBeNull();
     expect(parseReleaseVersion("2026.03.09")).toBeNull();
-    expect(parseReleaseVersion("v2026.3.10")).toBeNull();
-    expect(parseReleaseVersion("2026.2.30")).toBeNull();
+    expect(parseReleaseVersion("v2026.3-1")).toBeNull();
     expect(parseReleaseVersion("2.0.0-beta2")).toBeNull();
   });
 });
 
-describe("utcCalendarDayDistance", () => {
-  it("compares UTC calendar days rather than wall-clock hours", () => {
-    const left = new Date("2026-03-09T23:59:59Z");
-    const right = new Date("2026-03-11T00:00:01Z");
-    expect(utcCalendarDayDistance(left, right)).toBe(2);
+describe("parseReleaseTagVersion", () => {
+  it("parses the public git-tag format", () => {
+    expect(parseReleaseTagVersion("2026.3-2-beta.3")).toMatchObject({
+      version: "2026.3-2-beta.3",
+      channel: "beta",
+      year: 2026,
+      month: 3,
+      releaseNumber: 2,
+      betaNumber: 3,
+    });
+  });
+});
+
+describe("releaseTagFromPackageVersion", () => {
+  it("maps semver package versions to public tag versions", () => {
+    expect(releaseTagFromPackageVersion("2026.3.2")).toBe("v2026.3-2");
+    expect(releaseTagFromPackageVersion("2026.3.2-beta.4")).toBe("v2026.3-2-beta.4");
   });
 });
 
 describe("collectReleaseTagErrors", () => {
-  it("accepts versions within the two-day CalVer window", () => {
+  it("accepts matching package and tag versions in the new scheme", () => {
     expect(
       collectReleaseTagErrors({
-        packageVersion: "2026.3.10",
-        releaseTag: "v2026.3.10",
-        now: new Date("2026-03-11T12:00:00Z"),
+        packageVersion: "2026.3.1",
+        releaseTag: "v2026.3-1",
       }),
     ).toEqual([]);
-  });
-
-  it("rejects versions outside the two-day CalVer window", () => {
-    expect(
-      collectReleaseTagErrors({
-        packageVersion: "2026.3.10",
-        releaseTag: "v2026.3.10",
-        now: new Date("2026-03-13T00:00:00Z"),
-      }),
-    ).toContainEqual(expect.stringContaining("must be within 2 days"));
   });
 
   it("rejects tags that do not match the current release format", () => {
     expect(
       collectReleaseTagErrors({
-        packageVersion: "2026.3.10",
-        releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
+        packageVersion: "2026.3.1",
+        releaseTag: "v2026.3.1",
       }),
-    ).toContainEqual(expect.stringContaining("must match vYYYY.M.D or vYYYY.M.D-beta.N"));
+    ).toContainEqual(expect.stringContaining("must match vYYYY.M-R or vYYYY.M-R-beta.N"));
   });
 });
 

@@ -20,16 +20,15 @@ export type ParsedReleaseVersion = {
   channel: "stable" | "beta";
   year: number;
   month: number;
-  day: number;
+  releaseNumber: number;
   betaNumber?: number;
-  date: Date;
 };
 
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
+const STABLE_PACKAGE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<release>[1-9]\d*)$/;
+const STABLE_TAG_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)-(?<release>[1-9]\d*)$/;
 const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)(?:\.|-)(?<release>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
-const MAX_CALVER_DISTANCE_DAYS = 2;
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -43,37 +42,27 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/\/+$/, "");
 }
 
-function parseDateParts(
+function parseVersionParts(
   version: string,
   groups: Record<string, string | undefined>,
   channel: "stable" | "beta",
 ): ParsedReleaseVersion | null {
   const year = Number.parseInt(groups.year ?? "", 10);
   const month = Number.parseInt(groups.month ?? "", 10);
-  const day = Number.parseInt(groups.day ?? "", 10);
+  const releaseNumber = Number.parseInt(groups.release ?? "", 10);
   const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
 
   if (
     !Number.isInteger(year) ||
     !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
+    !Number.isInteger(releaseNumber) ||
     month < 1 ||
     month > 12 ||
-    day < 1 ||
-    day > 31
+    releaseNumber < 1
   ) {
     return null;
   }
   if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
     return null;
   }
 
@@ -82,9 +71,8 @@ function parseDateParts(
     channel,
     year,
     month,
-    day,
+    releaseNumber,
     betaNumber,
-    date,
   };
 }
 
@@ -94,25 +82,45 @@ export function parseReleaseVersion(version: string): ParsedReleaseVersion | nul
     return null;
   }
 
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
+  const stableMatch = STABLE_PACKAGE_VERSION_REGEX.exec(trimmed);
   if (stableMatch?.groups) {
-    return parseDateParts(trimmed, stableMatch.groups, "stable");
+    return parseVersionParts(trimmed, stableMatch.groups, "stable");
   }
 
   const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
   if (betaMatch?.groups) {
-    return parseDateParts(trimmed, betaMatch.groups, "beta");
+    return parseVersionParts(trimmed, betaMatch.groups, "beta");
   }
 
   return null;
 }
 
-function startOfUtcDay(date: Date): number {
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+export function parseReleaseTagVersion(version: string): ParsedReleaseVersion | null {
+  const trimmed = version.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const stableMatch = STABLE_TAG_VERSION_REGEX.exec(trimmed);
+  if (stableMatch?.groups) {
+    return parseVersionParts(trimmed, stableMatch.groups, "stable");
+  }
+
+  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
+  if (betaMatch?.groups) {
+    return parseVersionParts(trimmed, betaMatch.groups, "beta");
+  }
+
+  return null;
 }
 
-export function utcCalendarDayDistance(left: Date, right: Date): number {
-  return Math.round(Math.abs(startOfUtcDay(left) - startOfUtcDay(right)) / 86_400_000);
+export function releaseTagFromPackageVersion(version: string): string | null {
+  const parsed = parseReleaseVersion(version);
+  if (parsed === null) {
+    return null;
+  }
+  const base = `${parsed.year}.${parsed.month}-${parsed.releaseNumber}`;
+  return parsed.channel === "beta" ? `v${base}-beta.${parsed.betaNumber}` : `v${base}`;
 }
 
 export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] {
@@ -161,17 +169,15 @@ export function collectReleaseTagErrors(params: {
   releaseTag: string;
   releaseSha?: string;
   releaseMainRef?: string;
-  now?: Date;
 }): string[] {
   const errors: string[] = [];
   const releaseTag = params.releaseTag.trim();
   const packageVersion = params.packageVersion.trim();
-  const now = params.now ?? new Date();
 
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.R or YYYY.M.R-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
@@ -180,31 +186,20 @@ export function collectReleaseTagErrors(params: {
   }
 
   const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
-  const parsedTag = parseReleaseVersion(tagVersion);
+  const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D or vYYYY.M.D-beta.N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M-R or vYYYY.M-R-beta.N; found "${releaseTag || "<missing>"}".`,
     );
   }
 
-  const expectedTag = packageVersion ? `v${packageVersion}` : "";
+  const expectedTag = packageVersion ? (releaseTagFromPackageVersion(packageVersion) ?? "") : "";
   if (releaseTag !== expectedTag) {
     errors.push(
       `Release tag ${releaseTag || "<missing>"} does not match package.json version ${
         packageVersion || "<missing>"
       }; expected ${expectedTag || "<missing>"}.`,
     );
-  }
-
-  if (parsedVersion !== null) {
-    const dayDistance = utcCalendarDayDistance(parsedVersion.date, now);
-    if (dayDistance > MAX_CALVER_DISTANCE_DAYS) {
-      const nowLabel = now.toISOString().slice(0, 10);
-      const versionDate = parsedVersion.date.toISOString().slice(0, 10);
-      errors.push(
-        `Release version ${packageVersion} is ${dayDistance} days away from current UTC date ${nowLabel}; release CalVer date ${versionDate} must be within ${MAX_CALVER_DISTANCE_DAYS} days.`,
-      );
-    }
   }
 
   if (params.releaseSha?.trim() && params.releaseMainRef?.trim()) {
@@ -248,13 +243,7 @@ function main(): number {
 
   const parsedVersion = parseReleaseVersion(pkg.version ?? "");
   const channel = parsedVersion?.channel ?? "unknown";
-  const dayDistance =
-    parsedVersion === null
-      ? "unknown"
-      : String(utcCalendarDayDistance(parsedVersion.date, new Date()));
-  console.log(
-    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
-  );
+  console.log(`openclaw-npm-release-check: validated ${channel} release ${pkg.version}.`);
   return 0;
 }
 

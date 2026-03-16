@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,6 +16,7 @@ import {
   loadMemoryStoreSnapshot,
   storeIntegratedMemoryEntry,
   retrieveMemoryContextPacket,
+  MEMORY_SYSTEM_DIRNAME,
   type MemoryContextPacket,
   type MemoryCategory,
   type MemorySourceType,
@@ -200,7 +203,9 @@ export function createMemoryGetTool(options: {
             loadMetadata: () => loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
             loadSnapshot: () => loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
           });
-          return jsonResult(resolveIntegratedMemoryReadResult(snapshot, relPath));
+          return jsonResult(
+            await resolveIntegratedMemoryReadResult(snapshot, workspaceDir, relPath),
+          );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           return jsonResult({ path: relPath, text: "", disabled: true, error: message });
@@ -231,15 +236,32 @@ export function createMemoryStoreTool(options: {
           const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
           const sessionId = options.agentSessionKey ?? agentId;
           const backendKind = resolveIntegratedMemoryBackendKind();
-          const stored = await storeIntegratedMemoryEntry({
+          const plan = await prepareMemoryStorePlan({
             workspaceDir,
             sessionId,
-            backendKind,
             text,
             category,
             importanceClass,
             sourceType,
           });
+          const storedEntries = [];
+          for (const item of plan.entries) {
+            storedEntries.push(
+              await storeIntegratedMemoryEntry({
+                workspaceDir,
+                sessionId,
+                backendKind,
+                text: item.text,
+                category: item.category,
+                importanceClass: item.importanceClass,
+                sourceType: item.sourceType,
+                evidence: item.evidence,
+                artifactRefs: item.artifactRefs,
+                provenanceDetail: item.provenanceDetail,
+              }),
+            );
+          }
+          const stored = storedEntries[0];
           primeMemoryStoreSnapshot({
             workspaceDir,
             sessionId,
@@ -260,6 +282,12 @@ export function createMemoryStoreTool(options: {
             provider: "mindclaw-memory",
             mode: "integrated-memory",
             path,
+            paths: storedEntries.map(
+              (entry) => `${MINDCLAW_MEMORY_PREFIX}long-term/${encodeURIComponent(entry.entry.id)}`,
+            ),
+            storedCount: storedEntries.length,
+            rawArtifactPath: plan.rawArtifactPath,
+            distilled: plan.distilled,
             text: stored.entry.text,
             category: stored.entry.category,
             importanceClass: stored.entry.importanceClass,
@@ -488,10 +516,11 @@ function hashMemoryText(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
-function resolveIntegratedMemoryReadResult(
+async function resolveIntegratedMemoryReadResult(
   snapshot: Awaited<ReturnType<typeof loadMemoryStoreSnapshot>>,
+  workspaceDir: string,
   relPath: string,
-): { path: string; text: string } {
+): Promise<{ path: string; text: string }> {
   if (!relPath.startsWith(MINDCLAW_MEMORY_PREFIX)) {
     throw new Error(
       `unsupported memory path: ${relPath}. Use a pseudo-path returned by memory_search from the integrated memory store.`,
@@ -520,6 +549,10 @@ function resolveIntegratedMemoryReadResult(
     const node = findPermanentNodeByHash(snapshot.permanentMemory, key);
     return { path: relPath, text: node?.summary ?? "" };
   }
+  if (kind === "artifacts") {
+    const artifactText = await readIntegratedMemoryArtifact(workspaceDir, decodeURIComponent(key));
+    return { path: relPath, text: artifactText };
+  }
   throw new Error(`unsupported integrated memory path kind: ${kind}`);
 }
 
@@ -537,6 +570,144 @@ function findPermanentNodeByHash(
     }
   }
   return undefined;
+}
+
+type MemoryStorePlan = {
+  distilled: boolean;
+  rawArtifactPath?: string;
+  entries: Array<{
+    text: string;
+    category?: MemoryCategory;
+    importanceClass?: "critical" | "useful";
+    sourceType?: MemorySourceType;
+    evidence?: string[];
+    artifactRefs?: string[];
+    provenanceDetail?: string;
+  }>;
+};
+
+async function prepareMemoryStorePlan(params: {
+  workspaceDir: string;
+  sessionId: string;
+  text: string;
+  category?: MemoryCategory;
+  importanceClass?: "critical" | "useful";
+  sourceType?: MemorySourceType;
+}): Promise<MemoryStorePlan> {
+  const normalized = params.text.trim();
+  if (isLikelyDistilledMemoryText(normalized)) {
+    return {
+      distilled: true,
+      entries: [
+        {
+          text: normalized,
+          category: params.category,
+          importanceClass: params.importanceClass,
+          sourceType: params.sourceType,
+        },
+      ],
+    };
+  }
+
+  const artifactPath = await writeIntegratedMemoryArtifact({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    text: normalized,
+  });
+  const artifactRef = `${MEMORY_SYSTEM_DIRNAME}/artifacts/${decodeURIComponent(artifactPath.split("/").at(-1) ?? "")}`;
+  const distilledEntries = distillMemoryKnowledge(normalized);
+  const effectiveEntries =
+    distilledEntries.length > 0 ? distilledEntries : [clipSnippet(normalized)];
+  return {
+    distilled: false,
+    rawArtifactPath: artifactPath,
+    entries: effectiveEntries.map((entryText) => ({
+      text: entryText,
+      category: params.category,
+      importanceClass: params.importanceClass,
+      sourceType: params.sourceType ?? "summary_derived",
+      evidence: [clipSnippet(normalized)],
+      artifactRefs: [artifactRef],
+      provenanceDetail: clipSnippet(normalized),
+    })),
+  };
+}
+
+function isLikelyDistilledMemoryText(text: string): boolean {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return true;
+  }
+  if (normalized.length <= 280) {
+    return true;
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const bulletLikeCount = lines.filter((line) => /^([-*•]|\d+[.)])\s+/.test(line)).length;
+  if (lines.length > 1 && lines.length <= 8 && bulletLikeCount >= Math.ceil(lines.length / 2)) {
+    return true;
+  }
+  const sentenceCount = normalized.split(/(?<=[.!?])\s+/).filter(Boolean).length;
+  return sentenceCount <= 3 && normalized.length <= 420;
+}
+
+function distillMemoryKnowledge(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const title =
+    lines.find((line) => !/^([-*•]|\d+[.)])\s+/.test(line) && line.length <= 90) ?? undefined;
+  const bulletCandidates = lines
+    .filter((line) => /^([-*•]|\d+[.)])\s+/.test(line))
+    .map((line) => line.replace(/^([-*•]|\d+[.)])\s+/, "").trim())
+    .filter((line) => line.length >= 18);
+  const sentenceCandidates =
+    bulletCandidates.length > 0
+      ? bulletCandidates
+      : normalized
+          .split(/(?<=[.!?])\s+/)
+          .map((line) => line.trim())
+          .filter((line) => line.length >= 24);
+  const unique = Array.from(
+    new Set(sentenceCandidates.map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean)),
+  ).slice(0, 6);
+  return unique.map((line) => {
+    const compact = clipSnippet(line);
+    if (!title || compact.toLowerCase().includes(title.toLowerCase())) {
+      return compact;
+    }
+    return clipSnippet(`${title}: ${compact}`);
+  });
+}
+
+async function writeIntegratedMemoryArtifact(params: {
+  workspaceDir: string;
+  sessionId: string;
+  text: string;
+}): Promise<string> {
+  const artifactsDir = path.join(params.workspaceDir, MEMORY_SYSTEM_DIRNAME, "artifacts");
+  await fs.mkdir(artifactsDir, { recursive: true });
+  const safeSessionId = params.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  const hash = createHash("sha256").update(params.text).digest("hex").slice(0, 16);
+  const fileName = `${safeSessionId}-${hash}.md`;
+  await fs.writeFile(path.join(artifactsDir, fileName), `${params.text.trim()}\n`, "utf8");
+  return `${MINDCLAW_MEMORY_PREFIX}artifacts/${encodeURIComponent(fileName)}`;
+}
+
+async function readIntegratedMemoryArtifact(
+  workspaceDir: string,
+  fileName: string,
+): Promise<string> {
+  const artifactsDir = path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME, "artifacts");
+  const resolved = path.resolve(artifactsDir, fileName);
+  if (!resolved.startsWith(path.resolve(artifactsDir) + path.sep)) {
+    throw new Error(`unsupported integrated memory artifact path: ${fileName}`);
+  }
+  return fs.readFile(resolved, "utf8");
 }
 
 function buildMemorySearchUnavailableResult(error: string | undefined) {

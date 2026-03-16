@@ -177,18 +177,87 @@ describe("memory tools", () => {
       config: cfg,
       agentSessionKey: "session-main",
     });
-    const getResult = await getTool.execute("call_store_get", { path: stored.path });
-    expect((getResult.details as { text: string }).text).toContain("compliance notes");
-
     const searchTool = createMemorySearchToolOrThrow({
       config: cfg,
       agentSessionKey: "session-main",
     });
+    const getResult = await getTool.execute("call_store_get", { path: stored.path });
+    expect((getResult.details as { text: string }).text).toContain("compliance notes");
+
     const searchResult = await searchTool.execute("call_store_search", {
       query: "compliance notes",
     });
     const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
     expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
+  });
+
+  it("stores long source text as a raw artifact while persisting distilled memory entries", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const storeTool = createMemoryStoreToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const getTool = createMemoryGetToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+
+    const longLesson = [
+      "Affiliate Marketing Lesson 7",
+      "",
+      "The core lesson is that a casino affiliate funnel converts better when compliance review happens before creative scaling.",
+      "Keep the landing pages narrow, keep the intent explicit, and do not expand into adjacent offers until the first compliant flow is profitable.",
+      "A second important point is that email follow-up should reinforce the same offer sequence instead of introducing new angles too early.",
+    ].join("\n");
+
+    const storeResult = await storeTool.execute("call_store_long_text", {
+      text: longLesson,
+      category: "strategy",
+      importanceClass: "useful",
+    });
+    const stored = storeResult.details as {
+      path: string;
+      paths: string[];
+      rawArtifactPath?: string;
+      storedCount: number;
+      distilled: boolean;
+      text: string;
+    };
+    expect(stored.distilled).toBe(false);
+    expect(stored.storedCount).toBeGreaterThan(0);
+    expect(stored.rawArtifactPath).toMatch(/^mindclaw_memory:\/\/artifacts\//);
+    expect(stored.text.length).toBeLessThan(longLesson.length);
+
+    const rawArtifact = await getTool.execute("call_get_long_raw", {
+      path: stored.rawArtifactPath,
+    });
+    expect((rawArtifact.details as { text: string }).text).toContain(
+      "casino affiliate funnel converts better",
+    );
+    expect((rawArtifact.details as { text: string }).text).toContain(
+      "email follow-up should reinforce the same offer sequence",
+    );
+
+    const distilledEntries = await Promise.all(
+      stored.paths.map((memoryPath, index) =>
+        getTool.execute(`call_get_long_distilled_${index}`, {
+          path: memoryPath,
+        }),
+      ),
+    );
+    const distilledTexts = distilledEntries.map(
+      (entry) => (entry.details as { text: string }).text,
+    );
+    expect(
+      distilledTexts.some(
+        (text) =>
+          text.includes("compliant flow is profitable") ||
+          text.includes("email follow-up should reinforce"),
+      ),
+    ).toBe(true);
+    expect(distilledTexts.every((text) => text.length < longLesson.length)).toBe(true);
   });
 
   it("invalidates cached misses after memory_store so the next search sees new memory immediately", async () => {

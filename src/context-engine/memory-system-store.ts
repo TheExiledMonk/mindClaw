@@ -213,6 +213,9 @@ export type ExplicitMemoryStoreParams = {
   category?: MemoryCategory;
   importanceClass?: "critical" | "useful";
   sourceType?: MemorySourceType;
+  evidence?: string[];
+  artifactRefs?: string[];
+  provenanceDetail?: string;
   backendKind?: MemoryStoreBackendKind;
 };
 
@@ -11157,6 +11160,9 @@ function buildExplicitLongTermMemoryEntry(params: {
   category?: MemoryCategory;
   importanceClass?: "critical" | "useful";
   sourceType?: MemorySourceType;
+  evidence?: string[];
+  artifactRefs?: string[];
+  provenanceDetail?: string;
 }): LongTermMemoryEntry {
   const normalized = clipText(params.text.trim(), 260);
   const category = params.category ?? detectCandidateCategory(normalized) ?? "fact";
@@ -11187,8 +11193,13 @@ function buildExplicitLongTermMemoryEntry(params: {
       importanceClass === "critical"
         ? Math.min(1, baseStrengthForCategory(category) + 0.08)
         : baseStrengthForCategory(category),
-    evidence: [normalized],
-    provenance: [createProvenanceRecord("message", normalized)],
+    evidence: uniqueStrings([normalized, ...(params.evidence ?? [])]),
+    provenance: [
+      createProvenanceRecord(
+        params.sourceType === "summary_derived" ? "derived" : "message",
+        params.provenanceDetail ?? normalized,
+      ),
+    ],
     sourceType,
     confidence:
       sourceType === "direct_observation"
@@ -11216,7 +11227,7 @@ function buildExplicitLongTermMemoryEntry(params: {
     relatedMemoryIds: [],
     relations: [],
     environmentTags: [],
-    artifactRefs: [],
+    artifactRefs: uniqueStrings(params.artifactRefs ?? []),
     updatedAt: now,
   };
   return sanitizeLongTermEntry(entry);
@@ -11236,6 +11247,9 @@ export async function storeIntegratedMemoryEntry(params: ExplicitMemoryStorePara
     category: params.category,
     importanceClass: params.importanceClass,
     sourceType: params.sourceType,
+    evidence: params.evidence,
+    artifactRefs: params.artifactRefs,
+    provenanceDetail: params.provenanceDetail,
   });
   const existed = snapshot.longTermMemory.some(
     (entry) =>

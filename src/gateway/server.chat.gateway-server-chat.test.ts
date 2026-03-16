@@ -152,6 +152,18 @@ describe("gateway server chat", () => {
     return res;
   };
 
+  const sendChatNewAndExpectSummary = async (runId: string) => {
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "/new",
+      idempotencyKey: runId,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("started");
+    expect(res.payload?.summary).toContain("Starting a fresh session");
+    return res;
+  };
+
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {
       runId,
@@ -617,6 +629,15 @@ describe("gateway server chat", () => {
       } finally {
         releaseBlockedReply();
       }
+    });
+  });
+
+  test("chat.send includes a startup hint for bare /new", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-chat-new-summary";
+      const res = await sendChatNewAndExpectSummary(runId);
+      expect(res.payload?.summary).toContain("Loading workspace instructions and memory");
+      await waitForAgentRunOk(runId);
     });
   });
 

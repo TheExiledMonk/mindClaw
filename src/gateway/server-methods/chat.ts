@@ -75,6 +75,10 @@ type TranscriptAppendResult = {
   error?: string;
 };
 
+const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const BARE_SESSION_RESET_PENDING_SUMMARY =
+  "Starting a fresh session. Loading workspace instructions and memory; first reply may take a few seconds.";
+
 type AbortOrigin = "rpc" | "stop-command";
 
 type AbortedPartialSnapshot = {
@@ -1220,6 +1224,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
+        summary: (() => {
+          const match = parsedMessage.trim().match(RESET_COMMAND_RE);
+          return match && !match[2]?.trim() ? BARE_SESSION_RESET_PENDING_SUMMARY : undefined;
+        })(),
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 

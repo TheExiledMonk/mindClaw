@@ -65,6 +65,8 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const BARE_SESSION_RESET_PENDING_SUMMARY =
+  "Starting a fresh session. Loading workspace instructions and memory; first reply may take a few seconds.";
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -565,6 +567,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       runId,
       status: "accepted" as const,
       acceptedAt: Date.now(),
+      summary:
+        skipTimestampInjection && resetCommandMatch && !resetCommandMatch[2]?.trim()
+          ? BARE_SESSION_RESET_PENDING_SUMMARY
+          : undefined,
     };
     // Store an in-flight ack so retries do not spawn a second run.
     setGatewayDedupeEntry({

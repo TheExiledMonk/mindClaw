@@ -569,7 +569,7 @@ describe("gateway agent handler", () => {
 
     primeMainAgentRun({ sessionId: "reset-session-id" });
 
-    await invokeAgent(
+    const respond = await invokeAgent(
       {
         message: "/new",
         sessionKey: "agent:main:main",
@@ -578,6 +578,15 @@ describe("gateway agent handler", () => {
       { reqId: "4" },
     );
 
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "accepted",
+        summary: expect.stringContaining("Starting a fresh session"),
+      }),
+      undefined,
+      expect.objectContaining({ runId: expect.any(String) }),
+    );
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();

@@ -120,6 +120,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("failure_learning_status=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("capability_gap_status=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("dominant_capability_gap=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("blocked_work_status=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("dominant_blocked_work=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain("partial_success_status=");
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "execution_efficiency_status=",
+    );
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("effectiveness=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_classes=");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain("clarification_profile=");
@@ -164,6 +170,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Capability gap status:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Dominant capability gap:",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Blocked work status:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Dominant blocked work:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Partial success status:");
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Execution efficiency status:",
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain("Stabilized skills:");
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
@@ -264,6 +276,15 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
       "dominant_capability_gap=none",
     );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "blocked_work_status=none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "partial_success_status=none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "summary")).toContain(
+      "execution_efficiency_status=efficient",
+    );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Workspace kind: project",
     );
@@ -290,6 +311,15 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
       "Dominant capability gap: none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Blocked work status: none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Partial success status: none",
+    );
+    expect(formatAgenticQualityGateReport(protectedReport, "markdown")).toContain(
+      "Execution efficiency status: efficient",
     );
 
     const validationThinState = buildAgenticExecutionState({
@@ -963,6 +993,10 @@ describe("agentic quality gate", () => {
         learnFromFailure: false,
         failureReasons: [],
         missingCapabilities: [],
+        errorTaxonomy: [],
+        blockedWorkLabels: [],
+        partialSuccessSignals: [],
+        inefficientSuccessSignals: [],
       },
     });
     const templateReport = runAgenticQualityGate({
@@ -1067,6 +1101,10 @@ describe("agentic quality gate", () => {
         learnFromFailure: false,
         failureReasons: [],
         missingCapabilities: [],
+        errorTaxonomy: [],
+        blockedWorkLabels: [],
+        partialSuccessSignals: [],
+        inefficientSuccessSignals: [],
       },
     });
     const mergeReport = runAgenticQualityGate({
@@ -1171,6 +1209,10 @@ describe("agentic quality gate", () => {
         learnFromFailure: false,
         failureReasons: [],
         missingCapabilities: [],
+        errorTaxonomy: [],
+        blockedWorkLabels: [],
+        partialSuccessSignals: [],
+        inefficientSuccessSignals: [],
       },
     });
     const templateReport = runAgenticQualityGate({
@@ -1320,6 +1362,10 @@ describe("agentic quality gate", () => {
         learnFromFailure: true,
         failureReasons: ["verification_failure"],
         missingCapabilities: [],
+        errorTaxonomy: ["verification_failure", "blocked_execution"],
+        blockedWorkLabels: ["verification_stall"],
+        partialSuccessSignals: [],
+        inefficientSuccessSignals: [],
       },
     });
     const failureDerivedMergeReport = runAgenticQualityGate({
@@ -1428,6 +1474,10 @@ describe("agentic quality gate", () => {
         learnFromFailure: true,
         failureReasons: ["verification_failure"],
         missingCapabilities: [],
+        errorTaxonomy: ["verification_failure", "partial_success"],
+        blockedWorkLabels: [],
+        partialSuccessSignals: ["verification_incomplete", "goal_unresolved"],
+        inefficientSuccessSignals: [],
       },
     });
     const failureDerivedTemplateReport = runAgenticQualityGate({
@@ -1504,6 +1554,10 @@ describe("agentic quality gate", () => {
     expect(report.failureLearningStatus).toBe("hard_failure");
     expect(report.capabilityGapStatus).toBe("present");
     expect(report.dominantCapabilityGap).toBe("no_viable_fallback");
+    expect(report.blockedWorkStatus).toBe("present");
+    expect(report.dominantBlockedWorkLabel).toBe("no_viable_fallback");
+    expect(report.partialSuccessStatus).toBe("none");
+    expect(report.executionEfficiencyStatus).toBe("efficient");
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "failure_learning_status=hard_failure",
     );
@@ -1513,6 +1567,12 @@ describe("agentic quality gate", () => {
     expect(formatAgenticQualityGateReport(report, "summary")).toContain(
       "dominant_capability_gap=no_viable_fallback",
     );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "blocked_work_status=present",
+    );
+    expect(formatAgenticQualityGateReport(report, "summary")).toContain(
+      "dominant_blocked_work=no_viable_fallback",
+    );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Failure learning status: hard_failure",
     );
@@ -1521,6 +1581,117 @@ describe("agentic quality gate", () => {
     );
     expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
       "Dominant capability gap: no_viable_fallback",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Blocked work status: present",
+    );
+    expect(formatAgenticQualityGateReport(report, "markdown")).toContain(
+      "Dominant blocked work: no_viable_fallback",
+    );
+  });
+
+  it("surfaces partial-success and inefficient-success rollups in the quality gate", () => {
+    const partialState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content: "Finish the deployment workflow and verify the final rollout.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Reviewed the deployment workflow and current configuration requirements.",
+        },
+      ],
+    });
+    const inefficientSuccessState = buildAgenticExecutionState({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, recover with the strongest fallback, rerun validation, and finish cleanly.",
+          timestamp: Date.now(),
+        },
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary:
+            "Ran diagnostics validation successfully through the acceptance-report fallback workflow.",
+        },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 2,
+          maxAttempts: 3,
+          summary: "Recovered after switching to the stronger fallback workflow.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary:
+            "Diagnostics workflow fixed, validation rerun completed, and final summary prepared.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+
+    const partialReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(partialState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+    const inefficientSuccessReport = runAgenticQualityGate({
+      diagnosticsOverride: inspectAgenticExecutionObservability(inefficientSuccessState),
+      acceptanceOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic acceptance 0/0 passed",
+      },
+      soakOverride: {
+        passed: true,
+        totalScenarios: 0,
+        passedScenarios: 0,
+        failedScenarioIds: [],
+        scenarios: [],
+        summary: "agentic soak 0/0 passed",
+      },
+    });
+
+    expect(partialReport.partialSuccessStatus).toBe("present");
+    expect(partialReport.executionEfficiencyStatus).toBe("efficient");
+    expect(partialReport.recommendations).toContain(
+      "Partial-success evidence remains open: execution_only.",
+    );
+    expect(inefficientSuccessReport.partialSuccessStatus).toBe("none");
+    expect(inefficientSuccessReport.executionEfficiencyStatus).toBe("inefficient");
+    expect(inefficientSuccessReport.recommendations).toContain(
+      "Successful path is still inefficient: multiple_attempt_recovery.",
     );
   });
 });

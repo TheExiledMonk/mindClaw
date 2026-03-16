@@ -43,6 +43,28 @@ export type AgenticFailureClass =
   | "environment_mismatch"
   | "unknown";
 
+export type AgenticFailureTaxonomy =
+  | "verification_failure"
+  | "tool_failure"
+  | "prompt_failure"
+  | "missing_information"
+  | "environment_mismatch"
+  | "blocked_execution"
+  | "fallback_gap"
+  | "repeated_failure"
+  | "partial_success"
+  | "inefficient_success";
+
+export type AgenticBlockedWorkLabel =
+  | "environment_variable"
+  | "approval"
+  | "external_input"
+  | "file_or_input"
+  | "environment_mismatch"
+  | "no_viable_fallback"
+  | "repeated_failure"
+  | "verification_stall";
+
 export type AgenticPlanStepStatus = "pending" | "in_progress" | "completed" | "blocked";
 
 export type AgenticPlanStep = {
@@ -168,6 +190,10 @@ export type AgenticFailureLearningState = {
   learnFromFailure: boolean;
   failureReasons: string[];
   missingCapabilities: string[];
+  errorTaxonomy: AgenticFailureTaxonomy[];
+  blockedWorkLabels: AgenticBlockedWorkLabel[];
+  partialSuccessSignals: string[];
+  inefficientSuccessSignals: string[];
 };
 
 export type ProceduralExecutionRecord = {
@@ -224,6 +250,10 @@ export type ProceduralExecutionRecord = {
   failurePattern: "clean_success" | "near_miss" | "blocked_path" | "hard_failure";
   learnFromFailure: boolean;
   failureReasons: string[];
+  errorTaxonomy: AgenticFailureTaxonomy[];
+  blockedWorkLabels: AgenticBlockedWorkLabel[];
+  partialSuccessSignals: string[];
+  inefficientSuccessSignals: string[];
   nextImprovement?: string;
 };
 
@@ -250,6 +280,10 @@ export type AgenticExecutionObservabilityReport = {
   mergeSkills: string[];
   capabilityGaps: string[];
   failurePattern: AgenticFailureLearningState["failurePattern"];
+  errorTaxonomy: AgenticFailureLearningState["errorTaxonomy"];
+  blockedWorkLabels: AgenticFailureLearningState["blockedWorkLabels"];
+  partialSuccessSignals: AgenticFailureLearningState["partialSuccessSignals"];
+  inefficientSuccessSignals: AgenticFailureLearningState["inefficientSuccessSignals"];
   hasViableFallback: boolean;
   escalationRequired: boolean;
   planSteps: AgenticPlanStep[];
@@ -437,6 +471,10 @@ export type AgenticQualityGateReport = {
   failureLearningStatus: AgenticFailureLearningState["failurePattern"];
   capabilityGapStatus: "none" | "present";
   dominantCapabilityGap?: string;
+  blockedWorkStatus: "none" | "present";
+  dominantBlockedWorkLabel?: AgenticBlockedWorkLabel;
+  partialSuccessStatus: "none" | "present";
+  executionEfficiencyStatus: "efficient" | "inefficient";
   acceptance: AgenticAcceptanceReport;
   soak: AgenticSoakReport;
   diagnostics: AgenticExecutionObservabilityReport;
@@ -794,12 +832,23 @@ function deriveQualityFailureLearningRollups(
   diagnostics: AgenticExecutionObservabilityReport,
 ): Pick<
   AgenticQualityGateReport,
-  "failureLearningStatus" | "capabilityGapStatus" | "dominantCapabilityGap"
+  | "failureLearningStatus"
+  | "capabilityGapStatus"
+  | "dominantCapabilityGap"
+  | "blockedWorkStatus"
+  | "dominantBlockedWorkLabel"
+  | "partialSuccessStatus"
+  | "executionEfficiencyStatus"
 > {
   return {
     failureLearningStatus: diagnostics.failurePattern,
     capabilityGapStatus: diagnostics.capabilityGaps.length > 0 ? "present" : "none",
     dominantCapabilityGap: diagnostics.capabilityGaps[0],
+    blockedWorkStatus: diagnostics.blockedWorkLabels.length > 0 ? "present" : "none",
+    dominantBlockedWorkLabel: diagnostics.blockedWorkLabels[0],
+    partialSuccessStatus: diagnostics.partialSuccessSignals.length > 0 ? "present" : "none",
+    executionEfficiencyStatus:
+      diagnostics.inefficientSuccessSignals.length > 0 ? "inefficient" : "efficient",
   };
 }
 
@@ -816,7 +865,7 @@ function extractRecommendedProceduralSkills(memoryText?: string): string[] {
       .split("\n")
       .map((line) => line.replace(/^\s*-\s+/, "").trim())
       .filter(Boolean),
-    6,
+    10,
   );
 }
 
@@ -978,7 +1027,7 @@ function extractProceduralMemorySkillSignals(params: {
       const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
       return skill && availableSkills.includes(skill) ? [skill] : [];
     }),
-    6,
+    10,
   );
   for (const line of recoveryLines) {
     const skill = line.match(/skill=([a-z0-9._-]+)/i)?.[1]?.trim();
@@ -1651,24 +1700,34 @@ function buildPlannerState(params: {
     Boolean(likelyPrimaryFamily) &&
     memoryRegressionSignals.templatePreferredFamilies.includes(likelyPrimaryFamily ?? "");
   const suggestedSkill = mergeFamilyFallbackSkills[0] ?? alternativeSkills[0];
-  const shouldEscalate =
-    retryFailures.length > 0 || dominantFailureClass === "environment_mismatch";
+  const environmentMismatch = dominantFailureClass === "environment_mismatch";
+  const fallbackExplicitlyRequested =
+    /\b(fallback|alternative (?:workflow|path|execution path)|viable workflow)\b/i.test(
+      params.objective ?? "",
+    );
+  const lowConfidenceBlockedPath =
+    params.verificationState.outcome === "blocked" &&
+    dominantFailureClass !== "missing_information" &&
+    dominantFailureClass !== "verification_failure" &&
+    !environmentMismatch &&
+    alternativeSkills.length === 0 &&
+    fallbackExplicitlyRequested;
+  const shouldEscalate = retryFailures.length > 0 || lowConfidenceBlockedPath;
   const escalationReason: AgenticEscalationReason | undefined =
     retryFailures.length > 0
       ? "repeated_failure"
-      : dominantFailureClass === "environment_mismatch"
-        ? "environment_mismatch"
-        : params.verificationState.outcome === "blocked" &&
-            dominantFailureClass !== "missing_information"
-          ? "low_confidence"
-          : undefined;
+      : lowConfidenceBlockedPath
+        ? "low_confidence"
+        : undefined;
   const retryClass: AgenticRetryClass = shouldEscalate
     ? "escalate"
     : blockingMissingInformation
       ? "clarify"
-      : suggestedSkill
-        ? "skill_fallback"
-        : "same_path_retry";
+      : environmentMismatch
+        ? "environment_fix"
+        : suggestedSkill
+          ? "skill_fallback"
+          : "same_path_retry";
   if (checkpointSignals.some((signal) => signal.kind === "completion")) {
     return {
       version: 1,
@@ -1706,17 +1765,19 @@ function buildPlannerState(params: {
         ? `Escalate or unblock the current failure before continuing.${fallbackHint}`.trim()
         : blockingMissingInformation
           ? buildClarificationNextAction(clarificationReason)
-          : mergeFamilyFallbackSkills.length > 0
-            ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${mergeFallbackHint}${fallbackHint}`.trim()
-            : templateFamilyActive
-              ? `Do not spawn a new fork for this blocker.${templateGuidanceHint}${fallbackHint}`.trim()
-              : suggestedSkill
-                ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${fallbackHint}`.trim()
-                : dominantFailureClass === "verification_failure"
-                  ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
-                  : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
+          : environmentMismatch
+            ? `Repair the environment or permission mismatch before retrying.${fallbackHint}`.trim()
+            : mergeFamilyFallbackSkills.length > 0
+              ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${mergeFallbackHint}${fallbackHint}`.trim()
+              : templateFamilyActive
+                ? `Do not spawn a new fork for this blocker.${templateGuidanceHint}${fallbackHint}`.trim()
+                : suggestedSkill
+                  ? `Switch to a fallback workflow using ${suggestedSkill} before retrying.${fallbackHint}`.trim()
+                  : dominantFailureClass === "verification_failure"
+                    ? `Do not repeat the same failing validation path; change the implementation strategy before retrying.${fallbackHint}`.trim()
+                    : `Replan around the current blocker and try a different execution path.${fallbackHint}`.trim(),
       rationale: dominantFailureClass
-        ? `${dominantFailureClass}: ${params.blockers[0]}${rationaleSuffix ? `; ${rationaleSuffix}` : ""}`
+        ? `${dominantFailureClass}: ${params.blockers[0]}${environmentMismatch ? "; environment-repair-guidance" : ""}${rationaleSuffix ? `; ${rationaleSuffix}` : ""}`
         : params.blockers[0],
       alternativeSkills,
       retryClass,
@@ -1821,6 +1882,7 @@ function buildGovernanceState(params: {
     secretPromptDetected ||
     destructiveActionDetected ||
     params.plannerState.escalationReason === "environment_mismatch" ||
+    params.plannerState.retryClass === "environment_fix" ||
     protectedBranchApprovalGate
       ? "high"
       : missingValidationContext
@@ -2649,6 +2711,126 @@ function extractClarificationFailureReasons(blockers: string[]): string[] {
   return uniqueCompact(reasons, 4);
 }
 
+function deriveBlockedWorkLabels(params: {
+  failureReasons: string[];
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+  orchestrationState: AgenticOrchestrationState;
+}): AgenticBlockedWorkLabel[] {
+  const labels = [
+    params.failureReasons.includes("missing_information:environment_variable")
+      ? "environment_variable"
+      : undefined,
+    params.failureReasons.includes("missing_information:approval") ? "approval" : undefined,
+    params.failureReasons.includes("missing_information:external_input")
+      ? "external_input"
+      : undefined,
+    params.failureReasons.includes("missing_information:file_or_input")
+      ? "file_or_input"
+      : undefined,
+    params.failureReasons.includes("environment_mismatch") ||
+    params.plannerState.retryClass === "environment_fix" ||
+    params.plannerState.escalationReason === "environment_mismatch"
+      ? "environment_mismatch"
+      : undefined,
+    !params.orchestrationState.hasViableFallback ? "no_viable_fallback" : undefined,
+    params.plannerState.escalationReason === "repeated_failure" ? "repeated_failure" : undefined,
+    params.verificationState.outcome === "blocked" &&
+    params.plannerState.retryClass !== "clarify" &&
+    params.plannerState.retryClass !== "environment_fix"
+      ? "verification_stall"
+      : undefined,
+  ].filter((label): label is AgenticBlockedWorkLabel => Boolean(label));
+  return uniqueCompact(labels, 8) as AgenticBlockedWorkLabel[];
+}
+
+function derivePartialSuccessSignals(params: {
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+}): string[] {
+  if (params.verificationState.outcome !== "partial") {
+    return [];
+  }
+  return uniqueCompact(
+    [
+      params.verificationState.checksRun.length > 0 ? "verification_incomplete" : "execution_only",
+      params.verificationState.unresolvedCriteria.length > 0 ? "goal_unresolved" : undefined,
+      params.plannerState.retryClass === "skill_fallback" ? "fallback_recovery" : undefined,
+      params.plannerState.retryClass === "clarify" ? "blocked_by_missing_information" : undefined,
+    ],
+    6,
+  );
+}
+
+function deriveInefficientSuccessSignals(params: {
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+  retrySignals?: RetrySignal[];
+}): string[] {
+  if (params.verificationState.outcome !== "verified") {
+    return [];
+  }
+  const recoveredRetry = (params.retrySignals ?? []).find(
+    (signal) => signal.outcome === "recovered",
+  );
+  return uniqueCompact(
+    [
+      params.plannerState.retryClass === "skill_fallback"
+        ? "fallback_required_for_success"
+        : undefined,
+      params.plannerState.retryClass === "environment_fix"
+        ? "environment_repair_required_for_success"
+        : undefined,
+      recoveredRetry && typeof recoveredRetry.attempt === "number" && recoveredRetry.attempt > 1
+        ? "multiple_attempt_recovery"
+        : undefined,
+      recoveredRetry?.phase === "compaction" || recoveredRetry?.phase === "overflow"
+        ? "runtime_recovery_overhead"
+        : undefined,
+    ],
+    6,
+  );
+}
+
+function deriveFailureTaxonomy(params: {
+  verificationState: AgenticVerificationState;
+  plannerState: AgenticPlannerState;
+  orchestrationState: AgenticOrchestrationState;
+  partialSuccessSignals: string[];
+  inefficientSuccessSignals: string[];
+  blockedWorkLabels: AgenticBlockedWorkLabel[];
+}): AgenticFailureTaxonomy[] {
+  const taxonomy = [
+    ...params.verificationState.failureClasses.filter(
+      (
+        failureClass,
+      ): failureClass is Extract<
+        AgenticFailureTaxonomy,
+        | "verification_failure"
+        | "tool_failure"
+        | "prompt_failure"
+        | "missing_information"
+        | "environment_mismatch"
+      > =>
+        [
+          "verification_failure",
+          "tool_failure",
+          "prompt_failure",
+          "missing_information",
+          "environment_mismatch",
+        ].includes(failureClass),
+    ),
+    params.verificationState.outcome === "blocked" || params.blockedWorkLabels.length > 0
+      ? "blocked_execution"
+      : undefined,
+    !params.orchestrationState.hasViableFallback ? "fallback_gap" : undefined,
+    params.plannerState.escalationReason === "repeated_failure" ? "repeated_failure" : undefined,
+    params.partialSuccessSignals.length > 0 ? "partial_success" : undefined,
+    params.inefficientSuccessSignals.length > 0 ? "inefficient_success" : undefined,
+  ].filter((entry): entry is AgenticFailureTaxonomy => Boolean(entry));
+  return uniqueCompact(taxonomy, 10) as AgenticFailureTaxonomy[];
+}
+
 function getPrimaryClarificationReason(blockers: string[]): string | undefined {
   return extractClarificationFailureReasons(blockers)[0];
 }
@@ -2783,6 +2965,7 @@ function buildFailureLearningState(params: {
   orchestrationState: AgenticOrchestrationState;
   blockers: string[];
   memoryRegressionSignals?: AgenticRegressionMemorySignal;
+  retrySignals?: RetrySignal[];
 }): AgenticFailureLearningState {
   const failurePattern: AgenticFailureLearningState["failurePattern"] =
     params.verificationState.outcome === "verified"
@@ -2790,7 +2973,9 @@ function buildFailureLearningState(params: {
       : params.plannerState.retryClass === "skill_fallback" ||
           params.verificationState.outcome === "partial"
         ? "near_miss"
-        : params.plannerState.shouldEscalate || params.verificationState.outcome === "blocked"
+        : params.plannerState.retryClass === "clarify" ||
+            params.plannerState.retryClass === "environment_fix" ||
+            params.verificationState.outcome === "blocked"
           ? "blocked_path"
           : "hard_failure";
   const failureReasons = uniqueCompact(
@@ -2810,6 +2995,29 @@ function buildFailureLearningState(params: {
     ],
     8,
   );
+  const blockedWorkLabels = deriveBlockedWorkLabels({
+    failureReasons,
+    verificationState: params.verificationState,
+    plannerState: params.plannerState,
+    orchestrationState: params.orchestrationState,
+  });
+  const partialSuccessSignals = derivePartialSuccessSignals({
+    verificationState: params.verificationState,
+    plannerState: params.plannerState,
+  });
+  const inefficientSuccessSignals = deriveInefficientSuccessSignals({
+    verificationState: params.verificationState,
+    plannerState: params.plannerState,
+    retrySignals: params.retrySignals,
+  });
+  const errorTaxonomy = deriveFailureTaxonomy({
+    verificationState: params.verificationState,
+    plannerState: params.plannerState,
+    orchestrationState: params.orchestrationState,
+    partialSuccessSignals,
+    inefficientSuccessSignals,
+    blockedWorkLabels,
+  });
   return {
     version: 1,
     failurePattern,
@@ -2822,6 +3030,10 @@ function buildFailureLearningState(params: {
       ],
       8,
     ),
+    errorTaxonomy,
+    blockedWorkLabels,
+    partialSuccessSignals,
+    inefficientSuccessSignals,
   };
 }
 
@@ -3092,13 +3304,6 @@ export function buildAgenticExecutionState(params: {
     objective: taskState.objective,
     activeArtifacts,
   });
-  const failureLearningState = buildFailureLearningState({
-    verificationState,
-    plannerState,
-    orchestrationState,
-    blockers,
-    memoryRegressionSignals,
-  });
   const orchestrationReconciledPlannerState = reconcilePlannerStateWithOrchestration({
     plannerState,
     orchestrationState,
@@ -3110,6 +3315,14 @@ export function buildAgenticExecutionState(params: {
     environmentState,
     taskState,
     verificationState,
+  });
+  const failureLearningState = buildFailureLearningState({
+    verificationState,
+    plannerState: reconciledPlannerState,
+    orchestrationState,
+    blockers,
+    memoryRegressionSignals,
+    retrySignals: params.retrySignals,
   });
   const governanceState = buildGovernanceState({
     messages: params.messages,
@@ -3224,6 +3437,22 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
       ? `Branch conventions: ${state.environmentState.branchConventions.join(", ")}`
       : undefined;
   const failureLearningGuidance = `Failure pattern: ${state.failureLearningState.failurePattern}`;
+  const errorTaxonomyGuidance =
+    state.failureLearningState.errorTaxonomy.length > 0
+      ? `Error taxonomy: ${state.failureLearningState.errorTaxonomy.join(", ")}`
+      : undefined;
+  const blockedWorkGuidance =
+    state.failureLearningState.blockedWorkLabels.length > 0
+      ? `Blocked work: ${state.failureLearningState.blockedWorkLabels.join(", ")}`
+      : undefined;
+  const partialSuccessGuidance =
+    state.failureLearningState.partialSuccessSignals.length > 0
+      ? `Partial success signals: ${state.failureLearningState.partialSuccessSignals.join(", ")}`
+      : undefined;
+  const inefficientSuccessGuidance =
+    state.failureLearningState.inefficientSuccessSignals.length > 0
+      ? `Inefficient success signals: ${state.failureLearningState.inefficientSuccessSignals.join(", ")}`
+      : undefined;
   const lines = [
     "## Execution State",
     state.taskState.objective ? `Objective: ${state.taskState.objective}` : undefined,
@@ -3266,6 +3495,10 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     permissionSignalsGuidance,
     branchConventionsGuidance,
     failureLearningGuidance,
+    errorTaxonomyGuidance,
+    blockedWorkGuidance,
+    partialSuccessGuidance,
+    inefficientSuccessGuidance,
     state.plannerState.nextAction ? `Next action: ${state.plannerState.nextAction}` : undefined,
     fallbackSkillGuidance,
     antiRepeatGuidance,
@@ -3394,6 +3627,10 @@ export function buildProceduralExecutionRecord(params: {
     nextImprovement = `Prefer ${consolidationAction} rather than creating a new fork${overlappingSkills.length > 0 ? ` for ${overlappingSkills.join(", ")}` : ""}.`;
   } else if (templateCandidate && likelySkills.length === 1) {
     nextImprovement = `Consider parameterizing ${likelySkills[0]} so it can cover similar jobs without duplication.`;
+  } else if (params.failureLearningState.inefficientSuccessSignals.length > 0) {
+    nextImprovement = `Document how to remove success overhead: ${params.failureLearningState.inefficientSuccessSignals.join(", ")}.`;
+  } else if (params.failureLearningState.partialSuccessSignals.length > 0) {
+    nextImprovement = `Close the remaining partial-success gaps: ${params.failureLearningState.partialSuccessSignals.join(", ")}.`;
   } else if (params.plannerState.status === "needs_replan") {
     nextImprovement = "Improve replanning guidance for this workflow before reusing it.";
   }
@@ -3452,6 +3689,10 @@ export function buildProceduralExecutionRecord(params: {
     failurePattern: params.failureLearningState.failurePattern,
     learnFromFailure: params.failureLearningState.learnFromFailure,
     failureReasons: params.failureLearningState.failureReasons,
+    errorTaxonomy: params.failureLearningState.errorTaxonomy,
+    blockedWorkLabels: params.failureLearningState.blockedWorkLabels,
+    partialSuccessSignals: params.failureLearningState.partialSuccessSignals,
+    inefficientSuccessSignals: params.failureLearningState.inefficientSuccessSignals,
     nextImprovement,
   };
 }
@@ -3477,6 +3718,15 @@ export function inspectAgenticExecutionObservability(
         : undefined,
       state.orchestrationState.capabilityGaps.length > 0
         ? `Address capability gaps: ${state.orchestrationState.capabilityGaps.join(", ")}`
+        : undefined,
+      state.failureLearningState.blockedWorkLabels.length > 0
+        ? `Unblock dominant work barriers: ${state.failureLearningState.blockedWorkLabels.join(", ")}`
+        : undefined,
+      state.failureLearningState.partialSuccessSignals.length > 0
+        ? `Treat the result as partial until these gaps close: ${state.failureLearningState.partialSuccessSignals.join(", ")}`
+        : undefined,
+      state.failureLearningState.inefficientSuccessSignals.length > 0
+        ? `Current successful path is inefficient: ${state.failureLearningState.inefficientSuccessSignals.join(", ")}`
         : undefined,
       state.orchestrationState.consolidationAction !== "none"
         ? `Prefer ${state.orchestrationState.consolidationAction} for overlapping skills${state.orchestrationState.overlappingSkills.length > 0 ? `: ${state.orchestrationState.overlappingSkills.join(", ")}` : ""}.`
@@ -3551,6 +3801,10 @@ export function inspectAgenticExecutionObservability(
     mergeSkills: state.orchestrationState.mergeSkills,
     capabilityGaps: state.orchestrationState.capabilityGaps,
     failurePattern: state.failureLearningState.failurePattern,
+    errorTaxonomy: state.failureLearningState.errorTaxonomy,
+    blockedWorkLabels: state.failureLearningState.blockedWorkLabels,
+    partialSuccessSignals: state.failureLearningState.partialSuccessSignals,
+    inefficientSuccessSignals: state.failureLearningState.inefficientSuccessSignals,
     hasViableFallback: state.orchestrationState.hasViableFallback,
     escalationRequired: state.plannerState.shouldEscalate,
     planSteps: state.taskState.planSteps,
@@ -3604,6 +3858,18 @@ export function formatAgenticExecutionObservabilityReport(
       report.mergeCandidate
         ? `merge_skills=${report.mergeSkills.length > 0 ? report.mergeSkills.join(">") : "candidate"}`
         : "merge_skills=none",
+      report.errorTaxonomy.length > 0
+        ? `error_taxonomy=${report.errorTaxonomy.join(">")}`
+        : "error_taxonomy=none",
+      report.blockedWorkLabels.length > 0
+        ? `blocked_work=${report.blockedWorkLabels.join(">")}`
+        : "blocked_work=none",
+      report.partialSuccessSignals.length > 0
+        ? `partial_success=${report.partialSuccessSignals.join(">")}`
+        : "partial_success=none",
+      report.inefficientSuccessSignals.length > 0
+        ? `inefficient_success=${report.inefficientSuccessSignals.join(">")}`
+        : "inefficient_success=none",
       `goal=${report.goalSatisfaction}`,
       `workspace_kind=${report.workspaceKind}`,
       report.repoFingerprint
@@ -3652,6 +3918,10 @@ export function formatAgenticExecutionObservabilityReport(
     `- Overlapping skills: ${report.overlappingSkills.length > 0 ? report.overlappingSkills.join(", ") : "none"}`,
     `- Merge candidate: ${report.mergeCandidate ? "yes" : "no"}`,
     `- Merge skills: ${report.mergeSkills.length > 0 ? report.mergeSkills.join(", ") : "none"}`,
+    `- Error taxonomy: ${report.errorTaxonomy.length > 0 ? report.errorTaxonomy.join(", ") : "none"}`,
+    `- Blocked work: ${report.blockedWorkLabels.length > 0 ? report.blockedWorkLabels.join(", ") : "none"}`,
+    `- Partial success: ${report.partialSuccessSignals.length > 0 ? report.partialSuccessSignals.join(", ") : "none"}`,
+    `- Inefficient success: ${report.inefficientSuccessSignals.length > 0 ? report.inefficientSuccessSignals.join(", ") : "none"}`,
     `- Goal satisfaction: ${report.goalSatisfaction}`,
     `- Workspace kind: ${report.workspaceKind}`,
     `- Repo fingerprint: ${report.repoFingerprint ?? "none"}`,
@@ -7983,6 +8253,18 @@ export function runAgenticQualityGate(params?: {
       diagnostics.riskLevel === "medium" && diagnostics.retryClass === "clarify"
         ? "Capture an observed validation command before allowing another retry on project work."
         : undefined,
+      diagnostics.retryClass === "environment_fix"
+        ? "Repair the environment mismatch before retrying the workflow."
+        : undefined,
+      diagnostics.blockedWorkLabels.length > 0
+        ? `Dominant blocked-work classes: ${diagnostics.blockedWorkLabels.join(", ")}.`
+        : undefined,
+      diagnostics.partialSuccessSignals.length > 0
+        ? `Partial-success evidence remains open: ${diagnostics.partialSuccessSignals.join(", ")}.`
+        : undefined,
+      diagnostics.inefficientSuccessSignals.length > 0
+        ? `Successful path is still inefficient: ${diagnostics.inefficientSuccessSignals.join(", ")}.`
+        : undefined,
       diagnostics.consolidationAction === "generalize_existing" &&
       diagnostics.mergeCandidate &&
       diagnostics.mergeSkills.length > 0
@@ -8031,6 +8313,10 @@ export function runAgenticQualityGate(params?: {
     failureLearningStatus: qualityFailureLearningRollups.failureLearningStatus,
     capabilityGapStatus: qualityFailureLearningRollups.capabilityGapStatus,
     dominantCapabilityGap: qualityFailureLearningRollups.dominantCapabilityGap,
+    blockedWorkStatus: qualityFailureLearningRollups.blockedWorkStatus,
+    dominantBlockedWorkLabel: qualityFailureLearningRollups.dominantBlockedWorkLabel,
+    partialSuccessStatus: qualityFailureLearningRollups.partialSuccessStatus,
+    executionEfficiencyStatus: qualityFailureLearningRollups.executionEfficiencyStatus,
     acceptance,
     soak,
     diagnostics,
@@ -8082,6 +8368,10 @@ export function formatAgenticQualityGateReport(
       `failure_learning_status=${report.failureLearningStatus}`,
       `capability_gap_status=${report.capabilityGapStatus}`,
       `dominant_capability_gap=${report.dominantCapabilityGap ?? "none"}`,
+      `blocked_work_status=${report.blockedWorkStatus}`,
+      `dominant_blocked_work=${report.dominantBlockedWorkLabel ?? "none"}`,
+      `partial_success_status=${report.partialSuccessStatus}`,
+      `execution_efficiency_status=${report.executionEfficiencyStatus}`,
       `effectiveness=${report.effectivenessPassed ? "pass" : "fail"}${report.effectivenessTrend ? ` trend=${report.effectivenessTrend}` : ""}`,
       `clarification_classes=${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(",") : "none"}`,
       `clarification_profile=${report.clarificationProfile}`,
@@ -8136,6 +8426,10 @@ export function formatAgenticQualityGateReport(
     `- Failure learning status: ${report.failureLearningStatus}`,
     `- Capability gap status: ${report.capabilityGapStatus}`,
     `- Dominant capability gap: ${report.dominantCapabilityGap ?? "none"}`,
+    `- Blocked work status: ${report.blockedWorkStatus}`,
+    `- Dominant blocked work: ${report.dominantBlockedWorkLabel ?? "none"}`,
+    `- Partial success status: ${report.partialSuccessStatus}`,
+    `- Execution efficiency status: ${report.executionEfficiencyStatus}`,
     `- Escalation required: ${report.diagnostics.escalationRequired ? "yes" : "no"}`,
     `- Viable fallback: ${report.diagnostics.hasViableFallback ? "yes" : "no"}`,
     `- Clarification classes: ${report.clarificationClasses.length > 0 ? report.clarificationClasses.join(", ") : "none"}`,

@@ -886,6 +886,16 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "stability_state=neutral",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "error_taxonomy=",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain("blocked_work=");
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "partial_success=",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "inefficient_success=",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
@@ -901,6 +911,18 @@ describe("agentic-state", () => {
     );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "Stability state:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Error taxonomy:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Blocked work:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Partial success:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Inefficient success:",
     );
   });
 
@@ -1400,14 +1422,119 @@ describe("agentic-state", () => {
     });
 
     expect(state.verificationState.failureClasses).toContain("environment_mismatch");
-    expect(state.plannerState.retryClass).toBe("escalate");
-    expect(state.plannerState.shouldEscalate).toBe(true);
-    expect(state.plannerState.escalationReason).toBe("environment_mismatch");
+    expect(state.plannerState.retryClass).toBe("environment_fix");
+    expect(state.plannerState.shouldEscalate).toBe(false);
+    expect(state.plannerState.escalationReason).toBeUndefined();
     expect(state.plannerState.remainingRetryBudget).toBe(2);
     expect(state.governanceState.riskLevel).toBe("high");
+    expect(state.failureLearningState.errorTaxonomy).toContain("environment_mismatch");
+    expect(state.failureLearningState.blockedWorkLabels).toContain("environment_mismatch");
     expect(buildAgenticSystemPromptAddition(state)).toContain(
-      "Escalation required: environment_mismatch",
+      "Error taxonomy: environment_mismatch",
     );
+  });
+
+  it("captures partial-success learning signals when work progresses without full verification", () => {
+    const state = buildAgenticExecutionState({
+      messages: [msg("user", "Finish the deployment workflow and verify the final rollout.")],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Reviewed the deployment workflow and current configuration requirements.",
+        },
+      ],
+    });
+
+    expect(state.verificationState.outcome).toBe("partial");
+    expect(state.plannerState.retryClass).toBe("same_path_retry");
+    expect(state.failureLearningState.failurePattern).toBe("near_miss");
+    expect(state.failureLearningState.partialSuccessSignals).toEqual(
+      expect.arrayContaining(["execution_only"]),
+    );
+    expect(state.failureLearningState.errorTaxonomy).toContain("partial_success");
+    expect(buildAgenticSystemPromptAddition(state)).toContain(
+      "Partial success signals: execution_only",
+    );
+  });
+
+  it("detects inefficient success after fallback recovery and persists it into diagnostics and records", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg(
+          "user",
+          "Fix the diagnostics workflow, recover with the strongest fallback, rerun validation, and finish cleanly.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary:
+            "Ran diagnostics validation successfully through the acceptance-report fallback workflow.",
+        },
+      ],
+      retrySignals: [
+        {
+          phase: "prompt",
+          outcome: "recovered",
+          attempt: 2,
+          maxAttempts: 3,
+          summary: "Recovered after switching to the stronger fallback workflow.",
+        },
+      ],
+      checkpointSignals: [
+        {
+          kind: "completion",
+          summary:
+            "Diagnostics workflow fixed, validation rerun completed, and final summary prepared.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "acceptance-report"],
+      likelySkills: ["memory-diagnostics"],
+    });
+    const report = inspectAgenticExecutionObservability(state);
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "acceptance-report", primaryEnv: "node" },
+        ],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [
+        {
+          toolName: "exec",
+          status: "success",
+          summary:
+            "Ran diagnostics validation successfully through the acceptance-report fallback workflow.",
+        },
+      ],
+      diffSignals: [],
+    });
+
+    expect(state.verificationState.outcome).toBe("verified");
+    expect(state.failureLearningState.inefficientSuccessSignals).toEqual(
+      expect.arrayContaining(["multiple_attempt_recovery"]),
+    );
+    expect(state.failureLearningState.errorTaxonomy).toContain("inefficient_success");
+    expect(report.inefficientSuccessSignals).toEqual(
+      expect.arrayContaining(["multiple_attempt_recovery"]),
+    );
+    expect(report.recommendations).toContain(
+      "Current successful path is inefficient: multiple_attempt_recovery",
+    );
+    expect(record.inefficientSuccessSignals).toEqual(
+      expect.arrayContaining(["multiple_attempt_recovery"]),
+    );
+    expect(record.nextImprovement).toBeDefined();
   });
 
   it("requires approval for mutating work on protected branches before verification is complete", () => {

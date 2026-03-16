@@ -615,15 +615,17 @@ async function prepareMemoryStorePlan(params: {
     text: normalized,
   });
   const artifactRef = `${MEMORY_SYSTEM_DIRNAME}/artifacts/${decodeURIComponent(artifactPath.split("/").at(-1) ?? "")}`;
-  const distilledEntries = distillMemoryKnowledge(normalized);
+  const distilledEntries = distillMemoryKnowledge(normalized, params.category);
   const effectiveEntries =
-    distilledEntries.length > 0 ? distilledEntries : [clipSnippet(normalized)];
+    distilledEntries.length > 0
+      ? distilledEntries
+      : [{ text: clipSnippet(normalized), category: params.category }];
   return {
     distilled: false,
     rawArtifactPath: artifactPath,
-    entries: effectiveEntries.map((entryText) => ({
-      text: entryText,
-      category: params.category,
+    entries: effectiveEntries.map((entry) => ({
+      text: entry.text,
+      category: entry.category ?? params.category,
       importanceClass: params.importanceClass,
       sourceType: params.sourceType ?? "summary_derived",
       evidence: [clipSnippet(normalized)],
@@ -653,7 +655,10 @@ function isLikelyDistilledMemoryText(text: string): boolean {
   return sentenceCount <= 3 && normalized.length <= 420;
 }
 
-function distillMemoryKnowledge(text: string): string[] {
+function distillMemoryKnowledge(
+  text: string,
+  fallbackCategory?: MemoryCategory,
+): Array<{ text: string; category?: MemoryCategory }> {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   const lines = normalized
     .split("\n")
@@ -677,10 +682,22 @@ function distillMemoryKnowledge(text: string): string[] {
   ).slice(0, 6);
   return unique.map((line) => {
     const compact = clipSnippet(line);
+    const lower = compact.toLowerCase();
+    const category =
+      fallbackCategory ??
+      (/\b(always|never|must|do not|should|required)\b/.test(lower)
+        ? "decision"
+        : /\b(step|sequence|process|before|after|first|then)\b/.test(lower)
+          ? "pattern"
+          : /\b(strategy|funnel|convert|offer|market|angle)\b/.test(lower)
+            ? "strategy"
+            : /\b(prefer|use|path|config|setting|workflow)\b/.test(lower)
+              ? "pattern"
+              : "fact");
     if (!title || compact.toLowerCase().includes(title.toLowerCase())) {
-      return compact;
+      return { text: compact, category };
     }
-    return clipSnippet(`${title}: ${compact}`);
+    return { text: clipSnippet(`${title}: ${compact}`), category };
   });
 }
 

@@ -3,10 +3,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import {
+  exportMemoryStoreBundle,
+  importMemoryStoreBundle,
+  inspectMemoryStoreHealth,
+  loadMemoryStoreSnapshot,
+  MEMORY_SYSTEM_DIRNAME,
+  type MemoryStoreBackendKind,
+} from "../context-engine/memory-system-store.js";
 import { setVerbose } from "../globals.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
@@ -27,6 +36,11 @@ type MemoryCommandOptions = {
   index?: boolean;
   force?: boolean;
   verbose?: boolean;
+  session?: string;
+  backend?: MemoryStoreBackendKind;
+  workspace?: string;
+  file?: string;
+  yes?: boolean;
 };
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
@@ -114,6 +128,30 @@ function resolveAgentIds(cfg: ReturnType<typeof loadConfig>, agent?: string): st
     return list.map((entry) => entry.id).filter(Boolean);
   }
   return [resolveDefaultAgentId(cfg)];
+}
+
+function resolveIntegratedMemoryWorkspace(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  agent?: string;
+  workspace?: string;
+}): { agentId: string; workspaceDir: string } {
+  const agentId = resolveAgent(params.cfg, params.agent);
+  const workspaceDir =
+    (params.workspace?.trim() && path.resolve(params.workspace.trim())) ||
+    resolveAgentWorkspaceDir(params.cfg, agentId);
+  return { agentId, workspaceDir };
+}
+
+function resolveIntegratedMemorySessionId(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  agent?: string;
+  session?: string;
+}): string {
+  const explicit = params.session?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return resolveAgent(params.cfg, params.agent);
 }
 
 function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
@@ -573,7 +611,143 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }
 }
 
+async function runIntegratedMemorySystemStatus(opts: MemoryCommandOptions) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory system status");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const { agentId, workspaceDir } = resolveIntegratedMemoryWorkspace({
+    cfg,
+    agent: opts.agent,
+    workspace: opts.workspace,
+  });
+  const sessionId = resolveIntegratedMemorySessionId({
+    cfg,
+    agent: opts.agent,
+    session: opts.session,
+  });
+  const health = await inspectMemoryStoreHealth({
+    workspaceDir,
+    sessionId,
+    backendKind: opts.backend,
+  });
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir,
+    sessionId,
+    backendKind: opts.backend,
+  }).catch(() => undefined);
+  const artifactsDir = path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME, "artifacts");
+  const rawArtifactCount = (await fs.readdir(artifactsDir).catch(() => [])).length;
+  const payload = {
+    agentId,
+    workspaceDir,
+    sessionId,
+    memoryRoot: path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME),
+    backendKind: health.backendKind,
+    longTermCount: snapshot?.longTermMemory.length ?? 0,
+    pendingCount: snapshot?.pendingSignificance.length ?? 0,
+    rawArtifactCount,
+    health,
+  };
+  if (opts.json) {
+    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  defaultRuntime.log(
+    [
+      `${theme.heading("Integrated Memory")} ${theme.muted(`(${agentId})`)}`,
+      `${theme.muted("Workspace:")} ${shortenHomePath(workspaceDir)}`,
+      `${theme.muted("Session:")} ${sessionId}`,
+      `${theme.muted("Backend:")} ${health.backendKind}`,
+      `${theme.muted("Long-term:")} ${String(payload.longTermCount)}`,
+      `${theme.muted("Pending:")} ${String(payload.pendingCount)}`,
+      `${theme.muted("Artifacts:")} ${String(rawArtifactCount)}`,
+      `${theme.muted("Summary:")} ${health.summary}`,
+      health.issues.length > 0 ? `${theme.muted("Issues:")} ${health.issues.join("; ")}` : null,
+      health.recommendations.length > 0
+        ? `${theme.muted("Recommendations:")} ${health.recommendations.join("; ")}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
+async function runIntegratedMemorySystemExport(filePath: string, opts: MemoryCommandOptions) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory system export");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const { workspaceDir } = resolveIntegratedMemoryWorkspace({
+    cfg,
+    agent: opts.agent,
+    workspace: opts.workspace,
+  });
+  const sessionId = resolveIntegratedMemorySessionId({
+    cfg,
+    agent: opts.agent,
+    session: opts.session,
+  });
+  const bundle = await exportMemoryStoreBundle({
+    workspaceDir,
+    sessionId,
+    backendKind: opts.backend,
+  });
+  const target = path.resolve(filePath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+  defaultRuntime.log(`Integrated memory exported to ${shortenHomePath(target)}`);
+}
+
+async function runIntegratedMemorySystemImport(filePath: string, opts: MemoryCommandOptions) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory system import");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const { workspaceDir } = resolveIntegratedMemoryWorkspace({
+    cfg,
+    agent: opts.agent,
+    workspace: opts.workspace,
+  });
+  const sessionId = resolveIntegratedMemorySessionId({
+    cfg,
+    agent: opts.agent,
+    session: opts.session,
+  });
+  const target = path.resolve(filePath);
+  const bundle = JSON.parse(await fs.readFile(target, "utf8")) as Awaited<
+    ReturnType<typeof exportMemoryStoreBundle>
+  >;
+  await importMemoryStoreBundle({
+    workspaceDir,
+    bundle,
+    targetSessionId: sessionId,
+    backendKind: opts.backend,
+  });
+  defaultRuntime.log(`Integrated memory imported from ${shortenHomePath(target)}`);
+}
+
+async function runIntegratedMemorySystemClear(opts: MemoryCommandOptions) {
+  if (!opts.yes) {
+    defaultRuntime.error("Refusing to clear integrated memory without --yes.");
+    process.exitCode = 1;
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory system clear");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const { workspaceDir } = resolveIntegratedMemoryWorkspace({
+    cfg,
+    agent: opts.agent,
+    workspace: opts.workspace,
+  });
+  const memoryRoot = path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME);
+  await fs.rm(memoryRoot, { recursive: true, force: true });
+  defaultRuntime.log(`Integrated memory cleared at ${shortenHomePath(memoryRoot)}`);
+}
+
 export function registerMemoryCli(program: Command) {
+  const addIntegratedMemoryOptions = <T extends Command>(command: T): T =>
+    command
+      .option("--agent <id>", "Agent id (default: default agent)")
+      .option("--workspace <dir>", "Workspace dir override")
+      .option("--session <id>", "Session id override (default: agent id)")
+      .option("--backend <kind>", "fs-json|sqlite-doc|sqlite-graph")
+      .option("--json", "Print JSON");
+
   const memory = program
     .command("memory")
     .description("Search, inspect, and reindex memory files")
@@ -589,9 +763,54 @@ export function registerMemoryCli(program: Command) {
             'openclaw memory search --query "deployment" --max-results 20',
             "Limit results for focused troubleshooting.",
           ],
+          ["openclaw memory system status", "Show integrated memory-store health and counts."],
+          [
+            "openclaw memory system export ./memory-backup.json",
+            "Export the integrated memory store for backup or migration.",
+          ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
+
+  const memorySystem = memory
+    .command("system")
+    .description("Operate on the integrated MindClaw memory store");
+
+  addIntegratedMemoryOptions(
+    memorySystem
+      .command("status")
+      .description("Show integrated memory-store health and counts")
+      .allowExcessArguments(false),
+  ).action(async (opts: MemoryCommandOptions) => {
+    await runIntegratedMemorySystemStatus(opts);
+  });
+
+  addIntegratedMemoryOptions(
+    memorySystem
+      .command("export")
+      .description("Export the integrated memory store to a bundle file")
+      .argument("<file>", "Target JSON bundle path"),
+  ).action(async (filePath: string, opts: MemoryCommandOptions) => {
+    await runIntegratedMemorySystemExport(filePath, opts);
+  });
+
+  addIntegratedMemoryOptions(
+    memorySystem
+      .command("import")
+      .description("Import an integrated memory bundle file")
+      .argument("<file>", "Source JSON bundle path"),
+  ).action(async (filePath: string, opts: MemoryCommandOptions) => {
+    await runIntegratedMemorySystemImport(filePath, opts);
+  });
+
+  addIntegratedMemoryOptions(
+    memorySystem
+      .command("clear")
+      .description("Delete the integrated memory store for this workspace")
+      .option("--yes", "Confirm destructive clear", false),
+  ).action(async (opts: MemoryCommandOptions) => {
+    await runIntegratedMemorySystemClear(opts);
+  });
 
   memory
     .command("status")

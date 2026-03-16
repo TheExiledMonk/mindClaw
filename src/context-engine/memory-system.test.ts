@@ -2051,6 +2051,23 @@ describe("MemorySystemContextEngine", () => {
       permanentMemory: snapshot.permanentMemory,
       graph: snapshot.graph,
     });
+    await fs.mkdir(path.join(sourceDir, MEMORY_SYSTEM_DIRNAME, "artifacts"), { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, MEMORY_SYSTEM_DIRNAME, "artifacts", "lesson-source.md"),
+      "Full source lesson text",
+      "utf8",
+    );
+    snapshot.longTermMemory[0].artifactRefs = [".openclaw-memory/artifacts/lesson-source.md"];
+    await persistMemoryStoreSnapshot({
+      workspaceDir: sourceDir,
+      sessionId,
+      backendKind: "sqlite-graph",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
 
     const bundle = await exportMemoryStoreBundle({
       workspaceDir: sourceDir,
@@ -2070,7 +2087,14 @@ describe("MemorySystemContextEngine", () => {
       backendKind: "fs-json",
     });
     expect(bundle.metadata.backend).toBe("sqlite-graph");
+    expect(bundle.artifacts?.[0]?.text).toContain("Full source lesson text");
     expect(imported.longTermMemory[0]?.text).toContain("permanent memory-system path");
+    await expect(
+      fs.readFile(
+        path.join(targetDir, MEMORY_SYSTEM_DIRNAME, "artifacts", "lesson-source.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("Full source lesson text");
   });
 
   it("recovers memory store state from backup after sqlite corruption", async () => {

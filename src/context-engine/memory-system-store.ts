@@ -247,6 +247,10 @@ export type MemoryStoreExportBundle = {
   backendKind: MemoryStoreBackendKind;
   metadata: MemoryStoreMetadata;
   snapshot: MemoryStoreSnapshot;
+  artifacts?: Array<{
+    path: string;
+    text: string;
+  }>;
 };
 
 export type MemoryStoreHealthReport = {
@@ -470,8 +474,65 @@ function resolveStorePaths(workspaceDir: string, sessionId: string): MemoryStore
   };
 }
 
+function resolveArtifactsDir(workspaceDir: string): string {
+  return path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME, "artifacts");
+}
+
+async function readIntegratedArtifactEntries(
+  workspaceDir: string,
+  refs: string[],
+): Promise<Array<{ path: string; text: string }>> {
+  const artifactsDir = resolveArtifactsDir(workspaceDir);
+  const seen = new Set<string>();
+  const entries: Array<{ path: string; text: string }> = [];
+  for (const ref of refs) {
+    const match = ref.match(/(?:^|\/)artifacts\/([^/]+)$/);
+    const fileName = match?.[1];
+    if (!fileName || seen.has(fileName)) {
+      continue;
+    }
+    seen.add(fileName);
+    const resolved = path.resolve(artifactsDir, fileName);
+    if (!resolved.startsWith(path.resolve(artifactsDir) + path.sep)) {
+      continue;
+    }
+    const text = await fs.readFile(resolved, "utf8").catch(() => "");
+    if (!text) {
+      continue;
+    }
+    entries.push({ path: ref, text });
+  }
+  return entries;
+}
+
+async function writeIntegratedArtifactEntries(
+  workspaceDir: string,
+  artifacts: Array<{ path: string; text: string }> | undefined,
+): Promise<void> {
+  if (!artifacts || artifacts.length === 0) {
+    return;
+  }
+  const artifactsDir = resolveArtifactsDir(workspaceDir);
+  await fs.mkdir(artifactsDir, { recursive: true });
+  for (const artifact of artifacts) {
+    const match = artifact.path.match(/(?:^|\/)artifacts\/([^/]+)$/);
+    const fileName = match?.[1];
+    if (!fileName) {
+      continue;
+    }
+    const resolved = path.resolve(artifactsDir, fileName);
+    if (!resolved.startsWith(path.resolve(artifactsDir) + path.sep)) {
+      continue;
+    }
+    await fs.writeFile(resolved, artifact.text, "utf8");
+  }
+}
+
 async function ensureStoreDirs(paths: MemoryStorePaths): Promise<void> {
   await fs.mkdir(paths.sessionsDir, { recursive: true });
+  await fs
+    .mkdir(resolveArtifactsDir(path.dirname(paths.rootDir)), { recursive: true })
+    .catch(() => {});
 }
 
 async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
@@ -5319,7 +5380,10 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
       !(
         /\b(replaced|replace|no longer|obsolete|superseded)\b/i.test(newer.text) ||
         /\bfixed permanently\b/i.test(newer.text) ||
-        /\binstead\s+of\b/i.test(newer.text)
+        /\binstead\s+of\b/i.test(newer.text) ||
+        /\b(switched to|updated to|moved to|now use|now uses|prefer(?:red)?|current path)\b/i.test(
+          newer.text,
+        )
       )
     ) {
       continue;
@@ -5332,7 +5396,12 @@ function applySupersession(entries: LongTermMemoryEntry[]): {
       if (older.updatedAt > newer.updatedAt || older.activeStatus === "superseded") {
         continue;
       }
-      if (computeOverlapScore(older.text, new Set(tokenize(newer.text))) < 3) {
+      const overlapScore = computeOverlapScore(older.text, new Set(tokenize(newer.text)));
+      const artifactOverlap = (older.artifactRefs ?? []).filter((ref) =>
+        (newer.artifactRefs ?? []).includes(ref),
+      ).length;
+      const sameCategory = older.category === newer.category;
+      if (overlapScore < 3 && !(sameCategory && artifactOverlap > 0 && overlapScore >= 2)) {
         continue;
       }
       older.activeStatus = "superseded";
@@ -11351,12 +11420,22 @@ export async function exportMemoryStoreBundle(params: {
     sessionId: params.sessionId,
     backendKind,
   });
-  return buildMemoryStoreExportBundle({
+  const bundle = buildMemoryStoreExportBundle({
     sessionId: params.sessionId,
     backendKind,
     metadata,
     snapshot,
   });
+  const artifactRefs = uniqueStrings(
+    [
+      ...snapshot.longTermMemory.flatMap((entry) => entry.artifactRefs ?? []),
+      ...snapshot.pendingSignificance.flatMap((entry) => entry.artifactRefs ?? []),
+    ].filter((ref) => /(?:^|\/)artifacts\/[^/]+$/.test(ref)),
+  );
+  if (artifactRefs.length > 0) {
+    bundle.artifacts = await readIntegratedArtifactEntries(params.workspaceDir, artifactRefs);
+  }
+  return bundle;
 }
 
 export async function importMemoryStoreBundle(params: {
@@ -11367,6 +11446,7 @@ export async function importMemoryStoreBundle(params: {
 }): Promise<void> {
   const sessionId = params.targetSessionId ?? params.bundle.sessionId;
   const backendKind = params.backendKind ?? params.bundle.backendKind;
+  await writeIntegratedArtifactEntries(params.workspaceDir, params.bundle.artifacts);
   await persistMemoryStoreSnapshot({
     workspaceDir: params.workspaceDir,
     sessionId,

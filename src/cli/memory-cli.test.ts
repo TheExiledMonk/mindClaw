@@ -7,10 +7,15 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 const getMemorySearchManager = vi.fn();
 const loadConfig = vi.fn(() => ({}));
 const resolveDefaultAgentId = vi.fn(() => "main");
+const resolveAgentWorkspaceDir = vi.fn(() => "/tmp/workspace");
 const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
   resolvedConfig: config,
   diagnostics: [] as string[],
 }));
+const exportMemoryStoreBundle = vi.fn();
+const importMemoryStoreBundle = vi.fn();
+const inspectMemoryStoreHealth = vi.fn();
+const loadMemoryStoreSnapshot = vi.fn();
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -22,10 +27,19 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
 }));
 
 vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway,
+}));
+
+vi.mock("../context-engine/memory-system-store.js", () => ({
+  exportMemoryStoreBundle,
+  importMemoryStoreBundle,
+  inspectMemoryStoreHealth,
+  loadMemoryStoreSnapshot,
+  MEMORY_SYSTEM_DIRNAME: ".openclaw-memory",
 }));
 
 let registerMemoryCli: typeof import("./memory-cli.js").registerMemoryCli;
@@ -43,6 +57,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   getMemorySearchManager.mockClear();
   resolveCommandSecretRefsViaGateway.mockClear();
+  resolveAgentWorkspaceDir.mockClear();
+  exportMemoryStoreBundle.mockReset();
+  importMemoryStoreBundle.mockReset();
+  inspectMemoryStoreHealth.mockReset();
+  loadMemoryStoreSnapshot.mockReset();
   process.exitCode = undefined;
   setVerbose(false);
 });
@@ -252,6 +271,96 @@ describe("memory cli", () => {
     expect(helpText).toContain("Quick search using positional query.");
     expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
     expect(helpText).toContain("Limit results for focused troubleshooting.");
+    expect(helpText).toContain("openclaw memory system status");
+    expect(helpText).toContain("openclaw memory system export ./memory-backup.json");
+  });
+
+  it("prints integrated memory system status as json", async () => {
+    inspectMemoryStoreHealth.mockResolvedValue({
+      backendKind: "fs-json",
+      sessionId: "main",
+      metadata: { backend: "fs-json", version: 1, updatedAt: 1 },
+      issues: [],
+      recommendations: ["no immediate repair action recommended"],
+      summary: "backend=fs-json | long-term=2 | issues=none",
+      contestedConceptCount: 0,
+      contestedEntityConflictCount: 0,
+      scopedAlternativeConceptCount: 0,
+      entityLinkedConceptCount: 0,
+      weakEvidenceWinnerCount: 0,
+      fragileWinnerCount: 0,
+      sourceTypeCounts: {
+        direct_observation: 0,
+        user_statement: 0,
+        summary_derived: 0,
+        inferred: 0,
+      },
+      authoritativeSourceTypeCounts: {
+        direct_observation: 0,
+        user_statement: 0,
+        summary_derived: 0,
+        inferred: 0,
+      },
+      supersededMemoryCount: 0,
+      permanentEligibleCount: 0,
+      staleMemoryCount: 0,
+      backupAvailable: true,
+      recoveryRecommended: false,
+    });
+    loadMemoryStoreSnapshot.mockResolvedValue({
+      workingMemory: {},
+      longTermMemory: [{ id: "a" }, { id: "b" }],
+      pendingSignificance: [{ id: "p" }],
+      permanentMemory: {},
+      graph: {},
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["system", "status", "--json"]);
+
+    const payload = firstLoggedJson(log);
+    expect(payload.longTermCount).toBe(2);
+    expect(payload.pendingCount).toBe(1);
+    expect(payload.backendKind).toBe("fs-json");
+  });
+
+  it("exports integrated memory bundles", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-system-export-"));
+    const bundlePath = path.join(tmpDir, "bundle.json");
+    exportMemoryStoreBundle.mockResolvedValue({
+      version: 1,
+      exportedAt: 1,
+      sessionId: "main",
+      backendKind: "fs-json",
+      metadata: { backend: "fs-json", version: 1, updatedAt: 1 },
+      snapshot: {
+        workingMemory: {},
+        longTermMemory: [],
+        pendingSignificance: [],
+        permanentMemory: {},
+        graph: {},
+      },
+      artifacts: [{ path: ".openclaw-memory/artifacts/example.md", text: "raw" }],
+    });
+
+    const log = spyRuntimeLogs();
+    try {
+      await runMemoryCli(["system", "export", bundlePath]);
+      const written = JSON.parse(await fs.readFile(bundlePath, "utf8"));
+      expect(written.artifacts[0].text).toBe("raw");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Integrated memory exported"));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses integrated memory clear without --yes", async () => {
+    const error = spyRuntimeErrors();
+    await runMemoryCli(["system", "clear"]);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("Refusing to clear integrated memory without --yes."),
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints vector error when unavailable", async () => {

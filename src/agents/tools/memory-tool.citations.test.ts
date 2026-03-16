@@ -188,6 +188,40 @@ describe("memory tools", () => {
     const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
     expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
   });
+
+  it("invalidates cached misses after memory_store so the next search sees new memory immediately", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const storeTool = createMemoryStoreToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+
+    const before = await searchTool.execute("call_before_store", {
+      query: "evergreen casino compliance ladder",
+    });
+    expect(((before.details as { results?: Array<unknown> }).results ?? []).length).toBe(0);
+
+    await storeTool.execute("call_store_new_lesson", {
+      text: "Remember the evergreen casino compliance ladder lesson for the affiliate course.",
+      category: "strategy",
+      importanceClass: "useful",
+    });
+
+    const after = await searchTool.execute("call_after_store", {
+      query: "evergreen casino compliance ladder",
+    });
+    const details = after.details as {
+      observability?: { snapshotCacheHit?: boolean; packetCacheHit?: boolean };
+      results: Array<{ snippet: string }>;
+    };
+    expect(details.results[0]?.snippet).toContain("evergreen casino compliance ladder");
+  });
 });
 
 function configForWorkspace(config: Record<string, unknown>) {

@@ -3,7 +3,14 @@ import { sanitizeToolUseResultPairing } from "../agents/session-transcript-repai
 import { loadConfig } from "../config/config.js";
 import { LegacyContextEngine } from "./legacy.js";
 import {
+  buildMemoryQuerySignature,
+  getCachedMemoryContextPacket,
+  getCachedMemoryStoreSnapshot,
+  invalidateMemoryCache,
+} from "./memory-system-cache.js";
+import {
   compileMemoryState,
+  loadMemoryStoreMetadata,
   loadMemoryStoreSnapshot,
   type MemoryStoreBackendKind,
   persistMemoryStoreSnapshot,
@@ -172,27 +179,45 @@ export class MemorySystemContextEngine implements ContextEngine {
   }): Promise<AssembleResult> {
     const workingSetPolicy = resolveWorkingSetPolicy();
     const assembledMessages = trimMessagesToWorkingSet(params.messages, workingSetPolicy);
-    const snapshot = await loadMemoryStoreSnapshot({
-      workspaceDir: process.cwd(),
-      sessionId: params.sessionKey ?? params.sessionId,
-      backendKind: resolveMemoryStoreBackendKind(),
+    const workspaceDir = process.cwd();
+    const sessionId = params.sessionKey ?? params.sessionId;
+    const backendKind = resolveMemoryStoreBackendKind();
+    const { snapshot, metadata } = await getCachedMemoryStoreSnapshot({
+      workspaceDir,
+      sessionId,
+      backendKind,
+      loadMetadata: () => loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+      loadSnapshot: () => loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
     });
-    const packet = retrieveMemoryContextPacket(snapshot, {
-      messages: assembledMessages,
-      workingItemsMax: workingSetPolicy.importantItemsMax,
-      includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
+    const { packet } = getCachedMemoryContextPacket({
+      workspaceDir,
+      sessionId,
+      backendKind,
+      metadata,
+      querySignature: buildMemoryQuerySignature({
+        messages: assembledMessages,
+        workingItemsMax: workingSetPolicy.importantItemsMax,
+        includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
+      }),
+      buildPacket: () =>
+        retrieveMemoryContextPacket(snapshot, {
+          messages: assembledMessages,
+          workingItemsMax: workingSetPolicy.importantItemsMax,
+          includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
+        }),
     });
     if (packet.accessedLongTermIds.length > 0) {
       await persistMemoryStoreSnapshot({
-        workspaceDir: process.cwd(),
-        sessionId: params.sessionKey ?? params.sessionId,
-        backendKind: resolveMemoryStoreBackendKind(),
+        workspaceDir,
+        sessionId,
+        backendKind,
         workingMemory: snapshot.workingMemory,
         longTermMemory: touchRetrievedMemories(snapshot.longTermMemory, packet.accessedLongTermIds),
         pendingSignificance: snapshot.pendingSignificance,
         permanentMemory: snapshot.permanentMemory,
         graph: snapshot.graph,
       });
+      invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
     }
     return {
       messages: assembledMessages,
@@ -249,6 +274,7 @@ export class MemorySystemContextEngine implements ContextEngine {
       permanentMemory: incremental.permanentMemory,
       graph: incremental.graph,
     });
+    invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
   }
 
   async compact(params: {
@@ -299,6 +325,7 @@ export class MemorySystemContextEngine implements ContextEngine {
         permanentMemory: compiled.permanentMemory,
         graph: compiled.graph,
       });
+      invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
     }
     await this.review({
       sessionId: params.sessionId,
@@ -334,6 +361,7 @@ export class MemorySystemContextEngine implements ContextEngine {
       permanentMemory: reviewed.permanentMemory,
       graph: reviewed.graph,
     });
+    invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
     return {
       reviewed: true,
       summary:

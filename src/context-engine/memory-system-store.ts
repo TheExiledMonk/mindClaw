@@ -220,6 +220,11 @@ export type MemoryStoreMetadata = {
   backend: MemoryStoreBackendKind;
   version: 1;
   updatedAt: number;
+  snapshotVersion?: number;
+  workingMemoryVersion?: number;
+  longTermMemoryVersion?: number;
+  permanentMemoryVersion?: number;
+  graphVersion?: number;
   schemaVersion?: number;
   lastAppliedMigration?: string;
   lastIntegrityCheckAt?: number;
@@ -602,6 +607,11 @@ function defaultMemoryStoreMetadata(kind: MemoryStoreBackendKind = "fs-json"): M
     backend: kind,
     version: 1,
     updatedAt: Date.now(),
+    snapshotVersion: 1,
+    workingMemoryVersion: 1,
+    longTermMemoryVersion: 1,
+    permanentMemoryVersion: 1,
+    graphVersion: 1,
     schemaVersion: kind === "sqlite-graph" ? SQLITE_GRAPH_SCHEMA_VERSION : 1,
   };
 }
@@ -623,6 +633,29 @@ function sanitizeMemoryStoreMetadata(
       typeof candidate?.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
         ? candidate.updatedAt
         : Date.now(),
+    snapshotVersion:
+      typeof candidate?.snapshotVersion === "number" && Number.isFinite(candidate.snapshotVersion)
+        ? candidate.snapshotVersion
+        : 1,
+    workingMemoryVersion:
+      typeof candidate?.workingMemoryVersion === "number" &&
+      Number.isFinite(candidate.workingMemoryVersion)
+        ? candidate.workingMemoryVersion
+        : 1,
+    longTermMemoryVersion:
+      typeof candidate?.longTermMemoryVersion === "number" &&
+      Number.isFinite(candidate.longTermMemoryVersion)
+        ? candidate.longTermMemoryVersion
+        : 1,
+    permanentMemoryVersion:
+      typeof candidate?.permanentMemoryVersion === "number" &&
+      Number.isFinite(candidate.permanentMemoryVersion)
+        ? candidate.permanentMemoryVersion
+        : 1,
+    graphVersion:
+      typeof candidate?.graphVersion === "number" && Number.isFinite(candidate.graphVersion)
+        ? candidate.graphVersion
+        : 1,
     schemaVersion:
       typeof candidate?.schemaVersion === "number" && Number.isFinite(candidate.schemaVersion)
         ? candidate.schemaVersion
@@ -692,6 +725,11 @@ function buildSnapshotStoreMetadata(params: {
     backend: params.backend,
     version: 1,
     updatedAt: Date.now(),
+    snapshotVersion: (params.previous?.snapshotVersion ?? 0) + 1,
+    workingMemoryVersion: (params.previous?.workingMemoryVersion ?? 0) + 1,
+    longTermMemoryVersion: (params.previous?.longTermMemoryVersion ?? 0) + 1,
+    permanentMemoryVersion: (params.previous?.permanentMemoryVersion ?? 0) + 1,
+    graphVersion: (params.previous?.graphVersion ?? 0) + 1,
     schemaVersion:
       params.backend === "sqlite-graph"
         ? SQLITE_GRAPH_SCHEMA_VERSION
@@ -752,6 +790,14 @@ async function loadPersistedStoreMetadata(params: {
     ),
     backend.kind,
   );
+}
+
+export async function loadMemoryStoreMetadata(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryStoreMetadata> {
+  return loadPersistedStoreMetadata(params);
 }
 
 function buildMemoryStoreExportBundle(params: {

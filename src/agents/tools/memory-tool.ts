@@ -4,6 +4,13 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import {
+  buildMemoryQuerySignature,
+  getCachedMemoryContextPacket,
+  getCachedMemoryStoreSnapshot,
+  invalidateMemoryCache,
+} from "../../context-engine/memory-system-cache.js";
+import {
+  loadMemoryStoreMetadata,
   loadMemoryStoreSnapshot,
   storeIntegratedMemoryEntry,
   retrieveMemoryContextPacket,
@@ -99,13 +106,34 @@ export function createMemorySearchTool(options: {
         const maxResults = readNumberParam(params, "maxResults");
         const minScore = readNumberParam(params, "minScore");
         try {
-          const snapshot = await loadMemoryStoreSnapshot({
-            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-            sessionId: options.agentSessionKey ?? agentId,
-            backendKind: resolveIntegratedMemoryBackendKind(),
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const sessionId = options.agentSessionKey ?? agentId;
+          const backendKind = resolveIntegratedMemoryBackendKind();
+          const startedAt = Date.now();
+          const {
+            snapshot,
+            metadata,
+            cacheHit: snapshotCacheHit,
+          } = await getCachedMemoryStoreSnapshot({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            loadMetadata: () => loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+            loadSnapshot: () => loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
           });
-          const packet = retrieveMemoryContextPacket(snapshot, {
-            messages: [{ content: query } as AgentMessage],
+          const packetStartedAt = Date.now();
+          const { packet, cacheHit: packetCacheHit } = getCachedMemoryContextPacket({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            metadata,
+            querySignature: buildMemoryQuerySignature({
+              messages: [{ content: query } as AgentMessage],
+            }),
+            buildPacket: () =>
+              retrieveMemoryContextPacket(snapshot, {
+                messages: [{ content: query } as AgentMessage],
+              }),
           });
           const citationsMode = resolveMemoryCitationsMode(cfg);
           const includeCitations = shouldIncludeCitations({
@@ -125,6 +153,14 @@ export function createMemorySearchTool(options: {
             fallback: false,
             citations: citationsMode,
             mode: "integrated-memory",
+            observability: {
+              snapshotCacheHit,
+              packetCacheHit,
+              loadMs: packetStartedAt - startedAt,
+              packetMs: Date.now() - packetStartedAt,
+              snapshotVersion: metadata.snapshotVersion ?? 0,
+              longTermMemoryVersion: metadata.longTermMemoryVersion ?? 0,
+            },
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -150,10 +186,15 @@ export function createMemoryGetTool(options: {
       async (_toolCallId, params) => {
         const relPath = readStringParam(params, "path", { required: true });
         try {
-          const snapshot = await loadMemoryStoreSnapshot({
-            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-            sessionId: options.agentSessionKey ?? agentId,
-            backendKind: resolveIntegratedMemoryBackendKind(),
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const sessionId = options.agentSessionKey ?? agentId;
+          const backendKind = resolveIntegratedMemoryBackendKind();
+          const { snapshot } = await getCachedMemoryStoreSnapshot({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            loadMetadata: () => loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+            loadSnapshot: () => loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
           });
           return jsonResult(resolveIntegratedMemoryReadResult(snapshot, relPath));
         } catch (err) {
@@ -183,15 +224,19 @@ export function createMemoryStoreTool(options: {
         const importanceClass = readImportanceClassParam(params, "importanceClass");
         const sourceType = readMemorySourceTypeParam(params, "sourceType");
         try {
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const sessionId = options.agentSessionKey ?? agentId;
+          const backendKind = resolveIntegratedMemoryBackendKind();
           const stored = await storeIntegratedMemoryEntry({
-            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-            sessionId: options.agentSessionKey ?? agentId,
-            backendKind: resolveIntegratedMemoryBackendKind(),
+            workspaceDir,
+            sessionId,
+            backendKind,
             text,
             category,
             importanceClass,
             sourceType,
           });
+          invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
           const path = `${MINDCLAW_MEMORY_PREFIX}long-term/${encodeURIComponent(stored.entry.id)}`;
           return jsonResult({
             stored: true,

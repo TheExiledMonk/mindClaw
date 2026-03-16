@@ -546,7 +546,7 @@ describe("loadChatHistory", () => {
 
 describe("sendChatMessage", () => {
   it("adds an immediate optimistic user message while the request is in flight", async () => {
-    let resolveRequest: (() => void) | null = null;
+    let resolveRequest: (() => void) | undefined;
     const request = vi.fn(
       () =>
         new Promise((resolve) => {

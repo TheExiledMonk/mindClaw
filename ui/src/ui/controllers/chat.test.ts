@@ -714,4 +714,34 @@ describe("loadChatHistory", () => {
 
     expect(state.chatMessages).toEqual([persisted]);
   });
+
+  it("drops the optimistic duplicate when persisted history uses idempotencyKey", async () => {
+    const optimistic = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block\nwith lines" }],
+      timestamp: 123,
+      pending: true,
+      localOnly: true,
+      clientRequestId: "run-1",
+    };
+    const persisted = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block\nwith lines" }],
+      timestamp: 124,
+      idempotencyKey: "run-1",
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persisted],
+      thinkingLevel: "medium",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimistic],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persisted]);
+  });
 });

@@ -59,6 +59,21 @@ type OptimisticUserMessage = Record<string, unknown> & {
   clientRequestId?: string;
 };
 
+function getComparableRequestId(message: Record<string, unknown>): string {
+  const clientRequestId =
+    typeof message.clientRequestId === "string" ? message.clientRequestId.trim() : "";
+  if (clientRequestId) {
+    return clientRequestId;
+  }
+  const idempotencyKey =
+    typeof message.idempotencyKey === "string" ? message.idempotencyKey.trim() : "";
+  return idempotencyKey;
+}
+
+function normalizeComparableUserText(message: Record<string, unknown>): string {
+  return (extractText(message) ?? "").replace(/\r\n/g, "\n").trim();
+}
+
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -108,19 +123,13 @@ function sameUserMessage(a: unknown, b: unknown): boolean {
   if (leftRole !== "user" || rightRole !== "user") {
     return false;
   }
-  const leftRequestId =
-    typeof left.clientRequestId === "string" && left.clientRequestId.trim()
-      ? left.clientRequestId.trim()
-      : "";
-  const rightRequestId =
-    typeof right.clientRequestId === "string" && right.clientRequestId.trim()
-      ? right.clientRequestId.trim()
-      : "";
+  const leftRequestId = getComparableRequestId(left);
+  const rightRequestId = getComparableRequestId(right);
   if (leftRequestId && rightRequestId) {
     return leftRequestId === rightRequestId;
   }
-  const leftText = extractText(left)?.trim() ?? "";
-  const rightText = extractText(right)?.trim() ?? "";
+  const leftText = normalizeComparableUserText(left);
+  const rightText = normalizeComparableUserText(right);
   if (leftText !== rightText) {
     return false;
   }

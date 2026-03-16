@@ -1,10 +1,18 @@
+import { createHash } from "node:crypto";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
-import { getMemorySearchManager } from "../../memory/index.js";
-import type { MemorySearchResult } from "../../memory/types.js";
+import {
+  loadMemoryStoreSnapshot,
+  retrieveMemoryContextPacket,
+  type MemoryContextPacket,
+  type MemoryRetrievalItem,
+  type MemoryStoreBackendKind,
+  type PermanentMemoryNode,
+} from "../../context-engine/memory-system-store.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
@@ -35,21 +43,6 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
     return null;
   }
   return { cfg, agentId };
-}
-
-async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: string }): Promise<
-  | {
-      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
-    }
-  | {
-      error: string | undefined;
-    }
-> {
-  const { manager, error } = await getMemorySearchManager({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  return manager ? { manager } : { error };
 }
 
 function createMemoryTool(params: {
@@ -85,7 +78,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search the integrated MindClaw memory store before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top recalled snippets with stable pseudo-paths for follow-up memory_get reads. If response has disabled=true, integrated memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
@@ -93,36 +86,33 @@ export function createMemorySearchTool(options: {
         const query = readStringParam(params, "query", { required: true });
         const maxResults = readNumberParam(params, "maxResults");
         const minScore = readNumberParam(params, "minScore");
-        const memory = await getMemoryManagerContext({ cfg, agentId });
-        if ("error" in memory) {
-          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
-        }
         try {
+          const snapshot = await loadMemoryStoreSnapshot({
+            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+            sessionId: options.agentSessionKey ?? agentId,
+            backendKind: resolveIntegratedMemoryBackendKind(),
+          });
+          const packet = retrieveMemoryContextPacket(snapshot, {
+            messages: [{ content: query } as AgentMessage],
+          });
           const citationsMode = resolveMemoryCitationsMode(cfg);
           const includeCitations = shouldIncludeCitations({
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
-          const rawResults = await memory.manager.search(query, {
+          const rawResults = buildIntegratedMemorySearchResults(packet, {
+            query,
             maxResults,
             minScore,
-            sessionKey: options.agentSessionKey,
           });
-          const status = memory.manager.status();
-          const decorated = decorateCitations(rawResults, includeCitations);
-          const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-          const results =
-            status.backend === "qmd"
-              ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-              : decorated;
-          const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+          const results = decorateCitations(rawResults, includeCitations);
           return jsonResult({
             results,
-            provider: status.provider,
-            model: status.model,
-            fallback: status.fallback,
+            provider: "mindclaw-memory",
+            model: "integrated-memory",
+            fallback: false,
             citations: citationsMode,
-            mode: searchMode,
+            mode: "integrated-memory",
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -141,25 +131,19 @@ export function createMemoryGetTool(options: {
     label: "Memory Get",
     name: "memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
+      "Safe snippet read from the integrated MindClaw memory store using a pseudo-path returned by memory_search; use after memory_search to pull only the needed memory text and keep context small.",
     parameters: MemoryGetSchema,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
         const relPath = readStringParam(params, "path", { required: true });
-        const from = readNumberParam(params, "from", { integer: true });
-        const lines = readNumberParam(params, "lines", { integer: true });
-        const memory = await getMemoryManagerContext({ cfg, agentId });
-        if ("error" in memory) {
-          return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
-        }
         try {
-          const result = await memory.manager.readFile({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
+          const snapshot = await loadMemoryStoreSnapshot({
+            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+            sessionId: options.agentSessionKey ?? agentId,
+            backendKind: resolveIntegratedMemoryBackendKind(),
           });
-          return jsonResult(result);
+          return jsonResult(resolveIntegratedMemoryReadResult(snapshot, relPath));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           return jsonResult({ path: relPath, text: "", disabled: true, error: message });
@@ -176,7 +160,20 @@ function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   return "auto";
 }
 
-function decorateCitations(results: MemorySearchResult[], include: boolean): MemorySearchResult[] {
+type IntegratedMemorySearchResult = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+  snippet: string;
+  source: "memory";
+  citation?: string;
+};
+
+function decorateCitations(
+  results: IntegratedMemorySearchResult[],
+  include: boolean,
+): IntegratedMemorySearchResult[] {
   if (!include) {
     return results.map((entry) => ({ ...entry, citation: undefined }));
   }
@@ -187,7 +184,7 @@ function decorateCitations(results: MemorySearchResult[], include: boolean): Mem
   });
 }
 
-function formatCitation(entry: MemorySearchResult): string {
+function formatCitation(entry: IntegratedMemorySearchResult): string {
   const lineRange =
     entry.startLine === entry.endLine
       ? `#L${entry.startLine}`
@@ -195,30 +192,168 @@ function formatCitation(entry: MemorySearchResult): string {
   return `${entry.path}${lineRange}`;
 }
 
-function clampResultsByInjectedChars(
-  results: MemorySearchResult[],
-  budget?: number,
-): MemorySearchResult[] {
-  if (!budget || budget <= 0) {
-    return results;
-  }
-  let remaining = budget;
-  const clamped: MemorySearchResult[] = [];
-  for (const entry of results) {
-    if (remaining <= 0) {
+const MINDCLAW_MEMORY_PREFIX = "mindclaw_memory://";
+
+function resolveIntegratedMemoryBackendKind(): MemoryStoreBackendKind | undefined {
+  const envValue = process.env.OPENCLAW_MEMORY_STORE_BACKEND;
+  return envValue === "fs-json" || envValue === "sqlite-doc" || envValue === "sqlite-graph"
+    ? envValue
+    : undefined;
+}
+
+function buildIntegratedMemorySearchResults(
+  packet: MemoryContextPacket,
+  params: {
+    query: string;
+    maxResults?: number;
+    minScore?: number;
+  },
+): IntegratedMemorySearchResult[] {
+  const queryTokens = tokenizeMemoryQuery(params.query);
+  const minScore = params.minScore ?? 0.1;
+  const maxResults = Math.max(1, Math.floor(params.maxResults ?? 6));
+  const candidates = packet.retrievalItems
+    .filter(
+      (item) =>
+        (item.kind === "long-term" || item.kind === "pending" || item.kind === "permanent") &&
+        (item.memoryId || item.kind === "permanent"),
+    )
+    .map((item) => {
+      const score = scoreMemoryRetrievalItem(item, queryTokens);
+      return { item, score };
+    })
+    .filter(({ score }) => score >= minScore)
+    .toSorted((a, b) => b.score - a.score);
+
+  const deduped = new Map<string, IntegratedMemorySearchResult>();
+  for (const { item, score } of candidates) {
+    const path = buildIntegratedMemoryPath(item);
+    if (!path || deduped.has(path)) {
+      continue;
+    }
+    deduped.set(path, {
+      path,
+      startLine: 1,
+      endLine: 1,
+      score,
+      snippet: clipSnippet(item.text),
+      source: "memory",
+    });
+    if (deduped.size >= maxResults) {
       break;
     }
-    const snippet = entry.snippet ?? "";
-    if (snippet.length <= remaining) {
-      clamped.push(entry);
-      remaining -= snippet.length;
-    } else {
-      const trimmed = snippet.slice(0, Math.max(0, remaining));
-      clamped.push({ ...entry, snippet: trimmed });
-      break;
+  }
+  return [...deduped.values()];
+}
+
+function tokenizeMemoryQuery(query: string): string[] {
+  return Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2),
+    ),
+  );
+}
+
+function scoreMemoryRetrievalItem(item: MemoryRetrievalItem, queryTokens: string[]): number {
+  if (queryTokens.length === 0) {
+    return 0;
+  }
+  const haystack = `${item.text} ${item.reason}`.toLowerCase();
+  let matches = 0;
+  for (const token of queryTokens) {
+    if (haystack.includes(token)) {
+      matches += 1;
     }
   }
-  return clamped;
+  if (matches === 0) {
+    return 0;
+  }
+  const base = matches / queryTokens.length;
+  const kindBoost =
+    item.kind === "long-term"
+      ? 0.2
+      : item.kind === "pending"
+        ? 0.1
+        : item.kind === "permanent"
+          ? 0.05
+          : 0;
+  return Math.min(1, base + kindBoost);
+}
+
+function clipSnippet(text: string): string {
+  return text.length > 700 ? `${text.slice(0, 697)}...` : text;
+}
+
+function buildIntegratedMemoryPath(item: MemoryRetrievalItem): string | null {
+  if (item.kind === "long-term" && item.memoryId) {
+    return `${MINDCLAW_MEMORY_PREFIX}long-term/${encodeURIComponent(item.memoryId)}`;
+  }
+  if (item.kind === "pending" && item.memoryId) {
+    return `${MINDCLAW_MEMORY_PREFIX}pending/${encodeURIComponent(item.memoryId)}`;
+  }
+  if (item.kind === "permanent") {
+    return `${MINDCLAW_MEMORY_PREFIX}permanent/${hashMemoryText(item.text)}`;
+  }
+  return null;
+}
+
+function hashMemoryText(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+function resolveIntegratedMemoryReadResult(
+  snapshot: Awaited<ReturnType<typeof loadMemoryStoreSnapshot>>,
+  relPath: string,
+): { path: string; text: string } {
+  if (!relPath.startsWith(MINDCLAW_MEMORY_PREFIX)) {
+    throw new Error(
+      `unsupported memory path: ${relPath}. Use a pseudo-path returned by memory_search from the integrated memory store.`,
+    );
+  }
+  const [, remainder] = relPath.split(MINDCLAW_MEMORY_PREFIX);
+  const [kind, ...rest] = remainder.split("/");
+  const key = rest.join("/");
+  if (kind === "long-term") {
+    const id = decodeURIComponent(key);
+    const entry = snapshot.longTermMemory.find((item) => item.id === id);
+    if (!entry) {
+      return { path: relPath, text: "" };
+    }
+    return { path: relPath, text: entry.text };
+  }
+  if (kind === "pending") {
+    const id = decodeURIComponent(key);
+    const entry = snapshot.pendingSignificance.find((item) => item.id === id);
+    if (!entry) {
+      return { path: relPath, text: "" };
+    }
+    return { path: relPath, text: entry.text };
+  }
+  if (kind === "permanent") {
+    const node = findPermanentNodeByHash(snapshot.permanentMemory, key);
+    return { path: relPath, text: node?.summary ?? "" };
+  }
+  throw new Error(`unsupported integrated memory path kind: ${kind}`);
+}
+
+function findPermanentNodeByHash(
+  node: PermanentMemoryNode,
+  targetHash: string,
+): PermanentMemoryNode | undefined {
+  if (node.summary && hashMemoryText(node.summary) === targetHash) {
+    return node;
+  }
+  for (const child of node.children) {
+    const found = findPermanentNodeByHash(child, targetHash);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 function buildMemorySearchUnavailableResult(error: string | undefined) {

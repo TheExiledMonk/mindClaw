@@ -112,7 +112,7 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
 
 export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
-  const enabled = defaults?.enabled ?? true;
+  const enabled = defaults?.enabled ?? false;
   if (!enabled) {
     return null;
   }

@@ -196,17 +196,8 @@ describe("history helpers", () => {
 });
 
 describe("memory flush settings", () => {
-  it("defaults to enabled with fallback prompt and system prompt", () => {
-    const settings = resolveMemoryFlushSettings();
-    expect(settings).not.toBeNull();
-    expect(settings?.enabled).toBe(true);
-    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(settings?.prompt.length).toBeGreaterThan(0);
-    expect(settings?.systemPrompt.length).toBeGreaterThan(0);
-    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.prompt).toContain("MEMORY.md");
-    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.systemPrompt).toContain("MEMORY.md");
+  it("defaults to disabled so legacy markdown memory flush stays off", () => {
+    expect(resolveMemoryFlushSettings()).toBeNull();
   });
 
   it("respects disable flag", () => {
@@ -225,6 +216,7 @@ describe("memory flush settings", () => {
         defaults: {
           compaction: {
             memoryFlush: {
+              enabled: true,
               prompt: "Write memories now.",
               systemPrompt: "Flush memory.",
             },
@@ -247,6 +239,7 @@ describe("memory flush settings", () => {
           compaction: {
             reserveTokensFloor: Number.NaN,
             memoryFlush: {
+              enabled: true,
               softThresholdTokens: -100,
             },
           },
@@ -265,6 +258,7 @@ describe("memory flush settings", () => {
         defaults: {
           compaction: {
             memoryFlush: {
+              enabled: true,
               forceFlushTranscriptBytes: "3mb",
             },
           },

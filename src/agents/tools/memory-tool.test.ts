@@ -1,41 +1,35 @@
-import { beforeEach, describe, it } from "vitest";
-import {
-  resetMemoryToolMockState,
-  setMemorySearchImpl,
-} from "../../../test/helpers/memory-tool-manager-mock.js";
+import { beforeEach, describe, it, vi } from "vitest";
 import {
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./memory-tool.test-helpers.js";
 
+vi.mock("../../context-engine/memory-system-store.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../context-engine/memory-system-store.js")
+  >("../../context-engine/memory-system-store.js");
+  return {
+    ...actual,
+    loadMemoryStoreSnapshot: vi.fn(),
+  };
+});
+
 describe("memory_search unavailable payloads", () => {
-  beforeEach(() => {
-    resetMemoryToolMockState({ searchImpl: async () => [] });
+  beforeEach(async () => {
+    const mod = await import("../../context-engine/memory-system-store.js");
+    vi.mocked(mod.loadMemoryStoreSnapshot).mockReset();
   });
 
-  it("returns explicit unavailable metadata for quota failures", async () => {
-    setMemorySearchImpl(async () => {
-      throw new Error("openai embeddings failed: 429 insufficient_quota");
-    });
+  it("returns explicit unavailable metadata for integrated store failures", async () => {
+    const mod = await import("../../context-engine/memory-system-store.js");
+    vi.mocked(mod.loadMemoryStoreSnapshot).mockRejectedValue(
+      new Error("integrated memory store unavailable"),
+    );
 
     const tool = createMemorySearchToolOrThrow();
-    const result = await tool.execute("quota", { query: "hello" });
+    const result = await tool.execute("store-failure", { query: "hello" });
     expectUnavailableMemorySearchDetails(result.details, {
-      error: "openai embeddings failed: 429 insufficient_quota",
-      warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
-      action: "Top up or switch embedding provider, then retry memory_search.",
-    });
-  });
-
-  it("returns explicit unavailable metadata for non-quota failures", async () => {
-    setMemorySearchImpl(async () => {
-      throw new Error("embedding provider timeout");
-    });
-
-    const tool = createMemorySearchToolOrThrow();
-    const result = await tool.execute("generic", { query: "hello" });
-    expectUnavailableMemorySearchDetails(result.details, {
-      error: "embedding provider timeout",
+      error: "integrated memory store unavailable",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });

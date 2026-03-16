@@ -4189,6 +4189,7 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("Agentic trend guidance:");
     expect(packet.text).toContain("trend=regressing");
     expect(packet.text).toContain("effective_skills=acceptance-report@debugging/node");
+    expect(packet.text).toContain("effective_families=verification@debugging/node");
     expect(packet.text).toContain(
       "quality_failure_reasons=diagnostics_missing_fallback,weakening_scoped_skills",
     );

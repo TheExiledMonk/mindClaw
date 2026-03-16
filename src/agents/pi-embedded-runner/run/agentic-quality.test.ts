@@ -131,6 +131,36 @@ describe("agentic quality gate", () => {
     expect(report.recoveringSkills).toContain("acceptance-report@debugging/node");
     expect(report.templateFamilies).toContain("verification@debugging/node");
     expect(report.confidenceSignals).toContain("effectiveness_regressing");
+    expect(report.confidenceSignals).toContain("memory_failure_history");
+    expect(report.recommendations).toContain(
+      "Historical failure reasons still active in memory trends: diagnostics_missing_fallback.",
+    );
+  });
+
+  it("keeps release readiness gated on memory-backed watch trends with repeated failure history", () => {
+    const report = runAgenticQualityGate({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Prepare the Raspberry Pi validation run, but keep release readiness conservative if the historical deployment path is still under watch.",
+          timestamp: Date.now(),
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic trend guidance:",
+        "- trend=watch effective_skills=deployment-smoke@operations/node effective_families=release@operations/node quality_failure_reasons=diagnostics_missing_fallback",
+      ].join("\n"),
+    });
+
+    expect(report.releaseGateStatus).toBe("gated");
+    expect(report.operatorConfidenceStatus).toBe("medium");
+    expect(report.confidenceSignals).toContain("memory_failure_history");
+    expect(report.confidenceSignals).toContain("effectiveness_watch");
+    expect(report.recommendations).toContain(
+      "Historically effective families remain available: release@operations/node.",
+    );
   });
 
   it("formats the quality gate report in summary and markdown forms", () => {

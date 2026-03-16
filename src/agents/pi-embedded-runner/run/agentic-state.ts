@@ -1024,6 +1024,7 @@ function deriveQualityReleaseHardeningRollups(params: {
   executionEfficiencyStatus: AgenticQualityGateReport["executionEfficiencyStatus"];
   capabilityGapStatus: AgenticQualityGateReport["capabilityGapStatus"];
   effectivenessTrend?: AgenticQualityGateReport["effectivenessTrend"];
+  memoryQualityFailureReasons?: string[];
   soakReleaseGateStatus?: AgenticSoakReport["releaseGateStatus"];
 }): Pick<
   AgenticQualityGateReport,
@@ -1043,6 +1044,10 @@ function deriveQualityReleaseHardeningRollups(params: {
       params.operatorActionPolicyStatus === "review" ? "operator_policy_review" : undefined,
       params.partialSuccessStatus === "present" ? "partial_success_open" : undefined,
       params.executionEfficiencyStatus === "inefficient" ? "inefficient_success" : undefined,
+      (params.memoryQualityFailureReasons?.length ?? 0) > 0 &&
+      (params.effectivenessTrend === "watch" || params.effectivenessTrend === "regressing")
+        ? "memory_failure_history"
+        : undefined,
       params.effectivenessTrend === "watch"
         ? "effectiveness_watch"
         : params.effectivenessTrend === "regressing"
@@ -1088,20 +1093,24 @@ function extractRecommendedProceduralSkills(memoryText?: string): string[] {
 function extractMemoryTrendGuidance(memoryText?: string): {
   weakeningSkills: string[];
   effectiveSkills: string[];
+  effectiveFamilies: string[];
   recoveringSkills: string[];
   stabilizedSkills: string[];
   templateFamilies: string[];
   mergeFamilies: string[];
+  qualityFailureReasons: string[];
   trend?: "stable" | "watch" | "regressing";
 } {
   if (!memoryText) {
     return {
       weakeningSkills: [],
       effectiveSkills: [],
+      effectiveFamilies: [],
       recoveringSkills: [],
       stabilizedSkills: [],
       templateFamilies: [],
       mergeFamilies: [],
+      qualityFailureReasons: [],
     };
   }
   const match = memoryText.match(/Agentic trend guidance:\s*((?:\n-\s+[^\n]+)+)/i);
@@ -1130,10 +1139,12 @@ function extractMemoryTrendGuidance(memoryText?: string): {
   return {
     weakeningSkills: parseList("weakening_skills"),
     effectiveSkills: parseList("effective_skills"),
+    effectiveFamilies: parseList("effective_families"),
     recoveringSkills: parseList("recovering_skills"),
     stabilizedSkills: parseList("stabilized_skills"),
     templateFamilies: parseList("template_families"),
     mergeFamilies: parseList("merge_families"),
+    qualityFailureReasons: parseList("quality_failure_reasons"),
     trend,
   };
 }
@@ -8855,10 +8866,12 @@ export function runAgenticQualityGate(params?: {
   memoryTrend?: {
     weakeningSkills?: string[];
     effectiveSkills?: string[];
+    effectiveFamilies?: string[];
     recoveringSkills?: string[];
     stabilizedSkills?: string[];
     templateFamilies?: string[];
     mergeFamilies?: string[];
+    qualityFailureReasons?: string[];
     trend?: "stable" | "watch" | "regressing";
   };
 }): AgenticQualityGateReport {
@@ -8961,10 +8974,15 @@ export function runAgenticQualityGate(params?: {
     params?.memoryTrend ?? extractMemoryTrendGuidance(params?.memorySystemPromptAddition);
   const weakeningSkills = uniqueCompact(derivedMemoryTrend.weakeningSkills ?? [], 6);
   const effectiveSkills = uniqueCompact(derivedMemoryTrend.effectiveSkills ?? [], 6);
+  const effectiveFamilies = uniqueCompact(derivedMemoryTrend.effectiveFamilies ?? [], 6);
   const recoveringSkills = uniqueCompact(derivedMemoryTrend.recoveringSkills ?? [], 6);
   const stabilizedSkills = uniqueCompact(derivedMemoryTrend.stabilizedSkills ?? [], 6);
   const templateFamilies = uniqueCompact(derivedMemoryTrend.templateFamilies ?? [], 6);
   const mergeFamilies = uniqueCompact(derivedMemoryTrend.mergeFamilies ?? [], 6);
+  const memoryQualityFailureReasons = uniqueCompact(
+    derivedMemoryTrend.qualityFailureReasons ?? [],
+    6,
+  );
   const effectivenessTrend = derivedMemoryTrend.trend;
   const clarificationClasses = uniqueCompact(
     diagnostics.clarificationReason ? [diagnostics.clarificationReason] : [],
@@ -9061,6 +9079,7 @@ export function runAgenticQualityGate(params?: {
     executionEfficiencyStatus: qualityFailureLearningRollups.executionEfficiencyStatus,
     capabilityGapStatus: qualityFailureLearningRollups.capabilityGapStatus,
     effectivenessTrend,
+    memoryQualityFailureReasons,
     soakReleaseGateStatus: soak.releaseGateStatus,
   });
   const recommendations = uniqueCompact(
@@ -9137,6 +9156,12 @@ export function runAgenticQualityGate(params?: {
         : undefined,
       mergeFamilies.length > 0
         ? `Memory-backed merge-ready families: ${mergeFamilies.join(", ")}.`
+        : undefined,
+      effectiveFamilies.length > 0
+        ? `Historically effective families remain available: ${effectiveFamilies.join(", ")}.`
+        : undefined,
+      memoryQualityFailureReasons.length > 0
+        ? `Historical failure reasons still active in memory trends: ${memoryQualityFailureReasons.join(", ")}.`
         : undefined,
       weakeningSkills.length > 0
         ? "Review weakening scoped skills before promoting or extending the current workflow family."

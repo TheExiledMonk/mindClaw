@@ -6961,6 +6961,9 @@ export function retrieveMemoryContextPacket(
       agenticTrendGuidance.effectiveSkills.length > 0
         ? `effective_skills=${agenticTrendGuidance.effectiveSkills.join(",")}`
         : "",
+      agenticTrendGuidance.effectiveFamilies.length > 0
+        ? `effective_families=${agenticTrendGuidance.effectiveFamilies.join(",")}`
+        : "",
       agenticTrendGuidance.weakeningSkills.length > 0
         ? `weakening_skills=${agenticTrendGuidance.weakeningSkills.join(",")}`
         : "",

@@ -826,6 +826,34 @@ function deriveSkillFamilyGuidanceLine(entry: LongTermMemoryEntry): string | und
     .filter((tag) => tag.startsWith("procedural:overlap-skill:"))
     .map((tag) => tag.replace("procedural:overlap-skill:", "").trim())
     .filter(Boolean);
+  const overlapSeverity =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:overlap-severity:"))
+      ?.replace("procedural:overlap-severity:", "")
+      .trim() || "";
+  const parameterizationCandidates = (entry.environmentTags ?? [])
+    .filter((tag) => tag.startsWith("procedural:parameterization-candidate:"))
+    .map((tag) => tag.replace("procedural:parameterization-candidate:", "").trim())
+    .filter(Boolean);
+  const skillCreationDecision =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:skill-creation-decision:"))
+      ?.replace("procedural:skill-creation-decision:", "")
+      .trim() || "";
+  const familyLifecycleKey =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:family-lifecycle-key:"))
+      ?.replace("procedural:family-lifecycle-key:", "")
+      .trim() || "";
+  const skillLifecycleAction =
+    (entry.environmentTags ?? [])
+      .find((tag) => tag.startsWith("procedural:skill-lifecycle-action:"))
+      ?.replace("procedural:skill-lifecycle-action:", "")
+      .trim() || "";
+  const retirementCandidates = (entry.environmentTags ?? [])
+    .filter((tag) => tag.startsWith("procedural:retirement-candidate:"))
+    .map((tag) => tag.replace("procedural:retirement-candidate:", "").trim())
+    .filter(Boolean);
   const resolvedMergeSkills = uniqueStrings(
     mergeSkills.length > 0 ? mergeSkills : overlapSkills,
   ).slice(0, 4);
@@ -833,9 +861,21 @@ function deriveSkillFamilyGuidanceLine(entry: LongTermMemoryEntry): string | und
     `family=${family}`,
     `trend=${trend}`,
     consolidation !== "none" ? `consolidation=${consolidation}` : "",
+    overlapSeverity ? `overlap_severity=${overlapSeverity}` : "",
     templateCandidate ? "template_candidate=true" : "",
     mergeCandidate ? "merge_candidate=true" : "",
     resolvedMergeSkills.length > 0 ? `merge_skills=${resolvedMergeSkills.join(",")}` : "",
+    parameterizationCandidates.length > 0
+      ? `parameterization_candidates=${parameterizationCandidates.join(",")}`
+      : "",
+    skillCreationDecision ? `skill_creation_decision=${skillCreationDecision}` : "",
+    familyLifecycleKey ? `family_lifecycle_key=${familyLifecycleKey}` : "",
+    skillLifecycleAction && skillLifecycleAction !== "none"
+      ? `lifecycle_action=${skillLifecycleAction}`
+      : "",
+    retirementCandidates.length > 0
+      ? `retirement_candidates=${retirementCandidates.join(",")}`
+      : "",
     preferredFallback ? `preferred_fallback=${preferredFallback}` : "",
     primarySkill ? `primary=${primarySkill}` : "",
   ]
@@ -3754,6 +3794,12 @@ function deriveRuntimeSignalCandidates(params: {
           consolidationAction?: unknown;
           overlappingSkills?: unknown;
           skillFamilies?: unknown;
+          overlapSeverity?: unknown;
+          parameterizationCandidates?: unknown;
+          skillCreationDecision?: unknown;
+          familyLifecycleKey?: unknown;
+          skillLifecycleAction?: unknown;
+          retirementCandidates?: unknown;
           nearMissCandidate?: unknown;
           retryClass?: unknown;
           suggestedSkill?: unknown;
@@ -4001,6 +4047,47 @@ function deriveRuntimeSignalCandidates(params: {
           )
         : [],
     );
+    const overlapSeverity =
+      proceduralExecution.overlapSeverity === "none" ||
+      proceduralExecution.overlapSeverity === "pair" ||
+      proceduralExecution.overlapSeverity === "family_cluster"
+        ? proceduralExecution.overlapSeverity
+        : "none";
+    const parameterizationCandidates = uniqueStrings(
+      Array.isArray(proceduralExecution.parameterizationCandidates)
+        ? proceduralExecution.parameterizationCandidates.filter(
+            (candidate): candidate is string =>
+              typeof candidate === "string" && candidate.trim().length > 0,
+          )
+        : [],
+    );
+    const skillCreationDecision =
+      proceduralExecution.skillCreationDecision === "defer" ||
+      proceduralExecution.skillCreationDecision === "extend_existing" ||
+      proceduralExecution.skillCreationDecision === "generalize_existing" ||
+      proceduralExecution.skillCreationDecision === "create_new"
+        ? proceduralExecution.skillCreationDecision
+        : "defer";
+    const familyLifecycleKey =
+      typeof proceduralExecution.familyLifecycleKey === "string" &&
+      proceduralExecution.familyLifecycleKey.trim().length > 0
+        ? proceduralExecution.familyLifecycleKey.trim()
+        : undefined;
+    const skillLifecycleAction =
+      proceduralExecution.skillLifecycleAction === "none" ||
+      proceduralExecution.skillLifecycleAction === "promote_template" ||
+      proceduralExecution.skillLifecycleAction === "merge_siblings" ||
+      proceduralExecution.skillLifecycleAction === "retire_duplicates"
+        ? proceduralExecution.skillLifecycleAction
+        : "none";
+    const retirementCandidates = uniqueStrings(
+      Array.isArray(proceduralExecution.retirementCandidates)
+        ? proceduralExecution.retirementCandidates.filter(
+            (candidate): candidate is string =>
+              typeof candidate === "string" && candidate.trim().length > 0,
+          )
+        : [],
+    );
     const prerequisiteWarnings = uniqueStrings(
       Array.isArray(proceduralExecution.prerequisiteWarnings)
         ? proceduralExecution.prerequisiteWarnings.filter(
@@ -4097,6 +4184,16 @@ function deriveRuntimeSignalCandidates(params: {
       stabilitySkills.length > 0 ? `stability_skills=${stabilitySkills.join(",")}` : "",
       mergeCandidate ? "merge_candidate=true" : "",
       mergeSkills.length > 0 ? `merge_skills=${mergeSkills.join(",")}` : "",
+      overlapSeverity !== "none" ? `overlap_severity=${overlapSeverity}` : "",
+      parameterizationCandidates.length > 0
+        ? `parameterization_candidates=${parameterizationCandidates.join(",")}`
+        : "",
+      skillCreationDecision !== "defer" ? `skill_creation_decision=${skillCreationDecision}` : "",
+      familyLifecycleKey ? `family_lifecycle_key=${familyLifecycleKey}` : "",
+      skillLifecycleAction !== "none" ? `lifecycle_action=${skillLifecycleAction}` : "",
+      retirementCandidates.length > 0
+        ? `retirement_candidates=${retirementCandidates.join(",")}`
+        : "",
       nextImprovement ?? "",
       consolidationAction !== "none" ? `consolidation_action=${consolidationAction}` : "",
       overlappingSkills.length > 0 ? `overlap_skills=${overlappingSkills.join(",")}` : "",
@@ -4192,8 +4289,22 @@ function deriveRuntimeSignalCandidates(params: {
         consolidationAction !== "none"
           ? `procedural:consolidation-action:${consolidationAction}`
           : "",
+        overlapSeverity !== "none" ? `procedural:overlap-severity:${overlapSeverity}` : "",
         ...(overlappingSkills.map((skill) => `procedural:overlap-skill:${skill}`) ?? []),
         ...(skillFamilies.map((family) => `procedural:skill-family:${family}`) ?? []),
+        ...(parameterizationCandidates.map(
+          (candidate) => `procedural:parameterization-candidate:${candidate}`,
+        ) ?? []),
+        skillCreationDecision !== "defer"
+          ? `procedural:skill-creation-decision:${skillCreationDecision}`
+          : "",
+        familyLifecycleKey ? `procedural:family-lifecycle-key:${familyLifecycleKey}` : "",
+        skillLifecycleAction !== "none"
+          ? `procedural:skill-lifecycle-action:${skillLifecycleAction}`
+          : "",
+        ...(retirementCandidates.map(
+          (candidate) => `procedural:retirement-candidate:${candidate}`,
+        ) ?? []),
         proceduralExecution.templateCandidate === true ? "procedural:template-candidate" : "",
         proceduralExecution.consolidationCandidate === true
           ? "procedural:consolidation-candidate"
@@ -6760,6 +6871,9 @@ export function retrieveMemoryContextPacket(
     const templateFamilyGuidance = deriveTemplateScopedFamilies(proceduralGuidance);
     const mergeFamilyGuidance = deriveMergeScopedFamilies(proceduralGuidance);
     const mergeFamilySkills = deriveMergeScopedFamilySkills(proceduralGuidance);
+    const directFamilyGuidance = proceduralGuidance
+      .map((entry) => deriveSkillFamilyGuidanceLine(entry))
+      .filter((line): line is string => Boolean(line));
     if (recommendedSkills.length > 0) {
       sections.push(`Recommended procedural skills:\n- ${recommendedSkills.join("\n- ")}`);
     }
@@ -6807,6 +6921,7 @@ export function retrieveMemoryContextPacket(
       );
     }
     const durableFamilyGuidance = uniqueStrings([
+      ...directFamilyGuidance,
       ...templateFamilyGuidance.map((item) =>
         formatScopedFamilyGuidanceLine({ scopedFamily: item, templateCandidate: true }),
       ),

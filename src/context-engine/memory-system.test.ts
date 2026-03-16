@@ -7,6 +7,7 @@ import {
   buildAgenticExecutionState,
   runAgenticQualityGate,
 } from "../agents/pi-embedded-runner/run/agentic-state.js";
+import { withTempHomeConfig } from "../config/test-helpers.js";
 import { requireNodeSqlite } from "../memory/sqlite.js";
 import {
   buildMemoryContextPacket,
@@ -1762,6 +1763,48 @@ describe("memory system store", () => {
     expect(compiled.workingMemory.carryForwardSummary).toContain("Contradictions need resolution");
     expect(compiled.workingMemory.carryForwardSummary).toContain("Concepts with contested");
   });
+
+  it("formats working-set context as summary, important items, and relevant memory", () => {
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: {
+          sessionId: "working-set-packet",
+          updatedAt: Date.now(),
+          rollingSummary: "We are refining the affiliate marketing course operating model.",
+          carryForwardSummary: "Keep the latest market shortlist and validation rules in focus.",
+          activeFacts: ["The current shortlist includes weight loss, dating, and gambling."],
+          activeGoals: ["Finish narrowing the shortlist to two markets."],
+          openLoops: ["Confirm which market has the strongest monetization path."],
+          recentEvents: ["The latest scan favored evergreen, high-intent offers."],
+          recentDecisions: ["Prioritize markets with clear how-to positioning."],
+        },
+        longTermMemory: [
+          longTermEntry({
+            id: "ltm-affiliate-foundations",
+            text: "Past research showed CPA course offers perform better when positioned as step-by-step systems.",
+            strength: 0.92,
+            confidence: 0.89,
+          }),
+        ],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot(),
+      },
+      {
+        messages: [userMessage("Which affiliate markets did we narrow down and why?")],
+        workingItemsMax: 4,
+        includeLongTermMemory: true,
+      },
+    );
+
+    expect(packet.text).toContain("Current task summary:");
+    expect(packet.text).toContain("Carry-forward summary:");
+    expect(packet.text).toContain("Important session items:");
+    expect(packet.text).toContain("Confirm which market has the strongest monetization path.");
+    expect(packet.text).toContain("Finish narrowing the shortlist to two markets.");
+    expect(packet.text).toContain("Relevant long-term facts and patterns:");
+    expect(packet.text).toContain("Past research showed CPA course offers perform better");
+  });
 });
 
 describe("MemorySystemContextEngine", () => {
@@ -1810,6 +1853,48 @@ describe("MemorySystemContextEngine", () => {
     const memoryRoot = path.join(tempDir, MEMORY_SYSTEM_DIRNAME);
     await expect(fs.stat(memoryRoot)).resolves.toBeTruthy();
     await expect(fs.stat(path.join(memoryRoot, "store-metadata.json"))).resolves.toBeTruthy();
+  });
+
+  it("trims live session history to the configured working-set window during assemble", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              workingSet: {
+                retainLatestMessages: 8,
+                compactAfterMessages: 18,
+                importantItemsMax: 12,
+                includeRelevantMemory: true,
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-working-set-"));
+        process.chdir(tempDir);
+
+        const engine = new MemorySystemContextEngine();
+        const messages = Array.from({ length: 20 }, (_, index) =>
+          userMessage(`latest discussion turn ${index + 1}`),
+        );
+
+        const assembled = await engine.assemble({
+          sessionId: "sess-window",
+          sessionKey: "agent:window",
+          messages,
+        });
+
+        expect(assembled.messages).toHaveLength(8);
+        expect((assembled.messages[0] as { content?: unknown }).content).toBe(
+          "latest discussion turn 13",
+        );
+        expect((assembled.messages[7] as { content?: unknown }).content).toBe(
+          "latest discussion turn 20",
+        );
+      },
+    );
   });
 
   it("runs explicit review and persists the reviewed state", async () => {

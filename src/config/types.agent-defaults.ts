@@ -296,6 +296,17 @@ export type AgentCompactionQualityGuardConfig = {
   maxRetries?: number;
 };
 
+export type AgentCompactionWorkingSetConfig = {
+  /** Number of latest conversation messages kept live after compaction trims the working set. Default: 8. */
+  retainLatestMessages?: number;
+  /** Trigger working-set compaction once this many conversation messages are present. Default: 18. */
+  compactAfterMessages?: number;
+  /** Maximum number of carry-forward important items preserved in working context. Default: 12. */
+  importantItemsMax?: number;
+  /** Include relevant long-term memory alongside working-set summary/context. Default: true. */
+  includeRelevantMemory?: boolean;
+};
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -331,6 +342,8 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Explicit working-set policy for live recent-message retention and carry-forward context. */
+  workingSet?: AgentCompactionWorkingSetConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

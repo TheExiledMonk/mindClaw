@@ -473,6 +473,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.model": "Compaction Model Override",
+  "agents.defaults.compaction.workingSet": "Compaction Working Set",
+  "agents.defaults.compaction.workingSet.retainLatestMessages":
+    "Working Set Retain Latest Messages",
+  "agents.defaults.compaction.workingSet.compactAfterMessages":
+    "Working Set Compact After Messages",
+  "agents.defaults.compaction.workingSet.importantItemsMax": "Working Set Important Items Max",
+  "agents.defaults.compaction.workingSet.includeRelevantMemory":
+    "Working Set Include Relevant Memory",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":

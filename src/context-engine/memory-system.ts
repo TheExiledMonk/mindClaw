@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { loadConfig } from "../config/config.js";
 import { LegacyContextEngine } from "./legacy.js";
 import {
   compileMemoryState,
@@ -21,6 +22,20 @@ import type {
   IngestResult,
   ReviewResult,
 } from "./types.js";
+
+type WorkingSetPolicy = {
+  retainLatestMessages: number;
+  compactAfterMessages: number;
+  importantItemsMax: number;
+  includeRelevantMemory: boolean;
+};
+
+const DEFAULT_WORKING_SET_POLICY: WorkingSetPolicy = {
+  retainLatestMessages: 8,
+  compactAfterMessages: 18,
+  importantItemsMax: 12,
+  includeRelevantMemory: true,
+};
 
 function resolveWorkspaceDir(runtimeContext?: ContextEngineRuntimeContext): string {
   const workspaceDir = runtimeContext?.workspaceDir;
@@ -57,6 +72,52 @@ function selectNewMessages(
     prePromptMessageCount >= 0
   ) {
     return messages.slice(prePromptMessageCount);
+  }
+  return messages;
+}
+
+function resolveWorkingSetPolicy(): WorkingSetPolicy {
+  const configured = loadConfig().agents?.defaults?.compaction?.workingSet;
+  const retainLatestMessages = Math.max(
+    1,
+    configured?.retainLatestMessages ?? DEFAULT_WORKING_SET_POLICY.retainLatestMessages,
+  );
+  const compactAfterMessages = Math.max(
+    retainLatestMessages + 1,
+    configured?.compactAfterMessages ?? DEFAULT_WORKING_SET_POLICY.compactAfterMessages,
+  );
+  return {
+    retainLatestMessages,
+    compactAfterMessages,
+    importantItemsMax: Math.max(
+      1,
+      configured?.importantItemsMax ?? DEFAULT_WORKING_SET_POLICY.importantItemsMax,
+    ),
+    includeRelevantMemory:
+      configured?.includeRelevantMemory ?? DEFAULT_WORKING_SET_POLICY.includeRelevantMemory,
+  };
+}
+
+function trimMessagesToWorkingSet(
+  messages: AgentMessage[],
+  policy: WorkingSetPolicy,
+): AgentMessage[] {
+  const isConversationMessage = (message: AgentMessage): boolean =>
+    message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+  const conversationMessageCount = messages.filter(isConversationMessage).length;
+  if (conversationMessageCount <= policy.compactAfterMessages) {
+    return messages;
+  }
+  let keptConversationMessages = 0;
+  let startIndex = messages.length;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isConversationMessage(messages[index])) {
+      keptConversationMessages += 1;
+      if (keptConversationMessages > policy.retainLatestMessages) {
+        return messages.slice(startIndex);
+      }
+      startIndex = index;
+    }
   }
   return messages;
 }
@@ -108,12 +169,18 @@ export class MemorySystemContextEngine implements ContextEngine {
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult> {
+    const workingSetPolicy = resolveWorkingSetPolicy();
+    const assembledMessages = trimMessagesToWorkingSet(params.messages, workingSetPolicy);
     const snapshot = await loadMemoryStoreSnapshot({
       workspaceDir: process.cwd(),
       sessionId: params.sessionKey ?? params.sessionId,
       backendKind: resolveMemoryStoreBackendKind(),
     });
-    const packet = retrieveMemoryContextPacket(snapshot, { messages: params.messages });
+    const packet = retrieveMemoryContextPacket(snapshot, {
+      messages: assembledMessages,
+      workingItemsMax: workingSetPolicy.importantItemsMax,
+      includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
+    });
     if (packet.accessedLongTermIds.length > 0) {
       await persistMemoryStoreSnapshot({
         workspaceDir: process.cwd(),
@@ -127,7 +194,7 @@ export class MemorySystemContextEngine implements ContextEngine {
       });
     }
     return {
-      messages: params.messages,
+      messages: assembledMessages,
       estimatedTokens: packet.text ? Math.ceil(packet.text.length / 4) : 0,
       systemPromptAddition: packet.text,
     };

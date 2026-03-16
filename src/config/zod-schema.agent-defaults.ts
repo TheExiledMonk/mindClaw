@@ -107,6 +107,15 @@ export const AgentDefaultsSchema = z
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
+        workingSet: z
+          .object({
+            retainLatestMessages: z.number().int().min(1).max(64).optional(),
+            compactAfterMessages: z.number().int().min(2).max(128).optional(),
+            importantItemsMax: z.number().int().min(1).max(32).optional(),
+            includeRelevantMemory: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

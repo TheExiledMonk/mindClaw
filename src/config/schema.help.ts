@@ -1043,6 +1043,16 @@ export const FIELD_HELP: Record<string, string> = {
     'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+  "agents.defaults.compaction.workingSet":
+    "Explicit live working-set policy for long chats. This keeps only a bounded recent conversation window live, while carry-forward summary, important items, and relevant memory preserve continuity outside the raw transcript window.",
+  "agents.defaults.compaction.workingSet.retainLatestMessages":
+    "Number of latest conversation messages kept live after working-set compaction triggers (default: 8). Raise this to keep more verbatim recency, or lower it to rely more heavily on carry-forward summary and memory retrieval.",
+  "agents.defaults.compaction.workingSet.compactAfterMessages":
+    "Conversation-message threshold that triggers working-set compaction (default: 18). Once exceeded, the runtime trims the live transcript back to retainLatestMessages and relies on summary plus important items for older continuity.",
+  "agents.defaults.compaction.workingSet.importantItemsMax":
+    "Maximum number of carry-forward important items preserved alongside the summary (default: 12). Newer items are prioritized first, while older low-signal items fall out and must be retrieved from memory when relevant again.",
+  "agents.defaults.compaction.workingSet.includeRelevantMemory":
+    "Include relevant integrated-memory retrieval alongside the recent live window and carry-forward session context (default: true). Keep this enabled so older but relevant knowledge is reintroduced when the latest discussion needs it.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

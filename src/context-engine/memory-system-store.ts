@@ -5993,7 +5993,10 @@ export function compileMemoryState(params: {
   };
 }
 
-function selectWorkingContext(snapshot: MemoryStoreSnapshot): MemoryRetrievalItem[] {
+function selectWorkingContext(
+  snapshot: MemoryStoreSnapshot,
+  maxItems = MAX_PACKET_ITEMS,
+): MemoryRetrievalItem[] {
   const items: MemoryRetrievalItem[] = [];
   if (snapshot.workingMemory.rollingSummary) {
     items.push({
@@ -6002,13 +6005,48 @@ function selectWorkingContext(snapshot: MemoryStoreSnapshot): MemoryRetrievalIte
       reason: "current task summary",
     });
   }
-  for (const goal of snapshot.workingMemory.activeGoals.slice(0, MAX_PACKET_ITEMS)) {
-    items.push({ kind: "working", text: goal, reason: "active goal" });
+  if (snapshot.workingMemory.carryForwardSummary) {
+    items.push({
+      kind: "working",
+      text: snapshot.workingMemory.carryForwardSummary,
+      reason: "carry-forward summary",
+    });
   }
-  for (const loop of snapshot.workingMemory.openLoops.slice(0, MAX_PACKET_ITEMS)) {
-    items.push({ kind: "working", text: loop, reason: "open unresolved loop" });
+  const pushNewestFirst = (values: string[], reason: string) => {
+    for (const value of values.toReversed()) {
+      if (items.length >= Math.max(2, maxItems + 2)) {
+        return;
+      }
+      if (!value.trim()) {
+        continue;
+      }
+      items.push({ kind: "working", text: value, reason });
+    }
+  };
+  pushNewestFirst(snapshot.workingMemory.openLoops, "open unresolved loop");
+  pushNewestFirst(snapshot.workingMemory.activeGoals, "active goal");
+  pushNewestFirst(snapshot.workingMemory.recentDecisions, "recent decision");
+  pushNewestFirst(snapshot.workingMemory.activeFacts, "active fact");
+  pushNewestFirst(snapshot.workingMemory.recentEvents, "recent event");
+
+  const seen = new Set<string>();
+  const summaryItems: MemoryRetrievalItem[] = [];
+  const importantItems: MemoryRetrievalItem[] = [];
+  for (const item of items) {
+    const key = normalizeComparable(item.text);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    if (item.reason === "current task summary" || item.reason === "carry-forward summary") {
+      summaryItems.push(item);
+      continue;
+    }
+    if (importantItems.length < maxItems) {
+      importantItems.push(item);
+    }
   }
-  return items;
+  return [...summaryItems.slice(0, 2), ...importantItems];
 }
 
 function detectContradictions(entries: LongTermMemoryEntry[]): MemoryRetrievalItem[] {
@@ -6799,7 +6837,11 @@ function recommendProceduralSkillsFromEntries(entries: LongTermMemoryEntry[]): s
 
 export function retrieveMemoryContextPacket(
   snapshot: MemoryStoreSnapshot,
-  params?: { messages?: AgentMessage[] },
+  params?: {
+    messages?: AgentMessage[];
+    workingItemsMax?: number;
+    includeLongTermMemory?: boolean;
+  },
 ): MemoryContextPacket {
   const currentText = [
     snapshot.workingMemory.rollingSummary,
@@ -6830,20 +6872,42 @@ export function retrieveMemoryContextPacket(
   const accessedLongTermIds: string[] = [];
   const accessedConceptIds: string[] = [];
 
-  const workingItems = selectWorkingContext(snapshot);
+  const workingItems = selectWorkingContext(snapshot, params?.workingItemsMax ?? MAX_PACKET_ITEMS);
   if (workingItems.length > 0) {
     retrievalItems.push(...workingItems);
-    sections.push(`Current task summary:\n- ${workingItems.map((item) => item.text).join("\n- ")}`);
+    const currentSummary = workingItems
+      .filter((item) => item.reason === "current task summary")
+      .map((item) => item.text);
+    const carryForwardSummary = workingItems
+      .filter((item) => item.reason === "carry-forward summary")
+      .map((item) => item.text);
+    const importantItems = workingItems
+      .filter(
+        (item) => item.reason !== "current task summary" && item.reason !== "carry-forward summary",
+      )
+      .map((item) => `${item.text} (${item.reason})`);
+    if (currentSummary.length > 0) {
+      sections.push(`Current task summary:\n- ${currentSummary.join("\n- ")}`);
+    }
+    if (carryForwardSummary.length > 0) {
+      sections.push(`Carry-forward summary:\n- ${carryForwardSummary.join("\n- ")}`);
+    }
+    if (importantItems.length > 0) {
+      sections.push(`Important session items:\n- ${importantItems.join("\n- ")}`);
+    }
   }
 
-  const longTerm = rankLongTermEntries(
-    snapshot.longTermMemory,
-    queryTokens,
-    taskMode,
-    scopeContext,
-    queryEntityAliases,
-    adjudications,
-  ).slice(0, MAX_PACKET_ITEMS);
+  const longTerm =
+    params?.includeLongTermMemory === false
+      ? []
+      : rankLongTermEntries(
+          snapshot.longTermMemory,
+          queryTokens,
+          taskMode,
+          scopeContext,
+          queryEntityAliases,
+          adjudications,
+        ).slice(0, MAX_PACKET_ITEMS);
   if (longTerm.length > 0) {
     retrievalItems.push(
       ...longTerm.map((item) => {

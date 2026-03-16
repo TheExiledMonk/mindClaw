@@ -385,6 +385,11 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.qualityGuard.maxRetries",
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.model",
+  "agents.defaults.compaction.workingSet",
+  "agents.defaults.compaction.workingSet.retainLatestMessages",
+  "agents.defaults.compaction.workingSet.compactAfterMessages",
+  "agents.defaults.compaction.workingSet.importantItemsMax",
+  "agents.defaults.compaction.workingSet.includeRelevantMemory",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -825,6 +830,28 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+
+    const workingSet = FIELD_HELP["agents.defaults.compaction.workingSet"];
+    expect(/working-set|recent conversation window|important items/i.test(workingSet)).toBe(true);
+
+    const retainLatest = FIELD_HELP["agents.defaults.compaction.workingSet.retainLatestMessages"];
+    expect(/default:\s*8/i.test(retainLatest)).toBe(true);
+    expect(/latest conversation messages|verbatim recency/i.test(retainLatest)).toBe(true);
+
+    const compactAfter = FIELD_HELP["agents.defaults.compaction.workingSet.compactAfterMessages"];
+    expect(/default:\s*18/i.test(compactAfter)).toBe(true);
+    expect(/threshold|triggers working-set compaction/i.test(compactAfter)).toBe(true);
+
+    const importantItems = FIELD_HELP["agents.defaults.compaction.workingSet.importantItemsMax"];
+    expect(/default:\s*12/i.test(importantItems)).toBe(true);
+    expect(/newer items|fall out|retrieved from memory/i.test(importantItems)).toBe(true);
+
+    const includeRelevant =
+      FIELD_HELP["agents.defaults.compaction.workingSet.includeRelevantMemory"];
+    expect(/default:\s*true/i.test(includeRelevant)).toBe(true);
+    expect(/relevant integrated-memory retrieval|latest discussion/i.test(includeRelevant)).toBe(
+      true,
+    );
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

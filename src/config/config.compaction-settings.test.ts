@@ -128,4 +128,30 @@ describe("config compaction settings", () => {
       },
     );
   });
+
+  it("preserves working-set compaction settings through loadConfig()", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              workingSet: {
+                retainLatestMessages: 8,
+                compactAfterMessages: 18,
+                importantItemsMax: 12,
+                includeRelevantMemory: true,
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.workingSet?.retainLatestMessages).toBe(8);
+        expect(cfg.agents?.defaults?.compaction?.workingSet?.compactAfterMessages).toBe(18);
+        expect(cfg.agents?.defaults?.compaction?.workingSet?.importantItemsMax).toBe(12);
+        expect(cfg.agents?.defaults?.compaction?.workingSet?.includeRelevantMemory).toBe(true);
+      },
+    );
+  });
 });

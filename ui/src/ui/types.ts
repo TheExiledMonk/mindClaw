@@ -1,4 +1,6 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { MemoryDiagnosticsReport } from "../../../src/context-engine/memory-system-store.js";
+import type { MemoryBackgroundWorkerStats } from "../../../src/context-engine/memory-system-worker.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
@@ -402,6 +404,13 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   reasoningLevel?: string;
   elevatedLevel?: string;
 }>;
+
+export type DoctorMemoryDiagnosticsPayload = {
+  agentId: string;
+  workspaceDir: string;
+  report: MemoryDiagnosticsReport;
+  worker: MemoryBackgroundWorkerStats;
+};
 
 export type {
   CostUsageDailyEntry,

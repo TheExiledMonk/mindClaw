@@ -402,6 +402,107 @@ describe("memory system store", () => {
     ).toBe(true);
   });
 
+  it("merges revised concept memories by concept alias and scope instead of keeping siblings", () => {
+    const merged = mergeLongTermMemory(
+      [
+        longTermEntry({
+          id: "ltm-course-cta-old",
+          semanticKey: "fact::affiliate::cta-v1",
+          conceptKey: "concept::fact::affiliate::cta",
+          conceptAliases: ["affiliate-course-cta", "course CTA"],
+          text: "Affiliate course CTA should promise a concrete outcome.",
+          category: "fact",
+          ontologyKind: "fact",
+          versionScope: "v1",
+        }),
+      ],
+      [
+        longTermEntry({
+          id: "ltm-course-cta-new",
+          semanticKey: "fact::affiliate::cta-v2",
+          conceptAliases: ["affiliate-course-cta", "course CTA"],
+          text: "Updated affiliate course CTA: promise the first concrete outcome, not vague motivation.",
+          category: "fact",
+          ontologyKind: "fact",
+          versionScope: "v1",
+        }),
+      ],
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toContain("Updated affiliate course CTA");
+    expect(["updated", "narrowed"]).toContain(merged[0]?.lastRevisionKind);
+    expect(merged[0]?.revisionCount).toBeGreaterThan(0);
+  });
+
+  it("prefers stronger permanent nodes when query overlap is similar", () => {
+    const strongEntry = longTermEntry({
+      id: "ltm-perm-strong",
+      text: "Affiliate course positioning should anchor on the first visible business result.",
+      confidence: 0.96,
+      strength: 0.94,
+      accessCount: 12,
+      relations: [
+        { type: "linked_to", targetMemoryId: "ltm-shared", weight: 0.8 },
+        { type: "confirmed_by", targetMemoryId: "ltm-proof", weight: 0.9 },
+      ],
+      relatedMemoryIds: ["ltm-shared", "ltm-proof"],
+    });
+    const weakEntry = longTermEntry({
+      id: "ltm-perm-weak",
+      text: "Affiliate course positioning can mention the business result.",
+      confidence: 0.58,
+      strength: 0.51,
+      accessCount: 0,
+      activeStatus: "stale",
+    });
+    const packet = retrieveMemoryContextPacket(
+      {
+        workingMemory: buildWorkingMemorySnapshot({
+          sessionId: "permanent-weighting",
+          messages: [],
+        }),
+        longTermMemory: [strongEntry, weakEntry],
+        pendingSignificance: [],
+        graph: emptyGraph(),
+        permanentMemory: permanentRoot([
+          {
+            id: "permanent/weak",
+            label: "weak affiliate positioning",
+            summary: "Affiliate course positioning and general business result framing.",
+            nodeType: "context",
+            relationToParent: "contains",
+            updatedAt: Date.now(),
+            confidence: 0.6,
+            evidence: [],
+            sourceMemoryIds: ["ltm-perm-weak"],
+            activeStatus: "active",
+            children: [],
+          },
+          {
+            id: "permanent/strong",
+            label: "strong affiliate positioning",
+            summary: "Affiliate course positioning with concrete business result framing.",
+            nodeType: "context",
+            relationToParent: "contains",
+            updatedAt: Date.now(),
+            confidence: 0.82,
+            evidence: [],
+            sourceMemoryIds: ["ltm-perm-strong"],
+            activeStatus: "active",
+            children: [],
+          },
+        ]),
+      },
+      {
+        messages: [userMessage("What affiliate course positioning should we emphasize?")],
+      },
+    );
+
+    const permanentItems = packet.retrievalItems.filter((item) => item.kind === "permanent");
+    expect(permanentItems[0]?.text).toContain("concrete business result");
+  });
+
   it("reports retrieval skip and supersession diagnostics", () => {
     const snapshot = {
       workingMemory: buildWorkingMemorySnapshot({

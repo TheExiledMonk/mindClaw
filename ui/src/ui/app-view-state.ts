@@ -26,6 +26,7 @@ import type {
   PresenceEntry,
   SessionsUsageResult,
   CostUsageSummary,
+  DoctorMemoryDiagnosticsPayload,
   SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
@@ -306,6 +307,8 @@ export type AppViewState = {
     overviewShowGatewayPassword: boolean;
     overviewLogLines: string[];
     overviewLogCursor: number;
+    memoryDiagnostics: DoctorMemoryDiagnosticsPayload | null;
+    memoryDiagnosticsError: string | null;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;

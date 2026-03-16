@@ -20,7 +20,7 @@ type RefreshJob = {
   reason: "after-turn" | "memory-store" | "review" | "compact" | "maintenance";
 };
 
-type MemoryBackgroundWorkerStats = {
+export type MemoryBackgroundWorkerStats = {
   queued: number;
   completed: number;
   failed: number;

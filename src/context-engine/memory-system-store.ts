@@ -2394,6 +2394,17 @@ function findConceptMatch(
     environmentTags: incoming.environmentTags,
     artifactRefs: incoming.artifactRefs,
   });
+  const hasRevisionCue =
+    incoming.lastRevisionKind === "updated" ||
+    incoming.lastRevisionKind === "narrowed" ||
+    /\b(updated|revised|current|latest|now|instead|replaced|switch(?:ed)?|moved)\b/i.test(
+      incoming.text,
+    );
+  const incomingConceptAliases = new Set(
+    uniqueStrings([incoming.conceptKey ?? "", ...(incoming.conceptAliases ?? [])])
+      .map((value) => normalizeComparable(value))
+      .filter(Boolean),
+  );
   for (const candidate of entries) {
     if (
       candidate.conceptKey &&
@@ -2489,6 +2500,37 @@ function findConceptMatch(
     const artifactOverlap = (candidate.artifactRefs ?? []).filter((ref) =>
       (incoming.artifactRefs ?? []).includes(ref),
     ).length;
+    const scopeOverlap =
+      Number(candidate.versionScope === incoming.versionScope && Boolean(candidate.versionScope)) +
+      Number(
+        candidate.installProfileScope === incoming.installProfileScope &&
+          Boolean(candidate.installProfileScope),
+      ) +
+      Number(
+        candidate.customerScope === incoming.customerScope && Boolean(candidate.customerScope),
+      );
+    const candidateConceptAliases = uniqueStrings([
+      candidate.conceptKey ?? "",
+      ...(candidate.conceptAliases ?? []),
+    ])
+      .map((value) => normalizeComparable(value))
+      .filter(Boolean);
+    const conceptAliasOverlap = candidateConceptAliases.filter((alias) =>
+      incomingConceptAliases.has(alias),
+    ).length;
+    const conceptAliasCoverage =
+      incomingConceptAliases.size > 0 ? conceptAliasOverlap / incomingConceptAliases.size : 0;
+    const explicitConceptUpdate =
+      hasRevisionCue &&
+      candidate.category === incoming.category &&
+      candidate.ontologyKind === incoming.ontologyKind &&
+      (artifactOverlap > 0 ||
+        conceptAliasCoverage >= 0.5 ||
+        (canonicalEntityCoverage >= 0.5 && scopeOverlap >= 1) ||
+        (entityAliasCoverage >= 0.5 && scopeOverlap >= 1));
+    if (explicitConceptUpdate) {
+      return candidate;
+    }
     if (
       candidateRuntimeTags.length > 0 &&
       incomingRuntimeTags.length > 0 &&
@@ -2503,20 +2545,12 @@ function findConceptMatch(
     ) {
       continue;
     }
-    const scopeOverlap =
-      Number(candidate.versionScope === incoming.versionScope && Boolean(candidate.versionScope)) +
-      Number(
-        candidate.installProfileScope === incoming.installProfileScope &&
-          Boolean(candidate.installProfileScope),
-      ) +
-      Number(
-        candidate.customerScope === incoming.customerScope && Boolean(candidate.customerScope),
-      );
     const score =
       overlap +
       canonicalOverlap * 2 +
       signatureOverlap * 2 +
       aliasOverlap +
+      conceptAliasOverlap * 2.5 +
       entityAliasOverlap * 2 +
       canonicalEntityOverlap * 2.5 +
       canonicalEntityKindOverlap * 1.25 +
@@ -2527,6 +2561,7 @@ function findConceptMatch(
     if (
       score >= 6 &&
       (signatureCoverage >= 0.45 ||
+        conceptAliasCoverage >= 0.5 ||
         entityAliasCoverage >= 0.5 ||
         canonicalEntityCoverage >= 0.5 ||
         canonicalEntityKindCoverage >= 0.75) &&
@@ -5245,6 +5280,57 @@ function reconcilePermanentMemoryTree(params: {
   return params.root;
 }
 
+function scorePermanentNode(params: {
+  node: PermanentMemoryNode;
+  sourceEntries: LongTermMemoryEntry[];
+  queryTokens: Set<string>;
+  scopeContext?: MemoryScopeContext;
+}): number {
+  const { node, sourceEntries, queryTokens, scopeContext } = params;
+  const summary = node.summary ?? "";
+  const queryScore = computeOverlapScore(summary, queryTokens);
+  const topicScore = buildTopicBucketSignature([summary]).filter((token) =>
+    queryTokens.has(token),
+  ).length;
+  const scopeScore = Math.max(
+    0,
+    ...sourceEntries.map((entry) => countExplicitScopeMatches(entry, scopeContext)),
+  );
+  const sourceStrength =
+    sourceEntries.reduce(
+      (sum, entry) =>
+        sum +
+        entry.strength * 1.4 +
+        entry.confidence * 1.2 +
+        Math.min(2.5, (entry.relations?.length ?? 0) * 0.35) +
+        Math.min(1.5, (entry.accessCount ?? 0) * 0.12) +
+        Math.min(1.5, (entry.relatedMemoryIds?.length ?? 0) * 0.3) +
+        (entry.activeStatus === "active"
+          ? 0.6
+          : entry.activeStatus === "pending" || entry.activeStatus === "stale"
+            ? 0.1
+            : -1.25),
+      0,
+    ) / Math.max(1, sourceEntries.length);
+  const conceptDiversity = new Set(sourceEntries.map((entry) => getEntryConceptId(entry))).size;
+  const relationDensity =
+    sourceEntries.reduce((sum, entry) => sum + (entry.relations?.length ?? 0), 0) /
+    Math.max(1, sourceEntries.length);
+  const entitySupport =
+    sourceEntries.reduce((sum, entry) => sum + buildCanonicalEntityKeys(entry).length, 0) /
+    Math.max(1, sourceEntries.length);
+  return (
+    node.confidence * 1.5 +
+    sourceStrength +
+    scopeScore * 2.2 +
+    queryScore * 1.5 +
+    topicScore * 2 +
+    Math.min(2.5, conceptDiversity * 0.6) +
+    Math.min(2.5, relationDensity * 0.35) +
+    Math.min(2, entitySupport * 0.2)
+  );
+}
+
 function collectRelevantPermanentNodes(params: {
   permanentMemory: PermanentMemoryNode;
   longTermMemory: LongTermMemoryEntry[];
@@ -5292,6 +5378,18 @@ function collectRelevantPermanentNodes(params: {
         ...bSourceEntries.map((entry) => countExplicitScopeMatches(entry, params.scopeContext)),
       );
       return (
+        scorePermanentNode({
+          node: b,
+          sourceEntries: bSourceEntries,
+          queryTokens: params.queryTokens,
+          scopeContext: params.scopeContext,
+        }) -
+          scorePermanentNode({
+            node: a,
+            sourceEntries: aSourceEntries,
+            queryTokens: params.queryTokens,
+            scopeContext: params.scopeContext,
+          }) ||
         bScope - aScope ||
         computeOverlapScore(b.summary ?? "", params.queryTokens) -
           computeOverlapScore(a.summary ?? "", params.queryTokens)

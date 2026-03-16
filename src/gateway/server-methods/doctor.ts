@@ -1,5 +1,13 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  generateMemoryDiagnosticsReport,
+  type MemoryDiagnosticsReport,
+} from "../../context-engine/memory-system-store.js";
+import {
+  getMemoryBackgroundWorkerStats,
+  type MemoryBackgroundWorkerStats,
+} from "../../context-engine/memory-system-worker.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { formatError } from "../server-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -11,6 +19,13 @@ export type DoctorMemoryStatusPayload = {
     ok: boolean;
     error?: string;
   };
+};
+
+export type DoctorMemoryDiagnosticsPayload = {
+  agentId: string;
+  workspaceDir: string;
+  report: MemoryDiagnosticsReport;
+  worker: MemoryBackgroundWorkerStats;
 };
 
 export const doctorHandlers: GatewayRequestHandlers = {
@@ -58,5 +73,26 @@ export const doctorHandlers: GatewayRequestHandlers = {
     } finally {
       await manager.close?.().catch(() => {});
     }
+  },
+  "doctor.memory.diagnostics": async ({ params, respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const sessionId =
+      typeof (params as { sessionKey?: unknown } | undefined)?.sessionKey === "string" &&
+      (params as { sessionKey?: string }).sessionKey?.trim()
+        ? (params as { sessionKey?: string }).sessionKey!.trim()
+        : "main";
+    const report = await generateMemoryDiagnosticsReport({
+      workspaceDir,
+      sessionId,
+    });
+    const payload: DoctorMemoryDiagnosticsPayload = {
+      agentId,
+      workspaceDir,
+      report,
+      worker: getMemoryBackgroundWorkerStats(),
+    };
+    respond(true, payload, undefined);
   },
 };

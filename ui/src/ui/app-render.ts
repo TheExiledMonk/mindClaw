@@ -626,6 +626,8 @@ export function renderApp(state: AppViewState) {
                 attentionItems: state.attentionItems,
                 eventLog: state.eventLog,
                 overviewLogLines: state.overviewLogLines,
+                memoryDiagnostics: state.memoryDiagnostics,
+                memoryDiagnosticsError: state.memoryDiagnosticsError,
                 showGatewayToken: state.overviewShowGatewayToken,
                 showGatewayPassword: state.overviewShowGatewayPassword,
                 onSettingsChange: (next) => state.applySettings(next),

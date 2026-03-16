@@ -393,6 +393,8 @@ export class OpenClawApp extends LitElement {
   @state() overviewShowGatewayPassword = false;
   @state() overviewLogLines: string[] = [];
   @state() overviewLogCursor = 0;
+  @state() memoryDiagnostics: import("./types.js").DoctorMemoryDiagnosticsPayload | null = null;
+  @state() memoryDiagnosticsError: string | null = null;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;

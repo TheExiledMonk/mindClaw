@@ -34,7 +34,7 @@ import {
 import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
-import type { AgentsListResult, AttentionItem } from "./types.ts";
+import type { AgentsListResult, AttentionItem, DoctorMemoryDiagnosticsPayload } from "./types.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
 type SettingsHost = {
@@ -471,8 +471,27 @@ export async function loadOverview(host: SettingsHost) {
     loadSkills(app),
     loadUsage(app),
     loadOverviewLogs(app),
+    loadOverviewMemoryDiagnostics(app),
   ]);
   buildAttentionItems(app);
+}
+
+async function loadOverviewMemoryDiagnostics(host: OpenClawApp) {
+  if (!host.client || !host.connected) {
+    host.memoryDiagnostics = null;
+    host.memoryDiagnosticsError = null;
+    return;
+  }
+  try {
+    const res = await host.client.request("doctor.memory.diagnostics", {
+      sessionKey: host.sessionKey || undefined,
+    });
+    host.memoryDiagnostics = res as DoctorMemoryDiagnosticsPayload;
+    host.memoryDiagnosticsError = null;
+  } catch (err) {
+    host.memoryDiagnostics = null;
+    host.memoryDiagnosticsError = String(err);
+  }
 }
 
 export function hasOperatorReadAccess(

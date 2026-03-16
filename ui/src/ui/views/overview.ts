@@ -10,6 +10,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  DoctorMemoryDiagnosticsPayload,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -45,6 +46,8 @@ export type OverviewProps = {
   attentionItems: AttentionItem[];
   eventLog: EventLogEntry[];
   overviewLogLines: string[];
+  memoryDiagnostics: DoctorMemoryDiagnosticsPayload | null;
+  memoryDiagnosticsError: string | null;
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onSettingsChange: (next: UiSettings) => void;
@@ -191,6 +194,13 @@ export function renderOverview(props: OverviewProps) {
   })();
 
   const currentLocale = i18n.getLocale();
+  const memoryReport = props.memoryDiagnostics?.report;
+  const memoryWorker = props.memoryDiagnostics?.worker;
+  const memorySkipped = memoryReport?.retrieval
+    ? Object.entries(memoryReport.retrieval.skippedReasonCounts)
+        .toSorted((a, b) => b[1] - a[1])
+        .slice(0, 4)
+    : [];
 
   return html`
     <section class="grid">
@@ -391,6 +401,116 @@ export function renderOverview(props: OverviewProps) {
 
     <div class="ov-section-divider"></div>
 
+    <section class="grid">
+      <div class="card">
+        <div class="card-title">Memory Diagnostics</div>
+        <div class="card-sub">Integrated memory health, retrieval behavior, and worker activity.</div>
+        ${
+          props.memoryDiagnosticsError
+            ? html`<div class="callout danger" style="margin-top: 14px;">${props.memoryDiagnosticsError}</div>`
+            : memoryReport
+              ? html`
+                  <div class="callout" style="margin-top: 14px;">${memoryReport.summary}</div>
+
+                  <div class="stat-grid" style="margin-top: 16px;">
+                    <div class="stat">
+                      <div class="stat-label">Health</div>
+                      <div class="stat-value">${memoryReport.health.summary}</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-label">Session</div>
+                      <div class="stat-value mono">${memoryReport.sessionId}</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-label">Retrieved items</div>
+                      <div class="stat-value">${memoryReport.retrieval?.retrievalItemCount ?? 0}</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-label">Topic matches</div>
+                      <div class="stat-value">${memoryReport.retrieval?.topicMatchedItemCount ?? 0}</div>
+                    </div>
+                  </div>
+
+                  ${
+                    memoryWorker
+                      ? html`
+                          <div class="muted" style="margin-top: 14px;">
+                            Worker: queued=${memoryWorker.queued} completed=${memoryWorker.completed}
+                            failed=${memoryWorker.failed} active=${memoryWorker.active}
+                            maintenance=${memoryWorker.maintenanceRuns}
+                            ${memoryWorker.lastReason ? html` last=${memoryWorker.lastReason}` : nothing}
+                          </div>
+                        `
+                      : nothing
+                  }
+
+                  ${
+                    memoryReport.retrieval
+                      ? html`
+                          <div style="margin-top: 14px;">
+                            <div class="card-sub">Retrieval reasons</div>
+                            <div class="muted" style="margin-top: 6px;">
+                              ${memoryReport.retrieval.topReasons.join(" | ") || "No retrieval reasons recorded."}
+                            </div>
+                          </div>
+                        `
+                      : nothing
+                  }
+
+                  ${
+                    memorySkipped.length > 0
+                      ? html`
+                          <div style="margin-top: 14px;">
+                            <div class="card-sub">Skipped items</div>
+                            <ul class="session-list" style="margin-top: 8px;">
+                              ${memorySkipped.map(
+                                ([reason, count]) =>
+                                  html`<li><span class="mono">${reason}</span><span>${count}</span></li>`,
+                              )}
+                            </ul>
+                          </div>
+                        `
+                      : nothing
+                  }
+
+                  ${
+                    (memoryReport.retrieval?.supersededSamples.length ?? 0) > 0
+                      ? html`
+                          <div style="margin-top: 14px;">
+                            <div class="card-sub">Superseded samples</div>
+                            <ul class="muted" style="margin-top: 8px; padding-left: 18px;">
+                              ${memoryReport.retrieval?.supersededSamples
+                                .slice(0, 4)
+                                .map((item) => html`<li>${item}</li>`)}
+                            </ul>
+                          </div>
+                        `
+                      : nothing
+                  }
+
+                  ${
+                    memoryReport.recommendations.length > 0
+                      ? html`
+                          <div style="margin-top: 14px;">
+                            <div class="card-sub">Recommendations</div>
+                            <ul class="muted" style="margin-top: 8px; padding-left: 18px;">
+                              ${memoryReport.recommendations
+                                .slice(0, 5)
+                                .map((item) => html`<li>${item}</li>`)}
+                            </ul>
+                          </div>
+                        `
+                      : nothing
+                  }
+                `
+              : html`
+                  <div class="muted" style="margin-top: 14px">Memory diagnostics unavailable.</div>
+                `
+        }
+      </div>
+    </section>
+
+    <div class="ov-section-divider"></div>
     <div class="ov-bottom-grid" style="margin-top: 18px;">
       ${renderOverviewEventLog({
         events: props.eventLog,

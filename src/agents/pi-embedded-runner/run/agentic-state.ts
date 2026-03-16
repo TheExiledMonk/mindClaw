@@ -1085,6 +1085,59 @@ function extractRecommendedProceduralSkills(memoryText?: string): string[] {
   );
 }
 
+function extractMemoryTrendGuidance(memoryText?: string): {
+  weakeningSkills: string[];
+  effectiveSkills: string[];
+  recoveringSkills: string[];
+  stabilizedSkills: string[];
+  templateFamilies: string[];
+  mergeFamilies: string[];
+  trend?: "stable" | "watch" | "regressing";
+} {
+  if (!memoryText) {
+    return {
+      weakeningSkills: [],
+      effectiveSkills: [],
+      recoveringSkills: [],
+      stabilizedSkills: [],
+      templateFamilies: [],
+      mergeFamilies: [],
+    };
+  }
+  const match = memoryText.match(/Agentic trend guidance:\s*((?:\n-\s+[^\n]+)+)/i);
+  const lines = match
+    ? match[1]
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s+/, "").trim())
+        .filter(Boolean)
+    : [];
+  const parseList = (key: string): string[] =>
+    uniqueCompact(
+      lines.flatMap((line) => {
+        const value = line.match(new RegExp(`${key}=([a-z0-9_,@/.-]+)`, "i"))?.[1]?.trim();
+        return value
+          ? value
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean)
+          : [];
+      }),
+      6,
+    );
+  const trend = lines
+    .map((line) => line.match(/trend=(stable|watch|regressing)/i)?.[1]?.toLowerCase())
+    .find((value): value is "stable" | "watch" | "regressing" => Boolean(value));
+  return {
+    weakeningSkills: parseList("weakening_skills"),
+    effectiveSkills: parseList("effective_skills"),
+    recoveringSkills: parseList("recovering_skills"),
+    stabilizedSkills: parseList("stabilized_skills"),
+    templateFamilies: parseList("template_families"),
+    mergeFamilies: parseList("merge_families"),
+    trend,
+  };
+}
+
 function extractProceduralWorkflowChains(params: {
   memoryText?: string;
   availableSkills?: string[];
@@ -8789,6 +8842,7 @@ export function formatAgenticSoakReport(
 
 export function runAgenticQualityGate(params?: {
   messages?: AgentMessage[];
+  memorySystemPromptAddition?: string;
   failOnEscalation?: boolean;
   failOnMissingFallback?: boolean;
   failOnClarificationBlockers?: boolean;
@@ -8814,6 +8868,7 @@ export function runAgenticQualityGate(params?: {
     ? undefined
     : buildAgenticExecutionState({
         messages: params?.messages ?? [],
+        memorySystemPromptAddition: params?.memorySystemPromptAddition,
       });
   const diagnostics =
     params?.diagnosticsOverride ??
@@ -8902,13 +8957,15 @@ export function runAgenticQualityGate(params?: {
           resumeCondition: undefined,
           assumptions: diagnostics.assumptions,
         } satisfies AgenticHandoffReport);
-  const weakeningSkills = uniqueCompact(params?.memoryTrend?.weakeningSkills ?? [], 6);
-  const effectiveSkills = uniqueCompact(params?.memoryTrend?.effectiveSkills ?? [], 6);
-  const recoveringSkills = uniqueCompact(params?.memoryTrend?.recoveringSkills ?? [], 6);
-  const stabilizedSkills = uniqueCompact(params?.memoryTrend?.stabilizedSkills ?? [], 6);
-  const templateFamilies = uniqueCompact(params?.memoryTrend?.templateFamilies ?? [], 6);
-  const mergeFamilies = uniqueCompact(params?.memoryTrend?.mergeFamilies ?? [], 6);
-  const effectivenessTrend = params?.memoryTrend?.trend;
+  const derivedMemoryTrend =
+    params?.memoryTrend ?? extractMemoryTrendGuidance(params?.memorySystemPromptAddition);
+  const weakeningSkills = uniqueCompact(derivedMemoryTrend.weakeningSkills ?? [], 6);
+  const effectiveSkills = uniqueCompact(derivedMemoryTrend.effectiveSkills ?? [], 6);
+  const recoveringSkills = uniqueCompact(derivedMemoryTrend.recoveringSkills ?? [], 6);
+  const stabilizedSkills = uniqueCompact(derivedMemoryTrend.stabilizedSkills ?? [], 6);
+  const templateFamilies = uniqueCompact(derivedMemoryTrend.templateFamilies ?? [], 6);
+  const mergeFamilies = uniqueCompact(derivedMemoryTrend.mergeFamilies ?? [], 6);
+  const effectivenessTrend = derivedMemoryTrend.trend;
   const clarificationClasses = uniqueCompact(
     diagnostics.clarificationReason ? [diagnostics.clarificationReason] : [],
     3,

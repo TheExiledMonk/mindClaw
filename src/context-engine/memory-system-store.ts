@@ -6949,6 +6949,47 @@ export function retrieveMemoryContextPacket(
     );
   }
 
+  const agenticTrendGuidance = inspectMemoryAgenticTrends(snapshot);
+  if (agenticTrendGuidance) {
+    const trendLine = [
+      `trend=${agenticTrendGuidance.trend}`,
+      `total_signals=${agenticTrendGuidance.totalSignals}`,
+      `missing_fallback=${agenticTrendGuidance.missingFallbackSignals}`,
+      `escalations=${agenticTrendGuidance.escalationSignals}`,
+      `soak_failures=${agenticTrendGuidance.failingSoakSignals}`,
+      `quality_failures=${agenticTrendGuidance.failingQualityGateSignals}`,
+      agenticTrendGuidance.effectiveSkills.length > 0
+        ? `effective_skills=${agenticTrendGuidance.effectiveSkills.join(",")}`
+        : "",
+      agenticTrendGuidance.weakeningSkills.length > 0
+        ? `weakening_skills=${agenticTrendGuidance.weakeningSkills.join(",")}`
+        : "",
+      agenticTrendGuidance.recoveringSkills.length > 0
+        ? `recovering_skills=${agenticTrendGuidance.recoveringSkills.join(",")}`
+        : "",
+      agenticTrendGuidance.stabilizedSkills.length > 0
+        ? `stabilized_skills=${agenticTrendGuidance.stabilizedSkills.join(",")}`
+        : "",
+      agenticTrendGuidance.templateFamilies.length > 0
+        ? `template_families=${agenticTrendGuidance.templateFamilies.join(",")}`
+        : "",
+      agenticTrendGuidance.mergeFamilies.length > 0
+        ? `merge_families=${agenticTrendGuidance.mergeFamilies.join(",")}`
+        : "",
+      agenticTrendGuidance.qualityFailureReasons.length > 0
+        ? `quality_failure_reasons=${agenticTrendGuidance.qualityFailureReasons.join(",")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    retrievalItems.push({
+      kind: "long-term",
+      text: trendLine,
+      reason: "agentic trend guidance source=memory_trend",
+    });
+    sections.push(`Agentic trend guidance:\n- ${trendLine}`);
+  }
+
   const agenticRegressionGuidance = rankLongTermEntries(
     snapshot.longTermMemory.filter((entry) =>
       (entry.environmentTags ?? []).some(

@@ -107,6 +107,32 @@ describe("agentic quality gate", () => {
     expect(report.recommendations).toContain("Dominant blocked-work classes: no_viable_fallback.");
   });
 
+  it("derives memory trend gating directly from retrieved memory prompt guidance", () => {
+    const report = runAgenticQualityGate({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Decide whether release readiness should stay gated while diagnostics still regresses.",
+          timestamp: Date.now(),
+        },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Agentic trend guidance:",
+        "- trend=regressing effective_skills=acceptance-report@debugging/node weakening_skills=memory-diagnostics@debugging/node recovering_skills=acceptance-report@debugging/node template_families=verification@debugging/node quality_failure_reasons=diagnostics_missing_fallback",
+      ].join("\n"),
+    });
+
+    expect(report.releaseGateStatus).toBe("gated");
+    expect(report.operatorConfidenceStatus).toBe("medium");
+    expect(report.effectiveSkills).toContain("acceptance-report@debugging/node");
+    expect(report.weakeningSkills).toContain("memory-diagnostics@debugging/node");
+    expect(report.recoveringSkills).toContain("acceptance-report@debugging/node");
+    expect(report.templateFamilies).toContain("verification@debugging/node");
+    expect(report.confidenceSignals).toContain("effectiveness_regressing");
+  });
+
   it("formats the quality gate report in summary and markdown forms", () => {
     const report = runAgenticQualityGate({
       memoryTrend: {

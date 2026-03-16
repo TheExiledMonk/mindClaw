@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildAgenticExecutionState } from "../agents/pi-embedded-runner/run/agentic-state.js";
+import {
+  buildAgenticExecutionState,
+  runAgenticQualityGate,
+} from "../agents/pi-embedded-runner/run/agentic-state.js";
 import { requireNodeSqlite } from "../memory/sqlite.js";
 import {
   buildMemoryContextPacket,
@@ -3987,6 +3990,221 @@ describe("MemorySystemContextEngine", () => {
     expect(
       packet.retrievalItems.some((item) => item.reason.includes("agentic regression guidance")),
     ).toBe(true);
+  });
+
+  it("injects agentic trend guidance into retrieved memory packets and lets quality gating consume it", () => {
+    const sessionId = "agent:agentic-trend-guidance-packet";
+    const failingQuality = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Stop repeating the regressing diagnostics workflow until the fallback gap is fixed.",
+        ),
+      ],
+      runtimeContext: {
+        agenticQualityGate: {
+          passed: false,
+          acceptancePassed: true,
+          soakPassed: true,
+          diagnosticsPassed: false,
+          effectivenessPassed: false,
+          failReasons: ["diagnostics_missing_fallback", "weakening_scoped_skills"],
+          acceptance: {
+            passed: true,
+            totalScenarios: 4,
+            passedScenarios: 4,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic acceptance 4/4 passed",
+          },
+          soak: {
+            passed: true,
+            totalScenarios: 2,
+            passedScenarios: 2,
+            failedScenarioIds: [],
+            scenarios: [],
+            summary: "agentic soak 2/2 passed",
+          },
+          diagnostics: {
+            summary:
+              "retry=fallback autonomy=fallback risk=medium failure=near_miss fallback=missing",
+            retryClass: "skill_fallback",
+            autonomyMode: "fallback",
+            riskLevel: "medium",
+            failurePattern: "near_miss",
+            suggestedSkill: "acceptance-report",
+            rankedSkills: ["memory-diagnostics", "acceptance-report"],
+            capabilityGaps: ["no_viable_fallback"],
+            overlappingSkills: [],
+            skillFamilies: ["diagnostics"],
+            consolidationAction: "none",
+            workflowSteps: [],
+            hasViableFallback: false,
+            escalationRequired: false,
+            planSteps: [],
+            goalSatisfaction: "uncertain",
+            unresolvedCriteria: ["find a stable fallback"],
+            recommendations: [
+              "Prefer the acceptance-report fallback while the diagnostics path regresses.",
+            ],
+          },
+          releaseGateStatus: "blocked",
+          operatorConfidenceStatus: "low",
+          confidenceSignals: ["diagnostics_failed", "effectiveness_failed"],
+          summary:
+            "agentic quality gate acceptance=pass soak=pass diagnostics=fail effectiveness=fail release=blocked confidence=low",
+        },
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "acceptance-report"],
+          likelySkills: ["memory-diagnostics"],
+          alternativeSkills: ["acceptance-report"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/diagnostics.ts"],
+          outcome: "failed",
+          goalSatisfaction: "partial",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "none",
+          overlappingSkills: [],
+          skillFamilies: ["diagnostics"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: true,
+          retryClass: "skill_fallback",
+          suggestedSkill: "acceptance-report",
+          shouldEscalate: false,
+          autonomyMode: "fallback",
+          riskLevel: "medium",
+          governanceReasons: [],
+          primarySkill: "memory-diagnostics",
+          fallbackSkills: ["acceptance-report"],
+          skillChain: ["memory-diagnostics", "acceptance-report"],
+          workflowSteps: [
+            { skill: "memory-diagnostics", role: "primary" },
+            { skill: "acceptance-report", role: "fallback" },
+          ],
+          rankedSkills: ["memory-diagnostics", "acceptance-report"],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: ["no_viable_fallback"],
+          hasViableFallback: false,
+          multiSkillCandidate: true,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "near_miss",
+          learnFromFailure: true,
+          failureReasons: ["verification_failure"],
+          nextImprovement: "Stay on the stable acceptance fallback until diagnostics recovers.",
+          planSteps: [],
+        },
+      } as never,
+    });
+    const recoveredProcedural = compileMemoryState({
+      sessionId,
+      messages: [
+        userMessage(
+          "Use the stable acceptance-report workflow while diagnostics remains under watch.",
+        ),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "acceptance-report"],
+          likelySkills: ["acceptance-report"],
+          alternativeSkills: ["memory-diagnostics"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/acceptance-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: false,
+          consolidationAction: "extend_existing",
+          overlappingSkills: [],
+          skillFamilies: ["verification"],
+          mergeCandidate: false,
+          mergeSkills: [],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          suggestedSkill: "acceptance-report",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "low",
+          governanceReasons: [],
+          primarySkill: "acceptance-report",
+          fallbackSkills: ["memory-diagnostics"],
+          skillChain: ["acceptance-report"],
+          workflowSteps: [{ skill: "acceptance-report", role: "primary" }],
+          rankedSkills: ["acceptance-report", "memory-diagnostics"],
+          promotedSkills: ["acceptance-report"],
+          stabilityState: "stable_reuse",
+          stabilitySkills: ["acceptance-report"],
+          effectiveSkills: ["acceptance-report"],
+          effectiveFamilies: ["verification"],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: false,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: false,
+          failureReasons: [],
+          nextImprovement:
+            "Keep the stable acceptance workflow promoted while diagnostics recovers.",
+          planSteps: [],
+        },
+      } as never,
+    });
+
+    for (const entry of failingQuality.longTermMemory) {
+      entry.updatedAt = 1_000;
+    }
+    for (const entry of recoveredProcedural.longTermMemory) {
+      entry.updatedAt = 2_000;
+    }
+    failingQuality.longTermMemory.push(...recoveredProcedural.longTermMemory);
+    failingQuality.pendingSignificance.push(...recoveredProcedural.pendingSignificance);
+
+    const packet = retrieveMemoryContextPacket(failingQuality, {
+      messages: [
+        userMessage(
+          "Decide whether release readiness should stay gated while diagnostics still regresses.",
+        ),
+      ],
+    });
+
+    expect(packet.text).toContain("Agentic trend guidance:");
+    expect(packet.text).toContain("trend=regressing");
+    expect(packet.text).toContain("effective_skills=acceptance-report@debugging/node");
+    expect(packet.text).toContain(
+      "quality_failure_reasons=diagnostics_missing_fallback,weakening_scoped_skills",
+    );
+
+    const qualityReport = runAgenticQualityGate({
+      messages: [
+        userMessage(
+          "Decide whether release readiness should stay gated while diagnostics still regresses.",
+        ),
+      ],
+      memorySystemPromptAddition: packet.text,
+    });
+
+    expect(qualityReport.releaseGateStatus).toBe("gated");
+    expect(qualityReport.operatorConfidenceStatus).toBe("medium");
+    expect(qualityReport.confidenceSignals).toContain("effectiveness_regressing");
   });
 
   it("injects skill family guidance into retrieved memory packets", () => {

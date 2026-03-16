@@ -115,16 +115,6 @@ export function buildMemoryQuerySignature(params: {
   ].join("||");
 }
 
-function sameMetadata(a: MemoryStoreMetadata, b: MemoryStoreMetadata): boolean {
-  return (
-    (a.snapshotVersion ?? 0) === (b.snapshotVersion ?? 0) &&
-    (a.workingMemoryVersion ?? 0) === (b.workingMemoryVersion ?? 0) &&
-    (a.longTermMemoryVersion ?? 0) === (b.longTermMemoryVersion ?? 0) &&
-    (a.permanentMemoryVersion ?? 0) === (b.permanentMemoryVersion ?? 0) &&
-    (a.graphVersion ?? 0) === (b.graphVersion ?? 0)
-  );
-}
-
 export async function getCachedMemoryStoreSnapshot(params: {
   workspaceDir: string;
   sessionId: string;
@@ -133,13 +123,13 @@ export async function getCachedMemoryStoreSnapshot(params: {
   loadSnapshot: () => Promise<MemoryStoreSnapshot>;
 }): Promise<{ snapshot: MemoryStoreSnapshot; metadata: MemoryStoreMetadata; cacheHit: boolean }> {
   const key = buildSessionKey(params);
-  const metadata = await params.loadMetadata();
   const cached = snapshotCache.get(key);
-  if (cached && sameMetadata(cached.metadata, metadata)) {
+  if (cached) {
     stats.snapshotHits += 1;
     return { snapshot: cached.snapshot, metadata: cached.metadata, cacheHit: true };
   }
   stats.snapshotMisses += 1;
+  const metadata = await params.loadMetadata();
   const snapshot = await params.loadSnapshot();
   snapshotCache.set(key, {
     workspaceDir: params.workspaceDir,

@@ -6,7 +6,7 @@ import {
   buildMemoryQuerySignature,
   getCachedMemoryContextPacket,
   getCachedMemoryStoreSnapshot,
-  invalidateMemoryCache,
+  primeMemoryStoreSnapshot,
 } from "./memory-system-cache.js";
 import {
   compileMemoryState,
@@ -16,7 +16,6 @@ import {
   persistMemoryStoreSnapshot,
   retrieveMemoryContextPacket,
   runMemorySleepReview,
-  touchRetrievedMemories,
 } from "./memory-system-store.js";
 import { enqueueMemoryBackgroundRefresh } from "./memory-system-worker.js";
 import { registerContextEngine } from "./registry.js";
@@ -212,25 +211,6 @@ export class MemorySystemContextEngine implements ContextEngine {
           includeLongTermMemory: workingSetPolicy.includeRelevantMemory,
         }),
     });
-    if (packet.accessedLongTermIds.length > 0) {
-      await persistMemoryStoreSnapshot({
-        workspaceDir,
-        sessionId,
-        backendKind,
-        workingMemory: snapshot.workingMemory,
-        longTermMemory: touchRetrievedMemories(snapshot.longTermMemory, packet.accessedLongTermIds),
-        pendingSignificance: snapshot.pendingSignificance,
-        permanentMemory: snapshot.permanentMemory,
-        graph: snapshot.graph,
-      });
-      invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
-      enqueueMemoryBackgroundRefresh({
-        workspaceDir,
-        sessionId,
-        backendKind,
-        reason: "review",
-      });
-    }
     return {
       messages: assembledMessages,
       estimatedTokens: packet.text ? Math.ceil(packet.text.length / 4) : 0,
@@ -286,7 +266,19 @@ export class MemorySystemContextEngine implements ContextEngine {
       permanentMemory: incremental.permanentMemory,
       graph: incremental.graph,
     });
-    invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+    primeMemoryStoreSnapshot({
+      workspaceDir,
+      sessionId,
+      backendKind,
+      metadata: await loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+      snapshot: {
+        workingMemory: incremental.workingMemory,
+        longTermMemory: incremental.longTermMemory,
+        pendingSignificance: incremental.pendingSignificance,
+        permanentMemory: incremental.permanentMemory,
+        graph: incremental.graph,
+      },
+    });
     enqueueMemoryBackgroundRefresh({
       workspaceDir,
       sessionId,
@@ -343,7 +335,19 @@ export class MemorySystemContextEngine implements ContextEngine {
         permanentMemory: compiled.permanentMemory,
         graph: compiled.graph,
       });
-      invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+      primeMemoryStoreSnapshot({
+        workspaceDir,
+        sessionId,
+        backendKind,
+        metadata: await loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+        snapshot: {
+          workingMemory: compiled.workingMemory,
+          longTermMemory: compiled.longTermMemory,
+          pendingSignificance: compiled.pendingSignificance,
+          permanentMemory: compiled.permanentMemory,
+          graph: compiled.graph,
+        },
+      });
       enqueueMemoryBackgroundRefresh({
         workspaceDir,
         sessionId,
@@ -385,7 +389,19 @@ export class MemorySystemContextEngine implements ContextEngine {
       permanentMemory: reviewed.permanentMemory,
       graph: reviewed.graph,
     });
-    invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+    primeMemoryStoreSnapshot({
+      workspaceDir,
+      sessionId,
+      backendKind,
+      metadata: await loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+      snapshot: {
+        workingMemory: reviewed.workingMemory,
+        longTermMemory: reviewed.longTermMemory,
+        pendingSignificance: reviewed.pendingSignificance,
+        permanentMemory: reviewed.permanentMemory,
+        graph: reviewed.graph,
+      },
+    });
     enqueueMemoryBackgroundRefresh({
       workspaceDir,
       sessionId,

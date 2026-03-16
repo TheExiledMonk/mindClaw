@@ -224,6 +224,36 @@ describe("memory tools", () => {
     };
     expect(details.results[0]?.snippet).toContain("evergreen casino compliance ladder");
   });
+
+  it("keeps repeated identical searches warm instead of invalidating cache on read", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+
+    const first = await searchTool.execute("call_warm_first", {
+      query: "CPA course",
+    });
+    const firstDetails = first.details as {
+      observability?: { snapshotCacheHit?: boolean; packetCacheHit?: boolean };
+      results: Array<{ snippet: string }>;
+    };
+    expect(firstDetails.results[0]?.snippet).toContain("CPA course");
+
+    const second = await searchTool.execute("call_warm_second", {
+      query: "CPA course",
+    });
+    const secondDetails = second.details as {
+      observability?: { snapshotCacheHit?: boolean; packetCacheHit?: boolean };
+      results: Array<{ snippet: string }>;
+    };
+    expect(secondDetails.results[0]?.snippet).toContain("CPA course");
+    expect(secondDetails.observability?.snapshotCacheHit).toBe(true);
+    expect(secondDetails.observability?.packetCacheHit).toBe(true);
+  });
 });
 
 function configForWorkspace(config: Record<string, unknown>) {

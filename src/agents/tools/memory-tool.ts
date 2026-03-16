@@ -7,7 +7,7 @@ import {
   buildMemoryQuerySignature,
   getCachedMemoryContextPacket,
   getCachedMemoryStoreSnapshot,
-  invalidateMemoryCache,
+  primeMemoryStoreSnapshot,
 } from "../../context-engine/memory-system-cache.js";
 import {
   loadMemoryStoreMetadata,
@@ -240,7 +240,13 @@ export function createMemoryStoreTool(options: {
             importanceClass,
             sourceType,
           });
-          invalidateMemoryCache({ workspaceDir, sessionId, backendKind });
+          primeMemoryStoreSnapshot({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            metadata: await loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+            snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
+          });
           enqueueMemoryBackgroundRefresh({
             workspaceDir,
             sessionId,

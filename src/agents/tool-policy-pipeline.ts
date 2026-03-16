@@ -92,18 +92,17 @@ export function applyToolPolicyPipeline(params: {
       const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
-        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
-        );
         const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
-        const suffix = describeUnknownAllowlistSuffix({
-          strippedAllowlist: resolved.strippedAllowlist,
-          hasGatedCoreEntries: gatedCoreEntries.length > 0,
-          hasOtherEntries: otherEntries.length > 0,
-        });
-        params.warn(
-          `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`,
-        );
+        if (otherEntries.length > 0) {
+          const suffix = describeUnknownAllowlistSuffix({
+            strippedAllowlist: resolved.strippedAllowlist,
+            hasGatedCoreEntries: resolved.unknownAllowlist.length > otherEntries.length,
+            hasOtherEntries: true,
+          });
+          params.warn(
+            `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`,
+          );
+        }
       }
       policy = resolved.policy;
     }

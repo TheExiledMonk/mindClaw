@@ -8,8 +8,18 @@ export type RequiredParamGroup = {
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 
-function parameterValidationError(message: string): Error {
-  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+function buildParamRetryGuidance(params: {
+  toolName: string;
+  missingLabels: readonly string[];
+}): string {
+  if (params.toolName === "read" && params.missingLabels.some((label) => label.includes("path"))) {
+    return ' Supply an explicit read path, for example {"path":"AGENTS.md"} or {"file_path":"AGENTS.md"}, before retrying.';
+  }
+  return RETRY_GUIDANCE_SUFFIX;
+}
+
+function parameterValidationError(message: string, retryGuidance?: string): Error {
+  return new Error(`${message}.${retryGuidance ?? RETRY_GUIDANCE_SUFFIX}`);
 }
 
 export const CLAUDE_PARAM_GROUPS = {
@@ -171,7 +181,10 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw parameterValidationError(`Missing parameters for ${toolName}`);
+    throw parameterValidationError(
+      `Missing parameters for ${toolName}`,
+      buildParamRetryGuidance({ toolName, missingLabels: [] }),
+    );
   }
 
   const missingLabels: string[] = [];
@@ -199,7 +212,10 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
+    throw parameterValidationError(
+      `Missing required ${noun}: ${joined}`,
+      buildParamRetryGuidance({ toolName, missingLabels }),
+    );
   }
 }
 

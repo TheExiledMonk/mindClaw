@@ -134,19 +134,40 @@ describe("createOpenClawCodingTools", () => {
         /Missing required parameter/,
       );
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
-        /Supply correct parameters before retrying\./,
+        /Supply correct parameters before retrying\.|Supply an explicit read path/,
       );
       await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
       await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
-        /Supply correct parameters before retrying\./,
+        /Supply correct parameters before retrying\.|Supply an explicit read path/,
       );
       await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
         /Missing required parameters: path \(path or file_path\), content/,
       );
       await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
         /Supply correct parameters before retrying\./,
+      );
+    });
+
+    it("gives read-specific retry guidance when path is missing", async () => {
+      const execute = vi.fn(async (_id, args) => args);
+      const tool: AgentTool = {
+        name: "read",
+        label: "read",
+        description: "test",
+        parameters: Type.Object({
+          path: Type.String(),
+        }),
+        execute,
+      };
+
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["path", "file_path"], label: "path (path or file_path)" },
+      ]);
+
+      await expect(wrapped.execute("tool-read-1", {})).rejects.toThrow(
+        /Supply an explicit read path, for example \{"path":"AGENTS\.md"\} or \{"file_path":"AGENTS\.md"\}, before retrying\./,
       );
     });
   });

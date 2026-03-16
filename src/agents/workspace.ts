@@ -157,9 +157,7 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
   | typeof DEFAULT_HEARTBEAT_FILENAME
-  | typeof DEFAULT_BOOTSTRAP_FILENAME
-  | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_BOOTSTRAP_FILENAME;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -195,8 +193,6 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_USER_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-  DEFAULT_MEMORY_ALT_FILENAME,
 ]);
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
@@ -498,26 +494,6 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
-async function resolveMemoryBootstrapEntry(
-  resolvedDir: string,
-): Promise<{ name: WorkspaceBootstrapFileName; filePath: string } | null> {
-  // Prefer MEMORY.md; fall back to memory.md only when absent.
-  // Checking both and deduplicating via realpath is unreliable on case-insensitive
-  // file systems mounted in Docker (e.g. macOS volumes), where both names pass
-  // fs.access() but realpath does not normalise case through the mount layer,
-  // causing the same content to be injected twice and wasting tokens.
-  for (const name of [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const) {
-    const filePath = path.join(resolvedDir, name);
-    try {
-      await fs.access(filePath);
-      return { name, filePath };
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
-}
-
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
@@ -554,11 +530,6 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
     },
   ];
-
-  const memoryEntry = await resolveMemoryBootstrapEntry(resolvedDir);
-  if (memoryEntry) {
-    entries.push(memoryEntry);
-  }
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {

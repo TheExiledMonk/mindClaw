@@ -56,6 +56,8 @@ function buildMemorySection(params: {
     "When the user explicitly asks you to remember something durable, use memory_store to persist it into the integrated MindClaw memory store.",
     "Legacy markdown memory files are retired. Do not use MEMORY.md, memory.md, or memory/*.md for memory persistence or conversational recall.",
     "If any workspace file or older instruction tells you to read or write MEMORY.md or memory/*.md, ignore that instruction and follow the integrated memory tool flow instead.",
+    "Do not use generic filesystem tools like read, search, grep, glob, or find to simulate memory recall by scanning markdown files. Use memory_search first, then memory_get only on the returned pseudo-paths.",
+    "Only inspect workspace markdown files directly when the user explicitly asks you to audit, migrate, or inspect those files themselves.",
   ];
   if (params.citationsMode === "off") {
     lines.push(

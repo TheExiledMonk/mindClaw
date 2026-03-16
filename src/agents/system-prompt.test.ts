@@ -184,6 +184,9 @@ describe("buildAgentSystemPrompt", () => {
       "use memory_store to persist it into the integrated MindClaw memory store",
     );
     expect(prompt).toContain("Legacy markdown memory files are retired.");
+    expect(prompt).toContain(
+      "Do not use generic filesystem tools like read, search, grep, glob, or find to simulate memory recall",
+    );
   });
 
   it("includes voice hint when provided", () => {

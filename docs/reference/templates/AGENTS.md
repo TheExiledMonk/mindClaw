@@ -23,6 +23,7 @@ Before doing anything else:
    - `memory_search` for recall
    - `memory_get` for targeted reads
    - `memory_store` when your human explicitly asks you to remember something durable
+4. Never simulate memory recall by scanning `MEMORY.md`, `memory.md`, `memory/*.md`, or other markdown files with generic file tools. For recall, use the integrated memory tools only.
 
 Don't ask permission. Just do it.
 
@@ -33,6 +34,7 @@ You wake up fresh each session. The integrated MindClaw memory store is your con
 - `memory_search` retrieves relevant past context
 - `memory_get` reads only the specific memory snippets you need
 - `memory_store` persists durable facts, preferences, decisions, and lessons across sessions
+- Do not use `find`, `grep`, `search`, `glob`, or generic file reads over markdown files as a substitute for memory recall
 
 ### 📝 Write It Down - No "Mental Notes"!
 
@@ -158,7 +160,7 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 - **Mentions** - Twitter/social notifications?
 - **Weather** - Relevant if your human might go out?
 
-**Track your checks** in `memory/heartbeat-state.json`:
+**Track your checks** in `heartbeat-state.json`:
 
 ```json
 {

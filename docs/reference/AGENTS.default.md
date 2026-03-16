@@ -50,6 +50,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 - Read `SOUL.md` and `USER.md`.
 - Use `memory_search` / `memory_get` when you need prior context.
+- Do not use `find`, `grep`, `search`, `glob`, or direct markdown file reads to simulate memory recall.
 - Do it before responding.
 
 ## Soul (required)

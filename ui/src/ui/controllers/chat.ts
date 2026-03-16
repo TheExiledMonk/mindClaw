@@ -102,13 +102,13 @@ function getImageAttachmentCount(message: unknown): number {
   }).length;
 }
 
-function getOptimisticUserMessages(messages: unknown[]): OptimisticUserMessage[] {
+function getLocalUserMessages(messages: unknown[]): OptimisticUserMessage[] {
   return messages.filter((message): message is OptimisticUserMessage => {
     if (!message || typeof message !== "object") {
       return false;
     }
     const record = message as Record<string, unknown>;
-    return record.role === "user" && record.pending === true && record.localOnly === true;
+    return record.role === "user" && record.localOnly === true;
   });
 }
 
@@ -136,19 +136,41 @@ function sameUserMessage(a: unknown, b: unknown): boolean {
   return getImageAttachmentCount(left) === getImageAttachmentCount(right);
 }
 
-function mergePendingUserMessages(history: unknown[], current: unknown[]): unknown[] {
-  const pending = getOptimisticUserMessages(current);
-  if (pending.length === 0) {
+function mergeLocalUserMessages(history: unknown[], current: unknown[]): unknown[] {
+  const localUsers = getLocalUserMessages(current);
+  if (localUsers.length === 0) {
     return history;
   }
   const merged = [...history];
-  for (const pendingMessage of pending) {
-    if (history.some((message) => sameUserMessage(message, pendingMessage))) {
+  for (const localMessage of localUsers) {
+    if (history.some((message) => sameUserMessage(message, localMessage))) {
       continue;
     }
-    merged.push(pendingMessage);
+    merged.push(localMessage);
   }
   return merged;
+}
+
+function settleLocalUserMessage(messages: unknown[], runId: string | null): unknown[] {
+  if (!runId) {
+    return messages;
+  }
+  return messages.map((message) => {
+    if (!message || typeof message !== "object") {
+      return message;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "user" || record.localOnly !== true) {
+      return message;
+    }
+    if (getComparableRequestId(record) !== runId) {
+      return message;
+    }
+    return {
+      ...record,
+      pending: false,
+    };
+  });
 }
 
 export async function loadChatHistory(state: ChatState) {
@@ -167,7 +189,7 @@ export async function loadChatHistory(state: ChatState) {
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const filteredMessages = messages.filter((message) => !isAssistantSilentReply(message));
-    state.chatMessages = mergePendingUserMessages(filteredMessages, state.chatMessages);
+    state.chatMessages = mergeLocalUserMessages(filteredMessages, state.chatMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -382,6 +404,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    state.chatMessages = settleLocalUserMessage(state.chatMessages, payload.runId);
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
@@ -399,6 +422,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
+    state.chatMessages = settleLocalUserMessage(state.chatMessages, payload.runId);
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
@@ -419,6 +443,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    state.chatMessages = settleLocalUserMessage(state.chatMessages, payload.runId);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

@@ -254,6 +254,43 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("settles the optimistic user message when the run finishes", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Paste this block" }],
+          timestamp: 99,
+          pending: true,
+          localOnly: true,
+          clientRequestId: "run-1",
+        },
+      ],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Reply" }],
+        timestamp: 101,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "user",
+      pending: false,
+      localOnly: true,
+      clientRequestId: "run-1",
+    });
+  });
+
   it("processes aborted from own run and keeps partial assistant message", () => {
     const existingMessage = {
       role: "user",
@@ -685,6 +722,33 @@ describe("loadChatHistory", () => {
     ]);
   });
 
+  it("preserves settled local user messages until persisted history catches up", async () => {
+    const settledLocal = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block" }],
+      timestamp: 123,
+      pending: false,
+      localOnly: true,
+      clientRequestId: "run-1",
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Working..." }] }],
+      thinkingLevel: "medium",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [settledLocal],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Working..." }] },
+      settledLocal,
+    ]);
+  });
+
   it("drops the optimistic duplicate once history contains the same user message", async () => {
     const optimistic = {
       role: "user",
@@ -738,6 +802,36 @@ describe("loadChatHistory", () => {
       client: { request } as unknown as ChatState["client"],
       connected: true,
       chatMessages: [optimistic],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persisted]);
+  });
+
+  it("drops the settled local duplicate once persisted history contains the same user message", async () => {
+    const settledLocal = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block\nwith lines" }],
+      timestamp: 123,
+      pending: false,
+      localOnly: true,
+      clientRequestId: "run-1",
+    };
+    const persisted = {
+      role: "user",
+      content: [{ type: "text", text: "Paste this block\nwith lines" }],
+      timestamp: 124,
+      idempotencyKey: "run-1",
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persisted],
+      thinkingLevel: "medium",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [settledLocal],
     });
 
     await loadChatHistory(state);

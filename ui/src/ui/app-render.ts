@@ -1356,6 +1356,7 @@ export function renderApp(state: AppViewState) {
                 streamSegments: state.chatStreamSegments,
                 stream: state.chatStream,
                 streamStartedAt: state.chatStreamStartedAt,
+                visibleHistoryCount: state.chatVisibleHistoryCount,
                 draft: state.chatMessage,
                 queue: state.chatQueue,
                 connected: state.connected,
@@ -1378,6 +1379,7 @@ export function renderApp(state: AppViewState) {
                   });
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
+                onLoadOlderHistory: (container) => state.expandChatHistoryWindow(container),
                 getDraft: () => state.chatMessage,
                 onDraftChange: (next) => (state.chatMessage = next),
                 onRequestUpdate: requestHostUpdate,
@@ -1395,6 +1397,7 @@ export function renderApp(state: AppViewState) {
                   try {
                     await state.client.request("sessions.reset", { key: state.sessionKey });
                     state.chatMessages = [];
+                    state.chatVisibleHistoryCount = 200;
                     state.chatStream = null;
                     state.chatRunId = null;
                     await loadChatHistory(state);
@@ -1407,6 +1410,7 @@ export function renderApp(state: AppViewState) {
                 onAgentChange: (agentId: string) => {
                   state.sessionKey = buildAgentMainSessionKey({ agentId });
                   state.chatMessages = [];
+                  state.chatVisibleHistoryCount = 200;
                   state.chatStream = null;
                   state.chatRunId = null;
                   state.applySettings({
@@ -1424,6 +1428,7 @@ export function renderApp(state: AppViewState) {
                 onSessionSelect: (key: string) => {
                   state.setSessionKey(key);
                   state.chatMessages = [];
+                  state.chatVisibleHistoryCount = 200;
                   void loadChatHistory(state);
                   void state.loadAssistantIdentity();
                 },

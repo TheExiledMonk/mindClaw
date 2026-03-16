@@ -146,6 +146,38 @@
   flex-shrink: 0;
 }
 
+.chat-history-window-notice {
+  display: flex;
+  justify-content: center;
+  margin: 0 0 12px;
+}
+
+.chat-history-window-notice__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.chat-history-window-notice__button:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+}
+
+.chat-history-window-notice__detail {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
 /* Context usage warning pill */
 .context-notice {
   align-self: center;

@@ -163,6 +163,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatVisibleHistoryCount = 200;
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
 
@@ -436,6 +437,7 @@ export class OpenClawApp extends LitElement {
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
+  private chatHistoryWindowExpanding = false;
   @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
@@ -505,6 +507,31 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleChatScrollInternal>[0],
       event,
     );
+  }
+
+  expandChatHistoryWindow(container?: HTMLElement | null) {
+    if (this.chatHistoryWindowExpanding) {
+      return;
+    }
+    const totalMessages = Array.isArray(this.chatMessages) ? this.chatMessages.length : 0;
+    if (this.chatVisibleHistoryCount >= totalMessages) {
+      return;
+    }
+    const chatContainer = container ?? this.querySelector(".chat-thread");
+    const previousScrollHeight = chatContainer?.scrollHeight ?? 0;
+    const previousScrollTop = chatContainer?.scrollTop ?? 0;
+    this.chatHistoryWindowExpanding = true;
+    this.chatVisibleHistoryCount = Math.min(totalMessages, this.chatVisibleHistoryCount + 200);
+    void this.updateComplete.then(() => {
+      requestAnimationFrame(() => {
+        const latestContainer = this.querySelector(".chat-thread") ?? chatContainer;
+        if (latestContainer && previousScrollHeight > 0) {
+          const delta = latestContainer.scrollHeight - previousScrollHeight;
+          latestContainer.scrollTop = previousScrollTop + Math.max(0, delta);
+        }
+        this.chatHistoryWindowExpanding = false;
+      });
+    });
   }
 
   handleLogsScroll(event: Event) {

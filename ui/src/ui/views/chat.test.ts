@@ -219,6 +219,36 @@ describe("chat view", () => {
     expect(logoImage?.getAttribute("src")).toBe("/openclaw/favicon.svg");
   });
 
+  it("shows a hidden-history notice and loads older messages on demand", () => {
+    const container = document.createElement("div");
+    const onLoadOlderHistory = vi.fn();
+    const messages = Array.from({ length: 250 }, (_, index) => ({
+      role: "user",
+      content: [{ type: "text", text: `message ${index + 1}` }],
+      timestamp: index + 1,
+    }));
+
+    render(
+      renderChat(
+        createProps({
+          messages,
+          visibleHistoryCount: 200,
+          onLoadOlderHistory,
+        }),
+      ),
+      container,
+    );
+
+    const noticeButton = container.querySelector<HTMLButtonElement>(
+      ".chat-history-window-notice__button",
+    );
+    expect(noticeButton?.textContent).toContain("Show older messages");
+    expect(noticeButton?.textContent).toContain("50 hidden");
+
+    noticeButton?.click();
+    expect(onLoadOlderHistory).toHaveBeenCalled();
+  });
+
   it("keeps grouped assistant avatar fallbacks under the mounted base path", () => {
     const container = document.createElement("div");
     render(

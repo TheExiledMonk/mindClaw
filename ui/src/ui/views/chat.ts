@@ -107,11 +107,15 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  visibleHistoryCount?: number;
+  onLoadOlderHistory?: (container: HTMLElement | null) => void;
   basePath?: string;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+const CHAT_HISTORY_WINDOW_SIZE = 200;
+const CHAT_HISTORY_LOAD_MORE_THRESHOLD_PX = 120;
 
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
@@ -850,16 +854,51 @@ export function renderChat(props: ChatProps) {
 
   const chatItems = buildChatItems(props);
   const isEmpty = chatItems.length === 0 && !props.loading;
+  const totalHistory = Array.isArray(props.messages) ? props.messages.length : 0;
+  const visibleHistoryCount = Math.max(1, props.visibleHistoryCount ?? CHAT_HISTORY_WINDOW_SIZE);
+  const hiddenHistoryCount = Math.max(0, totalHistory - visibleHistoryCount);
 
   const thread = html`
     <div
       class="chat-thread"
       role="log"
       aria-live="polite"
-      @scroll=${props.onChatScroll}
+      @scroll=${(event: Event) => {
+        props.onChatScroll?.(event);
+        const container = event.currentTarget as HTMLElement | null;
+        if (
+          container &&
+          hiddenHistoryCount > 0 &&
+          container.scrollTop <= CHAT_HISTORY_LOAD_MORE_THRESHOLD_PX
+        ) {
+          props.onLoadOlderHistory?.(container);
+        }
+      }}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
+      ${
+        hiddenHistoryCount > 0
+          ? html`
+              <div class="chat-history-window-notice" role="status" aria-live="polite">
+                <button
+                  type="button"
+                  class="chat-history-window-notice__button"
+                  @click=${(event: Event) => {
+                    const container = (event.currentTarget as HTMLElement | null)?.closest(
+                      ".chat-thread",
+                    ) as HTMLElement | null;
+                    props.onLoadOlderHistory?.(container);
+                  }}
+                >
+                  ${icons.chevronUp}
+                  <span>Show older messages</span>
+                  <span class="chat-history-window-notice__detail">${hiddenHistoryCount} hidden</span>
+                </button>
+              </div>
+            `
+          : nothing
+      }
       ${
         props.loading
           ? html`
@@ -1326,8 +1365,6 @@ export function renderChat(props: ChatProps) {
   `;
 }
 
-const CHAT_HISTORY_RENDER_LIMIT = 200;
-
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -1379,18 +1416,8 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
-  if (historyStart > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
+  const visibleHistoryCount = Math.max(1, props.visibleHistoryCount ?? CHAT_HISTORY_WINDOW_SIZE);
+  const historyStart = Math.max(0, history.length - visibleHistoryCount);
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);

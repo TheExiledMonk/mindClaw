@@ -1039,13 +1039,8 @@ function deriveQualityReleaseHardeningRollups(params: {
         : undefined,
       params.crossLayerTrendPolicyStatus === "divergent" ? "cross_layer_policy_drift" : undefined,
       params.operatorActionPolicyStatus === "review" ? "operator_policy_review" : undefined,
-      params.clarificationEfficiencyStatus === "needs_tightening"
-        ? "clarification_noise"
-        : undefined,
-      params.blockedWorkStatus === "present" ? "blocked_work_open" : undefined,
       params.partialSuccessStatus === "present" ? "partial_success_open" : undefined,
       params.executionEfficiencyStatus === "inefficient" ? "inefficient_success" : undefined,
-      params.capabilityGapStatus === "present" ? "capability_gap_present" : undefined,
       params.effectivenessTrend === "watch"
         ? "effectiveness_watch"
         : params.effectivenessTrend === "regressing"

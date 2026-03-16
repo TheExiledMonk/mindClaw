@@ -24,15 +24,9 @@ describe("agentic quality gate", () => {
     expect(report.soakPassed).toBe(true);
     expect(report.diagnosticsPassed).toBe(true);
     expect(report.failReasons).toEqual([]);
-    expect(report.releaseGateStatus).toBe("gated");
-    expect(report.operatorConfidenceStatus).toBe("medium");
-    expect(report.confidenceSignals).toEqual(
-      expect.arrayContaining([
-        "clarification_noise",
-        "blocked_work_open",
-        "capability_gap_present",
-      ]),
-    );
+    expect(report.releaseGateStatus).toBe("ready");
+    expect(report.operatorConfidenceStatus).toBe("high");
+    expect(report.confidenceSignals).toEqual([]);
   });
 
   it("can fail the diagnostics portion when escalation or missing fallback is disallowed", () => {

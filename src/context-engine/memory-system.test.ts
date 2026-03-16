@@ -54,6 +54,27 @@ function userMessage(content: string): AgentMessage {
   } as AgentMessage;
 }
 
+function assistantToolCallMessage(toolCallId: string, text = "Running tool"): AgentMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "toolCall", id: toolCallId, name: "memory_search", arguments: { query: "test" } },
+    ],
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+function toolResultMessage(toolCallId: string, text = "Tool result"): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "memory_search",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
 function longTermEntry(overrides: Partial<LongTermMemoryEntry> = {}): LongTermMemoryEntry {
   const now = Date.now();
   const category = overrides.category ?? "strategy";
@@ -1893,6 +1914,48 @@ describe("MemorySystemContextEngine", () => {
         expect((assembled.messages[7] as { content?: unknown }).content).toBe(
           "latest discussion turn 20",
         );
+      },
+    );
+  });
+
+  it("repairs tool pairing after working-set trimming so orphaned tool results are not sent", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              workingSet: {
+                retainLatestMessages: 8,
+                compactAfterMessages: 18,
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const tempDir = await fs.mkdtemp(
+          path.join(os.tmpdir(), "openclaw-memory-working-set-toolpair-"),
+        );
+        process.chdir(tempDir);
+
+        const engine = new MemorySystemContextEngine();
+        const messages: AgentMessage[] = [
+          ...Array.from({ length: 12 }, (_, index) => userMessage(`older turn ${index + 1}`)),
+          assistantToolCallMessage("callfunctionkmo49gewfj551", "Need to look that up"),
+          toolResultMessage("callfunctionkmo49gewfj551", "Found memory"),
+          ...Array.from({ length: 8 }, (_, index) => userMessage(`latest turn ${index + 1}`)),
+        ];
+
+        const assembled = await engine.assemble({
+          sessionId: "sess-tool-pair",
+          sessionKey: "agent:tool-pair",
+          messages,
+        });
+
+        const roles = assembled.messages.map((message) => message.role);
+        expect(roles).not.toContain("toolResult");
+        expect(assembled.messages.some((message) => message.role === "assistant")).toBe(false);
+        expect(assembled.messages).toHaveLength(8);
       },
     );
   });

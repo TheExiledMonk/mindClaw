@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { sanitizeToolUseResultPairing } from "../agents/session-transcript-repair.js";
 import { loadConfig } from "../config/config.js";
 import { LegacyContextEngine } from "./legacy.js";
 import {
@@ -106,7 +107,7 @@ function trimMessagesToWorkingSet(
     message.role === "user" || message.role === "assistant" || message.role === "toolResult";
   const conversationMessageCount = messages.filter(isConversationMessage).length;
   if (conversationMessageCount <= policy.compactAfterMessages) {
-    return messages;
+    return sanitizeToolUseResultPairing(messages);
   }
   let keptConversationMessages = 0;
   let startIndex = messages.length;
@@ -114,12 +115,12 @@ function trimMessagesToWorkingSet(
     if (isConversationMessage(messages[index])) {
       keptConversationMessages += 1;
       if (keptConversationMessages > policy.retainLatestMessages) {
-        return messages.slice(startIndex);
+        return sanitizeToolUseResultPairing(messages.slice(startIndex));
       }
       startIndex = index;
     }
   }
-  return messages;
+  return sanitizeToolUseResultPairing(messages);
 }
 
 export class MemorySystemContextEngine implements ContextEngine {

@@ -132,23 +132,18 @@ describe("onboard-hooks", () => {
   describe("setupInternalHooks", () => {
     it("should enable hooks when user selects them", async () => {
       const { result, prompter } = await runSetupInternalHooks({
-        selected: ["session-memory"],
+        selected: ["command-logger"],
       });
 
       expect(result.hooks?.internal?.enabled).toBe(true);
       expect(result.hooks?.internal?.entries).toEqual({
-        "session-memory": { enabled: true },
+        "command-logger": { enabled: true },
       });
       expect(prompter.note).toHaveBeenCalledTimes(2);
       expect(prompter.multiselect).toHaveBeenCalledWith({
         message: "Enable hooks?",
         options: [
           { value: "__skip__", label: "Skip for now" },
-          {
-            value: "session-memory",
-            label: "💾 session-memory",
-            hint: "Save session context to memory when /new or /reset command is issued",
-          },
           {
             value: "command-logger",
             label: "📝 command-logger",
@@ -190,7 +185,7 @@ describe("onboard-hooks", () => {
         },
       };
       const { result } = await runSetupInternalHooks({
-        selected: ["session-memory"],
+        selected: ["command-logger"],
         cfg,
       });
 
@@ -199,7 +194,7 @@ describe("onboard-hooks", () => {
       expect(result.hooks?.token).toBe("existing-token");
       expect(result.hooks?.internal?.enabled).toBe(true);
       expect(result.hooks?.internal?.entries).toEqual({
-        "session-memory": { enabled: true },
+        "command-logger": { enabled: true },
       });
     });
 
@@ -218,7 +213,7 @@ describe("onboard-hooks", () => {
 
     it("should show informative notes to user", async () => {
       const { prompter } = await runSetupInternalHooks({
-        selected: ["session-memory"],
+        selected: ["command-logger"],
       });
 
       const noteCalls = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
@@ -229,7 +224,7 @@ describe("onboard-hooks", () => {
       expect(noteCalls[0][0]).toContain("automate actions");
 
       // Second note should confirm configuration
-      expect(noteCalls[1][0]).toContain("Enabled 1 hook: session-memory");
+      expect(noteCalls[1][0]).toContain("Enabled 1 hook: command-logger");
       expect(noteCalls[1][0]).toMatch(/(?:openclaw|openclaw)( --profile isolated)? hooks list/);
     });
   });

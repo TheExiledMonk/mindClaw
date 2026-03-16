@@ -49,6 +49,7 @@ function buildMemorySection(params: {
   const lines = [
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search against the integrated MindClaw memory store; then use memory_get on the returned pseudo-path to pull only the needed memory text. If low confidence after search, say you checked.",
+    "Legacy markdown memory files are retired. Do not use MEMORY.md, memory.md, or memory/*.md for memory persistence or conversational recall.",
   ];
   if (params.citationsMode === "off") {
     lines.push(

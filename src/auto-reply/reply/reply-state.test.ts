@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendHistoryEntry,
@@ -15,7 +14,6 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
-  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
@@ -210,63 +208,57 @@ describe("memory flush settings", () => {
     ).toBeNull();
   });
 
-  it("appends NO_REPLY hint when missing", () => {
-    const settings = resolveMemoryFlushSettings({
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {
-              enabled: true,
-              prompt: "Write memories now.",
-              systemPrompt: "Flush memory.",
+  it("stays disabled even when legacy memory flush is explicitly configured", () => {
+    expect(
+      resolveMemoryFlushSettings({
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                enabled: true,
+                prompt: "Write memories now.",
+                systemPrompt: "Flush memory.",
+              },
             },
           },
         },
-      },
-    });
-    expect(settings?.prompt).toContain("NO_REPLY");
-    expect(settings?.systemPrompt).toContain("NO_REPLY");
-    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.prompt).toContain("MEMORY.md");
-    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
-    expect(settings?.systemPrompt).toContain("MEMORY.md");
+      }),
+    ).toBeNull();
   });
 
-  it("falls back to defaults when numeric values are invalid", () => {
-    const settings = resolveMemoryFlushSettings({
-      agents: {
-        defaults: {
-          compaction: {
-            reserveTokensFloor: Number.NaN,
-            memoryFlush: {
-              enabled: true,
-              softThresholdTokens: -100,
+  it("ignores legacy numeric memory flush settings", () => {
+    expect(
+      resolveMemoryFlushSettings({
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: Number.NaN,
+              memoryFlush: {
+                enabled: true,
+                softThresholdTokens: -100,
+              },
             },
           },
         },
-      },
-    });
-
-    expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+      }),
+    ).toBeNull();
   });
 
-  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
-    const settings = resolveMemoryFlushSettings({
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {
-              enabled: true,
-              forceFlushTranscriptBytes: "3mb",
+  it("ignores legacy byte-size memory flush settings", () => {
+    expect(
+      resolveMemoryFlushSettings({
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                enabled: true,
+                forceFlushTranscriptBytes: "3mb",
+              },
             },
           },
         },
-      },
-    });
-
-    expect(settings?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
+      }),
+    ).toBeNull();
   });
 });
 

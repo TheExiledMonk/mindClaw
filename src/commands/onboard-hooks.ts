@@ -25,7 +25,7 @@ export async function setupInternalHooks(
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
   // Show every eligible hook so users can opt in during onboarding.
-  const eligibleHooks = report.hooks.filter((h) => h.eligible);
+  const eligibleHooks = report.hooks.filter((h) => h.eligible && h.name !== "session-memory");
 
   if (eligibleHooks.length === 0) {
     await prompter.note(

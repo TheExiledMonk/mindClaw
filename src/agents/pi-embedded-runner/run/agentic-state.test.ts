@@ -779,6 +779,8 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.parameterizationCandidates).toEqual(
       expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
     );
+    expect(state.orchestrationState.skillLifecycleAction).toBe("merge_siblings");
+    expect(state.orchestrationState.retirementCandidates).toEqual([]);
     expect(state.orchestrationState.overlappingSkills).toEqual(
       expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
     );
@@ -801,6 +803,32 @@ describe("agentic-state", () => {
     expect(state.orchestrationState.skillCreationReason).toContain(
       "explicitly asks for a new specialized skill",
     );
+  });
+
+  it("suppresses new forks when durable family guidance says to consolidate and retire duplicates", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Create a new diagnostics-reporting fork for the stable diagnostics workflow."),
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=general env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report durable=true suppress_new_forks=true retire_skills=diagnostics-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+
+    expect(state.orchestrationState.skillCreationDecision).toBe("generalize_existing");
+    expect(state.orchestrationState.familyLifecycleKey).toBe("diagnostics@general/node");
+    expect(state.orchestrationState.skillLifecycleAction).toBe("retire_duplicates");
+    expect(state.orchestrationState.retirementCandidates).toContain("diagnostics-report");
+    expect(buildAgenticSystemPromptAddition(state)).toContain("Skill lifecycle:");
   });
 
   it("downgrades verified checks when the user goal is still unresolved", () => {
@@ -928,6 +956,12 @@ describe("agentic-state", () => {
     expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
       "skill_creation_decision=",
     );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "skill_lifecycle_action=",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "summary")).toContain(
+      "retirement_candidates=",
+    );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "# Agentic Diagnostics Report",
     );
@@ -964,6 +998,12 @@ describe("agentic-state", () => {
     );
     expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
       "Skill creation decision:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Skill lifecycle action:",
+    );
+    expect(formatAgenticExecutionObservabilityReport(report, "markdown")).toContain(
+      "Retirement candidates:",
     );
   });
 
@@ -1953,6 +1993,8 @@ describe("agentic-state", () => {
       expect.arrayContaining(["memory-diagnostics", "family:diagnostics"]),
     );
     expect(record.skillCreationDecision).toBe("generalize_existing");
+    expect(record.skillLifecycleAction).toBe("promote_template");
+    expect(record.familyLifecycleKey).toBe("diagnostics@general/node");
     expect(record.templateCandidate).toBe(true);
     expect(record.nextImprovement).toContain("Parameterize the reusable workflow surface");
   });
@@ -2003,8 +2045,53 @@ describe("agentic-state", () => {
       expect.arrayContaining(["memory-diagnostics", "diagnostics-report"]),
     );
     expect(record.skillCreationDecision).toBe("generalize_existing");
+    expect(record.skillLifecycleAction).toBe("merge_siblings");
     expect(record.templateCandidate).toBe(false);
     expect(record.nextImprovement).toContain("Merge overlapping sibling skills");
+  });
+
+  it("persists duplicate-retirement guidance for durable merge families", () => {
+    const state = buildAgenticExecutionState({
+      messages: [
+        msg("user", "Avoid another diagnostics fork and consolidate the stable siblings."),
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report", "diagnostics-validation"],
+      likelySkills: ["memory-diagnostics", "diagnostics-report"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+        { name: "diagnostics-validation", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: [
+        "Integrated memory packet",
+        "Skill family guidance:",
+        "- family=diagnostics task_mode=general env=node trend=stable consolidation=generalize_existing merge_candidate=true merge_skills=memory-diagnostics,diagnostics-report durable=true suppress_new_forks=true retire_skills=diagnostics-report primary=memory-diagnostics",
+      ].join("\n"),
+    });
+    const record = buildProceduralExecutionRecord({
+      skillsSnapshot: {
+        prompt: "",
+        skills: [
+          { name: "memory-diagnostics", primaryEnv: "node" },
+          { name: "diagnostics-report", primaryEnv: "node" },
+          { name: "diagnostics-validation", primaryEnv: "node" },
+        ],
+      },
+      taskState: state.taskState,
+      verificationState: state.verificationState,
+      plannerState: state.plannerState,
+      governanceState: state.governanceState,
+      orchestrationState: state.orchestrationState,
+      environmentState: state.environmentState,
+      failureLearningState: state.failureLearningState,
+      toolSignals: [],
+      diffSignals: [],
+    });
+
+    expect(record.familyLifecycleKey).toBe("diagnostics@general/node");
+    expect(record.skillLifecycleAction).toBe("retire_duplicates");
+    expect(record.retirementCandidates).toContain("diagnostics-report");
+    expect(record.nextImprovement).toContain("Retire duplicate sibling skills");
   });
 
   it("marks failed procedural workflows as near-miss candidates", () => {

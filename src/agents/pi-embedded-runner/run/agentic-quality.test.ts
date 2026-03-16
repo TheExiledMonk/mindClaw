@@ -981,6 +981,9 @@ describe("agentic quality gate", () => {
         skillCreationDecision: "generalize_existing",
         skillCreationReason:
           "Template-ready family evidence favors parameterization over a new fork for diagnostics.",
+        familyLifecycleKey: "diagnostics@debugging/node",
+        skillLifecycleAction: "promote_template",
+        retirementCandidates: [],
         stabilityState: "neutral",
         stabilitySkills: [],
         consolidationAction: "generalize_existing",
@@ -1098,6 +1101,9 @@ describe("agentic quality gate", () => {
         skillCreationDecision: "generalize_existing",
         skillCreationReason:
           "Merge-ready overlap should be consolidated instead of spawning a new sibling skill: memory-diagnostics, diagnostics-report, family:diagnostics.",
+        familyLifecycleKey: "diagnostics@debugging/node",
+        skillLifecycleAction: "merge_siblings",
+        retirementCandidates: [],
         stabilityState: "neutral",
         stabilitySkills: [],
         consolidationAction: "generalize_existing",
@@ -1211,6 +1217,9 @@ describe("agentic quality gate", () => {
         skillCreationDecision: "generalize_existing",
         skillCreationReason:
           "Template-ready family evidence favors parameterization over a new fork for diagnostics.",
+        familyLifecycleKey: "diagnostics@debugging/node",
+        skillLifecycleAction: "promote_template",
+        retirementCandidates: [],
         stabilityState: "neutral",
         stabilitySkills: [],
         consolidationAction: "generalize_existing",
@@ -1373,6 +1382,9 @@ describe("agentic quality gate", () => {
         skillCreationDecision: "generalize_existing",
         skillCreationReason:
           "Merge-ready overlap should be consolidated instead of spawning a new sibling skill: diagnostics-report, memory-diagnostics, family:diagnostics.",
+        familyLifecycleKey: "diagnostics@debugging/node",
+        skillLifecycleAction: "merge_siblings",
+        retirementCandidates: [],
         stabilityState: "neutral",
         stabilitySkills: [],
         consolidationAction: "generalize_existing",
@@ -1490,6 +1502,9 @@ describe("agentic quality gate", () => {
         skillCreationDecision: "generalize_existing",
         skillCreationReason:
           "Template-ready family evidence favors parameterization over a new fork for verification.",
+        familyLifecycleKey: "verification@debugging/node",
+        skillLifecycleAction: "promote_template",
+        retirementCandidates: [],
         stabilityState: "neutral",
         stabilitySkills: [],
         consolidationAction: "generalize_existing",

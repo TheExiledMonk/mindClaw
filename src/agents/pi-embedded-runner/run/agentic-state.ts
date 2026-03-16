@@ -92,6 +92,14 @@ export type AgenticSkillCreationDecision =
   | "generalize_existing"
   | "create_new";
 
+export type AgenticSkillLifecycleAction =
+  | "none"
+  | "extend_family"
+  | "promote_template"
+  | "merge_siblings"
+  | "retire_duplicates"
+  | "suppress_new_forks";
+
 export type AgenticTaskState = {
   version: 1;
   objective?: string;
@@ -174,6 +182,9 @@ export type AgenticOrchestrationState = {
   parameterizationCandidates: string[];
   skillCreationDecision: AgenticSkillCreationDecision;
   skillCreationReason?: string;
+  familyLifecycleKey?: string;
+  skillLifecycleAction: AgenticSkillLifecycleAction;
+  retirementCandidates: string[];
   stabilityState: "neutral" | "recovered_watch" | "stable_reuse";
   stabilitySkills: string[];
   consolidationAction: AgenticConsolidationAction;
@@ -230,6 +241,9 @@ export type ProceduralExecutionRecord = {
   parameterizationCandidates: string[];
   skillCreationDecision: AgenticSkillCreationDecision;
   skillCreationReason?: string;
+  familyLifecycleKey?: string;
+  skillLifecycleAction: AgenticSkillLifecycleAction;
+  retirementCandidates: string[];
   nearMissCandidate: boolean;
   retryClass: AgenticRetryClass;
   suggestedSkill?: string;
@@ -298,6 +312,9 @@ export type AgenticExecutionObservabilityReport = {
   parameterizationCandidates: string[];
   skillCreationDecision: AgenticSkillCreationDecision;
   skillCreationReason?: string;
+  familyLifecycleKey?: string;
+  skillLifecycleAction: AgenticSkillLifecycleAction;
+  retirementCandidates: string[];
   capabilityGaps: string[];
   failurePattern: AgenticFailureLearningState["failurePattern"];
   errorTaxonomy: AgenticFailureLearningState["errorTaxonomy"];
@@ -570,7 +587,22 @@ type AgenticRegressionMemorySignal = {
   templatePreferredFamilies: string[];
   mergePreferredFamilies: string[];
   preferredFallbackSkills: string[];
+  durableFamilyKeys: string[];
+  retirementPreferredFamilies: string[];
+  suppressedCreationFamilies: string[];
+  retiredSkills: string[];
 };
+
+function buildSkillFamilyLifecycleKey(params: {
+  family?: string;
+  taskMode?: string;
+  env?: string;
+}): string | undefined {
+  if (!params.family) {
+    return undefined;
+  }
+  return `${params.family}@${params.taskMode ?? "general"}/${params.env ?? "any"}`;
+}
 
 function pickClarificationReasonFromMemory(
   memoryRegressionSignals?: AgenticRegressionMemorySignal,
@@ -1152,6 +1184,10 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
       templatePreferredFamilies: [],
       mergePreferredFamilies: [],
       preferredFallbackSkills: [],
+      durableFamilyKeys: [],
+      retirementPreferredFamilies: [],
+      suppressedCreationFamilies: [],
+      retiredSkills: [],
     };
   }
   const match = memoryText.match(/Agentic regression guidance:\s*((?:\n-\s+[^\n]+)+)/i);
@@ -1220,6 +1256,45 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     }),
     6,
   );
+  const durableFamilyKeys = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const durable = line.match(/durable=(true|false)/i)?.[1]?.trim();
+      const taskMode = line.match(/task_mode=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const env = line.match(/env=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const key = buildSkillFamilyLifecycleKey({ family, taskMode, env });
+      return durable === "true" && key ? [key] : [];
+    }),
+    8,
+  );
+  const retirementPreferredFamilies = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const retireSkills = line.match(/retire_skills=([a-z0-9_,.-]+)/i)?.[1]?.trim();
+      return family && retireSkills ? [family] : [];
+    }),
+    6,
+  );
+  const suppressedCreationFamilies = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
+      const suppressNewForks = line.match(/suppress_new_forks=(true|false)/i)?.[1]?.trim();
+      return family && suppressNewForks === "true" ? [family] : [];
+    }),
+    6,
+  );
+  const retiredSkills = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const retireSkills = line.match(/retire_skills=([a-z0-9_,.-]+)/i)?.[1]?.trim();
+      return retireSkills
+        ? retireSkills
+            .split(",")
+            .map((skill) => skill.trim())
+            .filter(Boolean)
+        : [];
+    }),
+    8,
+  );
   const normalized = lines.join("\n").toLowerCase();
   return {
     missingFallbackRegression:
@@ -1234,6 +1309,10 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     templatePreferredFamilies,
     mergePreferredFamilies,
     preferredFallbackSkills,
+    durableFamilyKeys,
+    retirementPreferredFamilies,
+    suppressedCreationFamilies,
+    retiredSkills,
   };
 }
 
@@ -1682,6 +1761,10 @@ function buildPlannerState(params: {
     templatePreferredFamilies: [],
     mergePreferredFamilies: [],
     preferredFallbackSkills: [],
+    durableFamilyKeys: [],
+    retirementPreferredFamilies: [],
+    suppressedCreationFamilies: [],
+    retiredSkills: [],
   };
   const rawAlternativeSkills = (params.availableSkills ?? []).filter(
     (skill) => !likelySkills.includes(skill),
@@ -2039,6 +2122,7 @@ function deriveSkillCreationDecision(params: {
   objectiveText?: string;
   consolidationAction: AgenticConsolidationAction;
   parameterizationCandidates: string[];
+  suppressNewForks: boolean;
 }): {
   decision: AgenticSkillCreationDecision;
   reason?: string;
@@ -2082,6 +2166,13 @@ function deriveSkillCreationDecision(params: {
         : "Existing reusable skill family should be extended instead of creating a new one.",
     };
   }
+  if (params.suppressNewForks) {
+    return {
+      decision: "defer",
+      reason:
+        "Durable family guidance suppresses new forks until the existing workflow family is extended or consolidated.",
+    };
+  }
   if (newSkillRequested) {
     return {
       decision: "create_new",
@@ -2094,6 +2185,39 @@ function deriveSkillCreationDecision(params: {
     reason:
       "Current evidence is not yet strong enough to justify a new skill or consolidation action.",
   };
+}
+
+function deriveSkillLifecycleAction(params: {
+  consolidationAction: AgenticConsolidationAction;
+  mergeCandidate: boolean;
+  templateCandidate: boolean;
+  overlapSeverity: AgenticSkillOverlapSeverity;
+  retirementCandidates: string[];
+  skillCreationDecision: AgenticSkillCreationDecision;
+  suppressNewForks: boolean;
+}): AgenticSkillLifecycleAction {
+  if (params.retirementCandidates.length > 0) {
+    return "retire_duplicates";
+  }
+  if (
+    (params.mergeCandidate || params.overlapSeverity === "family_cluster") &&
+    params.consolidationAction === "generalize_existing"
+  ) {
+    return "merge_siblings";
+  }
+  if (params.templateCandidate && params.consolidationAction === "generalize_existing") {
+    return "promote_template";
+  }
+  if (params.suppressNewForks && params.skillCreationDecision !== "create_new") {
+    return "suppress_new_forks";
+  }
+  if (
+    params.skillCreationDecision === "extend_existing" ||
+    params.consolidationAction === "extend_existing"
+  ) {
+    return "extend_family";
+  }
+  return "none";
 }
 
 function inferCurrentExecutionEnvironments(params: {
@@ -2159,6 +2283,10 @@ function buildOrchestrationState(params: {
     templatePreferredFamilies: [],
     mergePreferredFamilies: [],
     preferredFallbackSkills: [],
+    durableFamilyKeys: [],
+    retirementPreferredFamilies: [],
+    suppressedCreationFamilies: [],
+    retiredSkills: [],
   };
   const alternativeSkills = uniqueCompact(params.alternativeSkills ?? [], 6);
   const currentLikelySkill = likelySkills[0];
@@ -2194,6 +2322,10 @@ function buildOrchestrationState(params: {
       if (memoryWeightedFamilies.has(skillFamily)) {
         score += memoryWeightedFamilies.get(skillFamily) ?? 0;
         reasons.push(`family-quality:${skillFamily}`);
+      }
+      if (memoryRegressionSignals.retiredSkills.includes(skill.name)) {
+        score -= 4;
+        reasons.push("retired-skill");
       }
       if (alternativeSkills.includes(skill.name)) {
         score += 1.5;
@@ -2424,6 +2556,19 @@ function buildOrchestrationState(params: {
     6,
   );
   const primarySkillFamily = primarySkill ? inferSkillFamily(primarySkill) : undefined;
+  const primarySkillInfo = availableSkills.find((skill) => skill.name === primarySkill);
+  const familyLifecycleKey = buildSkillFamilyLifecycleKey({
+    family: primarySkillFamily,
+    taskMode: params.taskMode,
+    env: preferredEnv ?? primarySkillInfo?.primaryEnv ?? currentExecutionEnvs[0],
+  });
+  const durableFamilyActive =
+    familyLifecycleKey !== undefined &&
+    memoryRegressionSignals.durableFamilyKeys.includes(familyLifecycleKey);
+  const suppressNewForks =
+    primarySkillFamily !== undefined &&
+    (memoryRegressionSignals.suppressedCreationFamilies.includes(primarySkillFamily) ||
+      durableFamilyActive);
   const familyGuidedMerge =
     primarySkillFamily &&
     memoryRegressionSignals.mergePreferredFamilies.includes(primarySkillFamily) &&
@@ -2448,6 +2593,24 @@ function buildOrchestrationState(params: {
         6,
       )
     : [];
+  const retirementCandidates =
+    primarySkillFamily &&
+    (memoryRegressionSignals.retirementPreferredFamilies.includes(primarySkillFamily) ||
+      memoryRegressionSignals.retiredSkills.some(
+        (skill) => inferSkillFamily(skill) === primarySkillFamily,
+      ))
+      ? uniqueCompact(
+          [
+            ...mergeSkills,
+            ...overlapSignals.overlappingSkills.filter(
+              (skill) =>
+                inferSkillFamily(skill) === primarySkillFamily &&
+                memoryRegressionSignals.retiredSkills.includes(skill),
+            ),
+          ].filter((skill) => skill !== primarySkill),
+          6,
+        )
+      : [];
   const overlapSeverity = deriveSkillOverlapSeverity({
     families: overlapSignals.families,
     overlappingSkills: overlapSignals.overlappingSkills,
@@ -2515,9 +2678,19 @@ function buildOrchestrationState(params: {
     objectiveText: params.objectiveText,
     consolidationAction,
     parameterizationCandidates,
+    suppressNewForks,
+  });
+  const skillLifecycleAction = deriveSkillLifecycleAction({
+    consolidationAction,
+    mergeCandidate: Boolean(familyGuidedMerge),
+    templateCandidate: Boolean(familyGuidedGeneralization),
+    overlapSeverity,
+    retirementCandidates,
+    skillCreationDecision: skillCreationDecision.decision,
+    suppressNewForks,
   });
   const rationale = primarySkill
-    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${familyGuidedMerge ? ` while merging overlapping ${familyGuidedMerge} siblings ${mergeSkills.join(", ")}` : ""}${familyGuidedGeneralization ? ` with template-ready ${familyGuidedGeneralization} family guidance` : ""}${overlapFamilies.length > 0 && !familyGuidedMerge ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}${skillCreationDecision.reason ? ` Decision: ${skillCreationDecision.reason}` : ""}.`
+    ? `Prefer ${primarySkill}${chainedWorkflow ? ` with workflow chain ${skillChain.join(" -> ")}` : ""}${fallbackSkills.length > 0 ? `, then fall back to ${fallbackSkills.slice(0, 2).join(", ")}` : ""}${preferredEnv ? ` for ${preferredEnv} work` : ""}${prerequisiteWarnings.length > 0 ? ` while watching ${prerequisiteWarnings[0]}` : ""}${memoryRecoveringSkills.has(primarySkill) ? " while keeping the recovered path under watch" : ""}${promotedSkills.includes(primarySkill) ? " with promotion-ready reuse guidance" : ""}${familyGuidedMerge ? ` while merging overlapping ${familyGuidedMerge} siblings ${mergeSkills.join(", ")}` : ""}${familyGuidedGeneralization ? ` with template-ready ${familyGuidedGeneralization} family guidance` : ""}${retirementCandidates.length > 0 ? ` while retiring duplicate siblings ${retirementCandidates.join(", ")}` : ""}${overlapFamilies.length > 0 && !familyGuidedMerge ? ` while consolidating within ${overlapFamilies.join(", ")}` : ""}${skillCreationDecision.reason ? ` Decision: ${skillCreationDecision.reason}` : ""}.`
     : availableSkills.length > 0
       ? "Available skills exist, but none match the current objective strongly."
       : "No matching skills are currently available for this objective.";
@@ -2551,6 +2724,10 @@ function buildOrchestrationState(params: {
     parameterizationCandidates,
     skillCreationDecision: skillCreationDecision.decision,
     skillCreationReason: skillCreationDecision.reason,
+    familyLifecycleKey:
+      skillLifecycleAction !== "none" || durableFamilyActive ? familyLifecycleKey : undefined,
+    skillLifecycleAction,
+    retirementCandidates,
     stabilityState,
     stabilitySkills,
     consolidationAction,
@@ -3213,6 +3390,10 @@ function reconcilePlannerStateWithOrchestration(params: {
     templatePreferredFamilies: [],
     mergePreferredFamilies: [],
     preferredFallbackSkills: [],
+    durableFamilyKeys: [],
+    retirementPreferredFamilies: [],
+    suppressedCreationFamilies: [],
+    retiredSkills: [],
   };
   const primaryFamily = params.orchestrationState.primarySkill
     ? inferSkillFamily(params.orchestrationState.primarySkill)
@@ -3579,6 +3760,10 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     state.orchestrationState.skillCreationDecision !== "defer"
       ? `Skill creation decision: ${state.orchestrationState.skillCreationDecision}${state.orchestrationState.skillCreationReason ? ` (${state.orchestrationState.skillCreationReason})` : ""}`
       : undefined;
+  const lifecycleGuidance =
+    state.orchestrationState.skillLifecycleAction !== "none"
+      ? `Skill lifecycle: ${state.orchestrationState.skillLifecycleAction}${state.orchestrationState.familyLifecycleKey ? ` for ${state.orchestrationState.familyLifecycleKey}` : ""}${state.orchestrationState.retirementCandidates.length > 0 ? ` retiring ${state.orchestrationState.retirementCandidates.join(", ")}` : ""}`
+      : undefined;
   const environmentGuidance = `Environment: ${state.environmentState.workspaceKind}${state.environmentState.gitBranch ? ` branch=${state.environmentState.gitBranch}` : ""}`;
   const repoFingerprintGuidance = state.environmentState.repoFingerprint
     ? `Repo fingerprint: ${state.environmentState.repoFingerprint}`
@@ -3659,6 +3844,7 @@ export function buildAgenticSystemPromptAddition(state: AgenticExecutionState): 
     overlapGuidance,
     parameterizationGuidance,
     skillCreationGuidance,
+    lifecycleGuidance,
     capabilityGapGuidance,
     consolidationGuidance,
     environmentGuidance,
@@ -3743,6 +3929,9 @@ export function buildProceduralExecutionRecord(params: {
   const parameterizationCandidates = params.orchestrationState.parameterizationCandidates;
   const skillCreationDecision = params.orchestrationState.skillCreationDecision;
   const skillCreationReason = params.orchestrationState.skillCreationReason;
+  const familyLifecycleKey = params.orchestrationState.familyLifecycleKey;
+  const skillLifecycleAction = params.orchestrationState.skillLifecycleAction;
+  const retirementCandidates = params.orchestrationState.retirementCandidates;
   const resolvedFallbackSkills =
     params.orchestrationState.fallbackSkills.length > 0
       ? params.orchestrationState.fallbackSkills
@@ -3794,6 +3983,8 @@ export function buildProceduralExecutionRecord(params: {
     nextImprovement = `Promote the durable workflow path for reuse: ${resolvedPromotedSkills.join(", ")}.`;
   } else if (resolvedStabilityState === "stable_reuse") {
     nextImprovement = "Extend the stable workflow family rather than creating a new fork.";
+  } else if (retirementCandidates.length > 0) {
+    nextImprovement = `Retire duplicate sibling skills after consolidation: ${retirementCandidates.join(", ")}.`;
   } else if (mergeCandidate && mergeSkills.length > 0) {
     nextImprovement = `Merge overlapping sibling skills into one reusable workflow: ${mergeSkills.join(", ")}.`;
   } else if (consolidationCandidate) {
@@ -3841,6 +4032,9 @@ export function buildProceduralExecutionRecord(params: {
     parameterizationCandidates,
     skillCreationDecision,
     skillCreationReason,
+    familyLifecycleKey,
+    skillLifecycleAction,
+    retirementCandidates,
     nearMissCandidate,
     retryClass: params.plannerState.retryClass,
     suggestedSkill: params.plannerState.suggestedSkill,
@@ -3922,6 +4116,9 @@ export function inspectAgenticExecutionObservability(
       state.orchestrationState.parameterizationCandidates.length > 0
         ? `Parameterize reusable workflow surfaces: ${state.orchestrationState.parameterizationCandidates.join(", ")}`
         : undefined,
+      state.orchestrationState.retirementCandidates.length > 0
+        ? `Retire duplicate sibling skills after consolidation: ${state.orchestrationState.retirementCandidates.join(", ")}`
+        : undefined,
       state.orchestrationState.skillCreationDecision !== "defer"
         ? `Skill creation policy: ${state.orchestrationState.skillCreationDecision}${state.orchestrationState.skillCreationReason ? ` (${state.orchestrationState.skillCreationReason})` : ""}`
         : undefined,
@@ -3997,6 +4194,9 @@ export function inspectAgenticExecutionObservability(
     parameterizationCandidates: state.orchestrationState.parameterizationCandidates,
     skillCreationDecision: state.orchestrationState.skillCreationDecision,
     skillCreationReason: state.orchestrationState.skillCreationReason,
+    familyLifecycleKey: state.orchestrationState.familyLifecycleKey,
+    skillLifecycleAction: state.orchestrationState.skillLifecycleAction,
+    retirementCandidates: state.orchestrationState.retirementCandidates,
     capabilityGaps: state.orchestrationState.capabilityGaps,
     failurePattern: state.failureLearningState.failurePattern,
     errorTaxonomy: state.failureLearningState.errorTaxonomy,
@@ -4064,6 +4264,13 @@ export function formatAgenticExecutionObservabilityReport(
       report.skillCreationReason
         ? `skill_creation_reason=${truncate(report.skillCreationReason, 140)}`
         : "skill_creation_reason=none",
+      report.familyLifecycleKey
+        ? `family_lifecycle_key=${report.familyLifecycleKey}`
+        : "family_lifecycle_key=none",
+      `skill_lifecycle_action=${report.skillLifecycleAction}`,
+      report.retirementCandidates.length > 0
+        ? `retirement_candidates=${report.retirementCandidates.join(">")}`
+        : "retirement_candidates=none",
       report.errorTaxonomy.length > 0
         ? `error_taxonomy=${report.errorTaxonomy.join(">")}`
         : "error_taxonomy=none",
@@ -4128,6 +4335,9 @@ export function formatAgenticExecutionObservabilityReport(
     `- Parameterization candidates: ${report.parameterizationCandidates.length > 0 ? report.parameterizationCandidates.join(", ") : "none"}`,
     `- Skill creation decision: ${report.skillCreationDecision}`,
     `- Skill creation reason: ${report.skillCreationReason ?? "none"}`,
+    `- Family lifecycle key: ${report.familyLifecycleKey ?? "none"}`,
+    `- Skill lifecycle action: ${report.skillLifecycleAction}`,
+    `- Retirement candidates: ${report.retirementCandidates.length > 0 ? report.retirementCandidates.join(", ") : "none"}`,
     `- Error taxonomy: ${report.errorTaxonomy.length > 0 ? report.errorTaxonomy.join(", ") : "none"}`,
     `- Blocked work: ${report.blockedWorkLabels.length > 0 ? report.blockedWorkLabels.join(", ") : "none"}`,
     `- Partial success: ${report.partialSuccessSignals.length > 0 ? report.partialSuccessSignals.join(", ") : "none"}`,
@@ -8479,6 +8689,9 @@ export function runAgenticQualityGate(params?: {
       diagnostics.mergeCandidate &&
       diagnostics.mergeSkills.length > 0
         ? `Merge-ready consolidation is active for sibling skills: ${diagnostics.mergeSkills.join(", ")}.`
+        : undefined,
+      diagnostics.retirementCandidates.length > 0
+        ? `Duplicate sibling retirement is ready after consolidation: ${diagnostics.retirementCandidates.join(", ")}.`
         : undefined,
       diagnostics.consolidationAction === "generalize_existing" && !diagnostics.mergeCandidate
         ? "Template-ready consolidation is active; parameterize the stable workflow instead of creating a new fork."

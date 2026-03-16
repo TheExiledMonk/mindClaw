@@ -603,6 +603,8 @@ type AgenticRegressionMemorySignal = {
   templatePreferredFamilies: string[];
   mergePreferredFamilies: string[];
   preferredFallbackSkills: string[];
+  parameterizationCandidates: string[];
+  familyLifecycleKeys: string[];
   durableFamilyKeys: string[];
   retirementPreferredFamilies: string[];
   suppressedCreationFamilies: string[];
@@ -1346,6 +1348,8 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
       templatePreferredFamilies: [],
       mergePreferredFamilies: [],
       preferredFallbackSkills: [],
+      parameterizationCandidates: [],
+      familyLifecycleKeys: [],
       durableFamilyKeys: [],
       retirementPreferredFamilies: [],
       suppressedCreationFamilies: [],
@@ -1418,6 +1422,25 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     }),
     6,
   );
+  const parameterizationCandidates = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const candidates = line.match(/parameterization_candidates=([a-z0-9_,.-]+)/i)?.[1]?.trim();
+      return candidates
+        ? candidates
+            .split(",")
+            .map((candidate) => candidate.trim())
+            .filter(Boolean)
+        : [];
+    }),
+    8,
+  );
+  const familyLifecycleKeys = uniqueCompact(
+    familyLines.flatMap((line) => {
+      const lifecycleKey = line.match(/family_lifecycle_key=([a-z0-9_@/.-]+)/i)?.[1]?.trim();
+      return lifecycleKey && lifecycleKey !== "none" ? [lifecycleKey] : [];
+    }),
+    8,
+  );
   const durableFamilyKeys = uniqueCompact(
     familyLines.flatMap((line) => {
       const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
@@ -1432,7 +1455,9 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
   const retirementPreferredFamilies = uniqueCompact(
     familyLines.flatMap((line) => {
       const family = line.match(/family=([a-z0-9_.-]+)/i)?.[1]?.trim();
-      const retireSkills = line.match(/retire_skills=([a-z0-9_,.-]+)/i)?.[1]?.trim();
+      const retireSkills =
+        line.match(/retirement_candidates=([a-z0-9_,.-]+)/i)?.[1]?.trim() ??
+        line.match(/retire_skills=([a-z0-9_,.-]+)/i)?.[1]?.trim();
       return family && retireSkills ? [family] : [];
     }),
     6,
@@ -1447,7 +1472,9 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
   );
   const retiredSkills = uniqueCompact(
     familyLines.flatMap((line) => {
-      const retireSkills = line.match(/retire_skills=([a-z0-9_,.-]+)/i)?.[1]?.trim();
+      const retireSkills =
+        line.match(/retirement_candidates=([a-z0-9_,.-]+)/i)?.[1]?.trim() ??
+        line.match(/retire_skills=([a-z0-9_,.-]+)/i)?.[1]?.trim();
       return retireSkills
         ? retireSkills
             .split(",")
@@ -1471,6 +1498,8 @@ function extractAgenticRegressionMemorySignals(memoryText?: string): AgenticRegr
     templatePreferredFamilies,
     mergePreferredFamilies,
     preferredFallbackSkills,
+    parameterizationCandidates,
+    familyLifecycleKeys,
     durableFamilyKeys,
     retirementPreferredFamilies,
     suppressedCreationFamilies,
@@ -1914,7 +1943,7 @@ function buildPlannerState(params: {
   const checkpointSignals = params.checkpointSignals ?? [];
   const retrySignals = params.retrySignals ?? [];
   const likelySkills = params.likelySkills ?? [];
-  const memoryRegressionSignals = params.memoryRegressionSignals ?? {
+  const memoryRegressionSignals: AgenticRegressionMemorySignal = params.memoryRegressionSignals ?? {
     missingFallbackRegression: false,
     escalationRegression: false,
     qualityFailureReasons: [],
@@ -1923,6 +1952,8 @@ function buildPlannerState(params: {
     templatePreferredFamilies: [],
     mergePreferredFamilies: [],
     preferredFallbackSkills: [],
+    parameterizationCandidates: [],
+    familyLifecycleKeys: [],
     durableFamilyKeys: [],
     retirementPreferredFamilies: [],
     suppressedCreationFamilies: [],
@@ -2260,7 +2291,14 @@ function deriveParameterizationCandidates(params: {
   familyGuidedGeneralization?: string;
   mergeSkills: string[];
   overlappingSkills: string[];
+  memoryParameterizationCandidates?: string[];
 }): string[] {
+  if (params.overlapSeverity === "none") {
+    return [];
+  }
+  if ((params.memoryParameterizationCandidates ?? []).length > 0) {
+    return uniqueCompact(params.memoryParameterizationCandidates ?? [], 6);
+  }
   const candidates = uniqueCompact(
     [
       params.primarySkill,
@@ -2269,7 +2307,7 @@ function deriveParameterizationCandidates(params: {
     ].filter((value): value is string => Boolean(value)),
     6,
   );
-  return params.overlapSeverity === "none" ? [] : candidates;
+  return candidates;
 }
 
 function deriveSkillCreationDecision(params: {
@@ -2445,6 +2483,8 @@ function buildOrchestrationState(params: {
     templatePreferredFamilies: [],
     mergePreferredFamilies: [],
     preferredFallbackSkills: [],
+    parameterizationCandidates: [],
+    familyLifecycleKeys: [],
     durableFamilyKeys: [],
     retirementPreferredFamilies: [],
     suppressedCreationFamilies: [],
@@ -2719,11 +2759,13 @@ function buildOrchestrationState(params: {
   );
   const primarySkillFamily = primarySkill ? inferSkillFamily(primarySkill) : undefined;
   const primarySkillInfo = availableSkills.find((skill) => skill.name === primarySkill);
-  const familyLifecycleKey = buildSkillFamilyLifecycleKey({
+  const computedFamilyLifecycleKey = buildSkillFamilyLifecycleKey({
     family: primarySkillFamily,
     taskMode: params.taskMode,
     env: preferredEnv ?? primarySkillInfo?.primaryEnv ?? currentExecutionEnvs[0],
   });
+  const familyLifecycleKey =
+    memoryRegressionSignals.familyLifecycleKeys[0] ?? computedFamilyLifecycleKey;
   const durableFamilyActive =
     familyLifecycleKey !== undefined &&
     memoryRegressionSignals.durableFamilyKeys.includes(familyLifecycleKey);
@@ -2785,6 +2827,7 @@ function buildOrchestrationState(params: {
     familyGuidedGeneralization,
     mergeSkills,
     overlappingSkills: overlapSignals.overlappingSkills,
+    memoryParameterizationCandidates: memoryRegressionSignals.parameterizationCandidates,
   });
   const stabilitySkills = uniqueCompact(
     [
@@ -3543,7 +3586,7 @@ function reconcilePlannerStateWithOrchestration(params: {
   memoryRegressionSignals?: AgenticRegressionMemorySignal;
 }): AgenticPlannerState {
   const likelySkills = uniqueCompact(params.likelySkills ?? [], 6);
-  const memoryRegressionSignals = params.memoryRegressionSignals ?? {
+  const memoryRegressionSignals: AgenticRegressionMemorySignal = params.memoryRegressionSignals ?? {
     missingFallbackRegression: false,
     escalationRegression: false,
     qualityFailureReasons: [],
@@ -3552,6 +3595,8 @@ function reconcilePlannerStateWithOrchestration(params: {
     templatePreferredFamilies: [],
     mergePreferredFamilies: [],
     preferredFallbackSkills: [],
+    parameterizationCandidates: [],
+    familyLifecycleKeys: [],
     durableFamilyKeys: [],
     retirementPreferredFamilies: [],
     suppressedCreationFamilies: [],

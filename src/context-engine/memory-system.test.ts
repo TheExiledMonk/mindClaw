@@ -4218,6 +4218,120 @@ describe("MemorySystemContextEngine", () => {
     expect(packet.text).toContain("retirement_candidates=diagnostics-report");
   });
 
+  it("uses retrieved family lifecycle guidance to steer later runner orchestration", () => {
+    const compiled = compileMemoryState({
+      sessionId: "agent:skill-family-lifecycle-runner-steering",
+      messages: [
+        userMessage(
+          "Consolidate the diagnostics family, avoid creating a new fork, and retire the duplicate sibling cleanly.",
+        ),
+      ],
+      runtimeContext: {
+        proceduralExecution: {
+          version: 1,
+          availableSkills: ["memory-diagnostics", "diagnostics-report"],
+          likelySkills: ["memory-diagnostics"],
+          alternativeSkills: ["diagnostics-report"],
+          toolChain: ["read", "exec"],
+          changedArtifacts: ["scripts/agentic-quality-report.ts"],
+          outcome: "verified",
+          goalSatisfaction: "satisfied",
+          taskMode: "debugging",
+          templateCandidate: false,
+          consolidationCandidate: true,
+          consolidationAction: "generalize_existing",
+          overlappingSkills: ["memory-diagnostics", "diagnostics-report"],
+          skillFamilies: ["diagnostics"],
+          overlapSeverity: "family_cluster",
+          mergeCandidate: true,
+          mergeSkills: ["memory-diagnostics", "diagnostics-report"],
+          parameterizationCandidates: ["input_path", "output_format"],
+          skillCreationDecision: "generalize_existing",
+          skillCreationReason:
+            "Merge-ready overlap should be consolidated instead of spawning a new sibling skill.",
+          familyLifecycleKey: "diagnostics@debugging/node",
+          skillLifecycleAction: "retire_duplicates",
+          retirementCandidates: ["diagnostics-report"],
+          nearMissCandidate: false,
+          retryClass: "same_path_retry",
+          suggestedSkill: "memory-diagnostics",
+          shouldEscalate: false,
+          autonomyMode: "continue",
+          riskLevel: "low",
+          governanceReasons: [],
+          primarySkill: "memory-diagnostics",
+          fallbackSkills: ["diagnostics-report"],
+          skillChain: ["memory-diagnostics", "diagnostics-report"],
+          workflowSteps: [
+            { skill: "memory-diagnostics", role: "primary" },
+            { skill: "diagnostics-report", role: "supporting" },
+          ],
+          rankedSkills: ["memory-diagnostics", "diagnostics-report"],
+          promotedSkills: [],
+          stabilityState: "neutral",
+          stabilitySkills: [],
+          effectiveSkills: [],
+          effectiveFamilies: [],
+          prerequisiteWarnings: [],
+          capabilityGaps: [],
+          hasViableFallback: true,
+          multiSkillCandidate: true,
+          chainedWorkflow: false,
+          workspaceKind: "project",
+          capabilitySignals: ["can_execute_commands"],
+          preferredValidationTools: ["exec"],
+          skillEnvironments: ["node"],
+          failurePattern: "clean_success",
+          learnFromFailure: false,
+          failureReasons: [],
+          nextImprovement: "Retire duplicate sibling skills after consolidation.",
+          planSteps: [],
+        },
+      } as never,
+    });
+
+    const packet = retrieveMemoryContextPacket(compiled, {
+      messages: [
+        userMessage(
+          "Consolidate the diagnostics family, avoid creating a new fork, and retire the duplicate sibling cleanly.",
+        ),
+      ],
+    });
+
+    const state = buildAgenticExecutionState({
+      messages: [
+        userMessage(
+          "Consolidate the diagnostics family, avoid creating a new fork, and retire the duplicate sibling cleanly.",
+        ),
+      ],
+      toolSignals: [
+        {
+          toolName: "read",
+          status: "success",
+          summary: "Reviewed the diagnostics family and existing sibling workflows.",
+        },
+      ],
+      availableSkills: ["memory-diagnostics", "diagnostics-report"],
+      likelySkills: ["memory-diagnostics"],
+      availableSkillInfo: [
+        { name: "memory-diagnostics", primaryEnv: "node" },
+        { name: "diagnostics-report", primaryEnv: "node" },
+      ],
+      memorySystemPromptAddition: packet.text,
+    });
+
+    expect(state.orchestrationState.consolidationAction).toBe("generalize_existing");
+    expect(state.orchestrationState.overlapSeverity).toBe("family_cluster");
+    expect(state.orchestrationState.parameterizationCandidates).toEqual([
+      "input_path",
+      "output_format",
+    ]);
+    expect(state.orchestrationState.skillCreationDecision).toBe("generalize_existing");
+    expect(state.orchestrationState.familyLifecycleKey).toBe("diagnostics@debugging/node");
+    expect(state.orchestrationState.skillLifecycleAction).toBe("retire_duplicates");
+    expect(state.orchestrationState.retirementCandidates).toContain("diagnostics-report");
+  });
+
   it("injects durable family trend guidance into retrieved memory packets", () => {
     const sessionId = "agent:durable-family-guidance-packet";
     const templateFirst = compileMemoryState({

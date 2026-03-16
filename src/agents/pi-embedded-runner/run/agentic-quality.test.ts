@@ -84,6 +84,29 @@ describe("agentic quality gate", () => {
     expect(report.recoveringSkills).toContain("diagnostics-repair@debugging/node");
   });
 
+  it("keeps advisory diagnostics out of release confidence signals while still surfacing recommendations", () => {
+    const report = runAgenticQualityGate({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix the diagnostics workflow, rerun validation, and prepare the final handoff summary.",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    expect(report.releaseGateStatus).toBe("ready");
+    expect(report.operatorConfidenceStatus).toBe("high");
+    expect(report.confidenceSignals).not.toContain("clarification_noise");
+    expect(report.confidenceSignals).not.toContain("blocked_work_open");
+    expect(report.confidenceSignals).not.toContain("capability_gap_present");
+    expect(report.recommendations).toContain(
+      "Clarification prompts should be made more specific and lower-noise before future pause/resume cycles.",
+    );
+    expect(report.recommendations).toContain("Dominant blocked-work classes: no_viable_fallback.");
+  });
+
   it("formats the quality gate report in summary and markdown forms", () => {
     const report = runAgenticQualityGate({
       memoryTrend: {

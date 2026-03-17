@@ -8,11 +8,13 @@ describe("memory-core plugin registration", () => {
   it("registers search, get, and store tools", () => {
     const runtime = createPluginRuntimeMock();
     const memorySearchTool = { name: "memory_search" } as never;
+    const memorySchemaTool = { name: "memory_schema" } as never;
     const memoryGetTool = { name: "memory_get" } as never;
     const memoryStoreTool = { name: "memory_store" } as never;
     const registerTool = vi.fn();
 
     vi.mocked(runtime.tools.createMemorySearchTool).mockReturnValue(memorySearchTool);
+    vi.mocked(runtime.tools.createMemorySchemaTool).mockReturnValue(memorySchemaTool);
     vi.mocked(runtime.tools.createMemoryGetTool).mockReturnValue(memoryGetTool);
     vi.mocked(runtime.tools.createMemoryStoreTool).mockReturnValue(memoryStoreTool);
 
@@ -30,18 +32,22 @@ describe("memory-core plugin registration", () => {
 
     expect(registerTool).toHaveBeenCalledTimes(1);
     expect(registerTool.mock.calls[0]?.[1]).toMatchObject({
-      names: ["memory_search", "memory_get", "memory_store"],
+      names: ["memory_search", "memory_schema", "memory_get", "memory_store"],
     });
 
     const factory = registerTool.mock.calls[0]?.[0];
     const result = factory?.({ config: {}, sessionKey: "session:test" });
-    expect(result).toEqual([memorySearchTool, memoryGetTool, memoryStoreTool]);
+    expect(result).toEqual([memorySearchTool, memorySchemaTool, memoryGetTool, memoryStoreTool]);
 
     expect(runtime.tools.createMemorySearchTool).toHaveBeenCalledWith({
       config: {},
       agentSessionKey: "session:test",
     });
     expect(runtime.tools.createMemoryGetTool).toHaveBeenCalledWith({
+      config: {},
+      agentSessionKey: "session:test",
+    });
+    expect(runtime.tools.createMemorySchemaTool).toHaveBeenCalledWith({
       config: {},
       agentSessionKey: "session:test",
     });

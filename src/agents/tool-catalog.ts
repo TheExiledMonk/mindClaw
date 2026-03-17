@@ -106,6 +106,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "memory_schema",
+    label: "memory_schema",
+    description: "Inspect allowed memory labels",
+    sectionId: "memory",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "memory_get",
     label: "memory_get",
     description: "Read memory files",

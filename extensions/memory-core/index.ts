@@ -14,6 +14,10 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
+        const memorySchemaTool = api.runtime.tools.createMemorySchemaTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
         const memoryGetTool = api.runtime.tools.createMemoryGetTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
@@ -22,12 +26,12 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
-        if (!memorySearchTool || !memoryGetTool || !memoryStoreTool) {
+        if (!memorySearchTool || !memorySchemaTool || !memoryGetTool || !memoryStoreTool) {
           return null;
         }
-        return [memorySearchTool, memoryGetTool, memoryStoreTool];
+        return [memorySearchTool, memorySchemaTool, memoryGetTool, memoryStoreTool];
       },
-      { names: ["memory_search", "memory_get", "memory_store"] },
+      { names: ["memory_search", "memory_schema", "memory_get", "memory_store"] },
     );
 
     api.registerCli(

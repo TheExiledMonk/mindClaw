@@ -77,6 +77,11 @@
       "title": "Memory Search",
       "detailKeys": ["query"]
     },
+    "memory_schema": {
+      "emoji": "🗺️",
+      "title": "Memory Schema",
+      "detailKeys": []
+    },
     "memory_get": {
       "emoji": "📓",
       "title": "Memory Get",

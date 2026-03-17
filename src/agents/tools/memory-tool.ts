@@ -51,6 +51,8 @@ const MemoryStoreSchema = Type.Object({
   sourceType: Type.Optional(Type.String()),
 });
 
+const MemorySchemaToolSchema = Type.Object({});
+
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
   if (!cfg) {
@@ -67,7 +69,11 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
 }
 
 function createMemoryTool<
-  TParameters extends typeof MemorySearchSchema | typeof MemoryGetSchema | typeof MemoryStoreSchema,
+  TParameters extends
+    | typeof MemorySearchSchema
+    | typeof MemoryGetSchema
+    | typeof MemoryStoreSchema
+    | typeof MemorySchemaToolSchema,
 >(params: {
   options: {
     config?: OpenClawConfig;
@@ -305,6 +311,21 @@ export function createMemoryStoreTool(options: {
   });
 }
 
+export function createMemorySchemaTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  return createMemoryTool({
+    options,
+    label: "Memory Schema",
+    name: "memory_schema",
+    description:
+      "Inspect the integrated MindClaw memory schema before storing memory. Returns allowed categories, source types, importance classes, aliases, and guidance so you can choose valid labels without guessing.",
+    parameters: MemorySchemaToolSchema,
+    execute: () => async () => jsonResult(buildMemorySchemaDetails()),
+  });
+}
+
 function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
   if (mode === "on" || mode === "off" || mode === "auto") {
@@ -346,6 +367,85 @@ function formatCitation(entry: IntegratedMemorySearchResult): string {
 }
 
 const MINDCLAW_MEMORY_PREFIX = "mindclaw_memory://";
+
+const MEMORY_CATEGORIES: MemoryCategory[] = [
+  "fact",
+  "preference",
+  "decision",
+  "strategy",
+  "entity",
+  "episode",
+  "pattern",
+];
+
+const MEMORY_IMPORTANCE_CLASSES = ["critical", "useful"] as const;
+
+const MEMORY_SOURCE_TYPE_ALIASES = {
+  user_stated: ["user", "human"],
+  direct_observation: ["observation", "observed"],
+  summary_derived: ["summary", "training", "lesson", "course", "study"],
+  system_inferred: ["inferred", "derived"],
+} as const satisfies Record<MemorySourceType, readonly string[]>;
+
+function buildMemorySchemaDetails() {
+  return {
+    mode: "integrated-memory",
+    categories: MEMORY_CATEGORIES.map((id) => ({
+      id,
+      whenToUse: describeMemoryCategory(id),
+    })),
+    importanceClasses: MEMORY_IMPORTANCE_CLASSES.map((id) => ({
+      id,
+      whenToUse:
+        id === "critical"
+          ? "Use for high-value durable knowledge that should strongly influence future behavior."
+          : "Use for normal durable knowledge worth remembering across sessions.",
+    })),
+    sourceTypes: (Object.keys(MEMORY_SOURCE_TYPE_ALIASES) as MemorySourceType[]).map((id) => ({
+      id,
+      aliases: [...MEMORY_SOURCE_TYPE_ALIASES[id]],
+      whenToUse: describeMemorySourceType(id),
+    })),
+    guidance: [
+      "If unsure, call memory_schema before memory_store instead of guessing labels.",
+      "Keep stored memories distilled; use memory_store for durable takeaways, not raw transcript dumps.",
+      "If the input is long training material, prefer sourceType=summary_derived.",
+      "Use category=fact when in doubt unless the memory is clearly a preference, decision, strategy, entity, episode, or pattern.",
+    ],
+  };
+}
+
+function describeMemoryCategory(category: MemoryCategory): string {
+  switch (category) {
+    case "fact":
+      return "Stable knowledge, instructions, or takeaways that are true enough to reuse later.";
+    case "preference":
+      return "User tastes, defaults, likes, dislikes, and recurring stylistic choices.";
+    case "decision":
+      return "A chosen direction, commitment, or resolved option that should affect future work.";
+    case "strategy":
+      return "An approach, plan, playbook, or procedural method worth reusing.";
+    case "entity":
+      return "A person, project, brand, product, course, or named thing with durable identity.";
+    case "episode":
+      return "A specific event or session outcome tied to a particular time or situation.";
+    case "pattern":
+      return "A recurring behavior, repeated issue, or cross-instance lesson.";
+  }
+}
+
+function describeMemorySourceType(sourceType: MemorySourceType): string {
+  switch (sourceType) {
+    case "user_stated":
+      return "The user directly said it or explicitly asked for it to be remembered.";
+    case "direct_observation":
+      return "The agent directly observed it from concrete evidence, tools, or workspace state.";
+    case "summary_derived":
+      return "The memory is distilled from longer source material such as a lesson, course, or summary.";
+    case "system_inferred":
+      return "The system inferred it from patterns or synthesis rather than direct statement alone.";
+  }
+}
 
 function readMemoryCategoryParam(
   params: Record<string, unknown>,

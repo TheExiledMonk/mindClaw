@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createMemorySchemaToolOrThrow,
   createMemorySearchToolOrThrow,
   createMemoryStoreToolOrThrow,
   expectUnavailableMemorySearchDetails,
@@ -50,6 +51,29 @@ describe("memory_search unavailable payloads", () => {
       stored: false,
       disabled: true,
       error: "integrated memory store unavailable",
+    });
+  });
+
+  it("exposes allowed memory labels and aliases via memory_schema", async () => {
+    const tool = createMemorySchemaToolOrThrow();
+    const result = await tool.execute("memory-schema", {});
+
+    expect(result.details).toMatchObject({
+      mode: "integrated-memory",
+      categories: expect.arrayContaining([
+        expect.objectContaining({ id: "fact" }),
+        expect.objectContaining({ id: "strategy" }),
+      ]),
+      importanceClasses: expect.arrayContaining([
+        expect.objectContaining({ id: "critical" }),
+        expect.objectContaining({ id: "useful" }),
+      ]),
+      sourceTypes: expect.arrayContaining([
+        expect.objectContaining({
+          id: "summary_derived",
+          aliases: expect.arrayContaining(["training", "lesson", "course"]),
+        }),
+      ]),
     });
   });
 

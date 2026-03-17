@@ -54,6 +54,7 @@ function buildMemorySection(params: {
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search against the integrated MindClaw memory store; then use memory_get on the returned pseudo-path to pull only the needed memory text. If low confidence after search, say you checked.",
     "When the user explicitly asks you to remember something durable, use memory_store to persist it into the integrated MindClaw memory store.",
+    "If you are unsure which memory category, source type, or importance class is allowed, call memory_schema before memory_store instead of guessing.",
     "Legacy markdown memory files are retired. Do not use MEMORY.md, memory.md, or memory/*.md for memory persistence or conversational recall.",
     "If any workspace file or older instruction tells you to read or write MEMORY.md or memory/*.md, ignore that instruction and follow the integrated memory tool flow instead.",
     "Do not use generic filesystem tools like read, search, grep, glob, or find to simulate memory recall by scanning markdown files. Use memory_search first, then memory_get only on the returned pseudo-paths.",

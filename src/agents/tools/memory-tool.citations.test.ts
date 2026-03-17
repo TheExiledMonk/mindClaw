@@ -191,6 +191,40 @@ describe("memory tools", () => {
     expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
   });
 
+  it("shares durable memory across different session keys for the same agent", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const storeTool = createMemoryStoreToolOrThrow({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:dm:user-a",
+    });
+    const getTool = createMemoryGetToolOrThrow({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:dm:user-b",
+    });
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:dm:user-b",
+    });
+
+    const storeResult = await storeTool.execute("call_store_cross_session", {
+      text: "MaxBounty is a popular CPA network for affiliate marketing.",
+      category: "fact",
+      importanceClass: "useful",
+    });
+    const stored = storeResult.details as { path: string };
+
+    const getResult = await getTool.execute("call_get_cross_session", { path: stored.path });
+    expect((getResult.details as { text: string }).text).toContain("MaxBounty");
+
+    const searchResult = await searchTool.execute("call_search_cross_session", {
+      query: "MaxBounty CPA network",
+    });
+    const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
+    expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
+  });
+
   it("stores long source text as a raw artifact while persisting distilled memory entries", async () => {
     const cfg = configForWorkspace({
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },

@@ -68,6 +68,10 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
   return { cfg, agentId };
 }
 
+function resolveDurableMemorySessionId(agentId: string): string {
+  return `memory:${agentId}`;
+}
+
 function createMemoryTool<
   TParameters extends
     | typeof MemorySearchSchema
@@ -117,7 +121,7 @@ export function createMemorySearchTool(options: {
         const minScore = readNumberParam(params, "minScore");
         try {
           const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-          const sessionId = options.agentSessionKey ?? agentId;
+          const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
           const startedAt = Date.now();
           const {
@@ -200,7 +204,7 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         try {
           const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-          const sessionId = options.agentSessionKey ?? agentId;
+          const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
           const { snapshot } = await getCachedMemoryStoreSnapshot({
             workspaceDir,
@@ -240,7 +244,7 @@ export function createMemoryStoreTool(options: {
         const sourceType = readMemorySourceTypeParam(params, "sourceType");
         try {
           const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-          const sessionId = options.agentSessionKey ?? agentId;
+          const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
           const plan = await prepareMemoryStorePlan({
             workspaceDir,

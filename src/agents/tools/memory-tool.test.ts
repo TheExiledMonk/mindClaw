@@ -13,6 +13,7 @@ vi.mock("../../context-engine/memory-system-store.js", async () => {
   return {
     ...actual,
     loadMemoryStoreSnapshot: vi.fn(),
+    loadMemoryStoreMetadata: vi.fn(),
     storeIntegratedMemoryEntry: vi.fn(),
   };
 });
@@ -21,6 +22,7 @@ describe("memory_search unavailable payloads", () => {
   beforeEach(async () => {
     const mod = await import("../../context-engine/memory-system-store.js");
     vi.mocked(mod.loadMemoryStoreSnapshot).mockReset();
+    vi.mocked(mod.loadMemoryStoreMetadata).mockReset();
     vi.mocked(mod.storeIntegratedMemoryEntry).mockReset();
   });
 
@@ -105,5 +107,70 @@ describe("memory_search unavailable payloads", () => {
       stored: true,
       sourceType: "summary_derived",
     });
+  });
+
+  it("uses a stable agent-level durable memory scope instead of live session keys", async () => {
+    const mod = await import("../../context-engine/memory-system-store.js");
+    vi.mocked(mod.loadMemoryStoreMetadata).mockResolvedValue({
+      schemaVersion: 1,
+      snapshotVersion: 1,
+      workingMemoryVersion: 1,
+      longTermMemoryVersion: 1,
+      permanentMemoryVersion: 1,
+      graphVersion: 1,
+      lastUpdatedAt: Date.now(),
+    } as unknown as Awaited<ReturnType<typeof mod.loadMemoryStoreMetadata>>);
+    vi.mocked(mod.loadMemoryStoreSnapshot).mockResolvedValue({
+      workingMemory: {
+        sessionId: "memory:main",
+        updatedAt: Date.now(),
+        rollingSummary: "",
+        activeFacts: [],
+        activeGoals: [],
+        openLoops: [],
+        recentEvents: [],
+        recentDecisions: [],
+      },
+      longTermMemory: [],
+      pendingSignificance: [],
+      permanentMemory: {
+        id: "root",
+        nodeType: "root",
+        label: "root",
+        summary: "",
+        activeStatus: "active",
+        confidence: 1,
+        evidence: [],
+        sourceMemoryIds: [],
+        children: [],
+        relatedNodeIds: [],
+        updatedAt: Date.now(),
+      },
+      graph: { nodes: [], edges: [], updatedAt: Date.now() },
+    } as unknown as Awaited<ReturnType<typeof mod.loadMemoryStoreSnapshot>>);
+    vi.mocked(mod.storeIntegratedMemoryEntry).mockResolvedValue({
+      created: true,
+      entry: {
+        id: "mem-1",
+        text: "Remember this lesson",
+        category: "fact",
+        importanceClass: "useful",
+        sourceType: "summary_derived",
+      },
+    } as Awaited<ReturnType<typeof mod.storeIntegratedMemoryEntry>>);
+
+    const tool = createMemoryStoreToolOrThrow({
+      agentSessionKey: "agent:main:discord:dm:u123",
+    });
+    await tool.execute("store-scope", {
+      text: "Remember this lesson",
+      sourceType: "training",
+    });
+
+    expect(mod.storeIntegratedMemoryEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "memory:main",
+      }),
+    );
   });
 });

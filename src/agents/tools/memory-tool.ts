@@ -615,16 +615,40 @@ function readMemoryCategoryParam(
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "fact" ||
-    normalized === "preference" ||
-    normalized === "decision" ||
-    normalized === "strategy" ||
-    normalized === "entity" ||
-    normalized === "episode" ||
-    normalized === "pattern"
-  ) {
-    return normalized;
+  switch (normalized) {
+    case "fact":
+    case "knowledge":
+    case "info":
+    case "information":
+    case "lesson":
+      return "fact";
+    case "preference":
+    case "preference_note":
+    case "taste":
+      return "preference";
+    case "decision":
+    case "rule":
+    case "policy":
+      return "decision";
+    case "strategy":
+    case "playbook":
+    case "approach":
+    case "method":
+      return "strategy";
+    case "entity":
+    case "person":
+    case "project":
+    case "brand":
+    case "course":
+      return "entity";
+    case "episode":
+    case "event":
+    case "incident":
+      return "episode";
+    case "pattern":
+    case "workflow":
+    case "procedure":
+      return "pattern";
   }
   throw new ToolInputError(`unsupported memory category: ${value}`);
 }

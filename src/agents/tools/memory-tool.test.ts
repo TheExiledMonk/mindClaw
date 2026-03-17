@@ -206,6 +206,36 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+  it("accepts human-friendly category aliases like knowledge", async () => {
+    const mod = await import("../../context-engine/memory-system-store.js");
+    vi.mocked(mod.storeIntegratedMemoryEntry).mockResolvedValue({
+      created: true,
+      entry: {
+        id: "mem-knowledge",
+        text: "Remember this knowledge",
+        category: "fact",
+        importanceClass: "useful",
+        sourceType: "summary_derived",
+      },
+    } as Awaited<ReturnType<typeof mod.storeIntegratedMemoryEntry>>);
+
+    const tool = createMemoryStoreToolOrThrow();
+    const result = await tool.execute("store-knowledge", {
+      text: "Remember this knowledge",
+      category: "knowledge",
+    });
+
+    expect(mod.storeIntegratedMemoryEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "fact",
+      }),
+    );
+    expect(result.details).toMatchObject({
+      stored: true,
+      category: "fact",
+    });
+  });
+
   it("deletes a specific integrated memory path", async () => {
     const mod = await import("../../context-engine/memory-system-store.js");
     vi.mocked(mod.deleteIntegratedMemoryEntry).mockResolvedValue({

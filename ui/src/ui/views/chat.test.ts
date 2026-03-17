@@ -424,6 +424,7 @@ describe("chat view", () => {
 
     const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
     expect(stopButton).not.toBeUndefined();
+    expect(stopButton?.textContent).toContain("Stop");
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");

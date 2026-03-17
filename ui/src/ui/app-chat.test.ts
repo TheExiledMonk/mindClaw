@@ -7,13 +7,18 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
   return {
     client: null,
     chatMessages: [],
+    chatToolMessages: [],
     chatStream: null,
+    chatStreamSegments: [],
     connected: true,
     chatMessage: "",
     chatAttachments: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",
@@ -23,6 +28,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelsLoading: false,
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Set<string>(),
+    settings: { lastActiveSessionKey: "main" },
     updateComplete: Promise.resolve(),
     ...overrides,
   };
@@ -117,5 +123,37 @@ describe("handleSendChat", () => {
       model: "gpt-5-mini",
     });
     expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+  });
+
+  it("treats /new as a control action and clears the visible chat immediately", async () => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatMessage: "/new",
+      chatMessages: [
+        { role: "user", content: [{ type: "text", text: "old message" }] },
+        { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+      ],
+      chatVisibleHistoryCount: 42,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "/new",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatVisibleHistoryCount).toBe(200);
+    expect(host.chatStream).toBe("");
   });
 });

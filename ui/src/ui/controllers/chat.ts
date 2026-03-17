@@ -264,6 +264,7 @@ export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  opts?: { suppressLocalEcho?: boolean },
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -292,17 +293,19 @@ export async function sendChatMessage(
     }
   }
 
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
-      role: "user",
-      content: contentBlocks,
-      timestamp: now,
-      pending: true,
-      localOnly: true,
-      clientRequestId: runId,
-    },
-  ];
+  if (!opts?.suppressLocalEcho) {
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "user",
+        content: contentBlocks,
+        timestamp: now,
+        pending: true,
+        localOnly: true,
+        clientRequestId: runId,
+      },
+    ];
+  }
 
   state.chatSending = true;
   state.lastError = null;

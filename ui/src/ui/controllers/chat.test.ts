@@ -636,6 +636,26 @@ describe("sendChatMessage", () => {
       ],
     });
   });
+
+  it("can suppress optimistic local echo for control messages like /new", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const runId = await sendChatMessage(state, "/new", undefined, { suppressLocalEcho: true });
+
+    expect(runId).toEqual(expect.any(String));
+    expect(state.chatMessages).toEqual([]);
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "/new",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+  });
 });
 
 describe("abortChatRun", () => {

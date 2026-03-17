@@ -17,7 +17,10 @@ import { generateUUID } from "./uuid.ts";
 export type ChatHost = {
   client: GatewayBrowserClient | null;
   chatMessages: unknown[];
+  chatToolMessages?: unknown[];
+  chatVisibleHistoryCount?: number;
   chatStream: string | null;
+  chatStreamSegments?: Array<{ text: string; ts: number }>;
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -33,6 +36,10 @@ export type ChatHost = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   updateComplete?: Promise<unknown>;
+  toolStreamById?: Map<string, unknown>;
+  toolStreamOrder?: string[];
+  toolStreamSyncTimer?: number | null;
+  settings?: { lastActiveSessionKey?: string };
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
@@ -121,7 +128,10 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
+  const isResetCommand = isChatResetCommand(message);
+  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments, {
+    suppressLocalEcho: isResetCommand,
+  });
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
@@ -134,6 +144,13 @@ async function sendChatMessageNow(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       host.sessionKey,
     );
+  }
+  if (ok && isResetCommand) {
+    host.chatMessages = [];
+    host.chatStream = "";
+    if (typeof host.chatVisibleHistoryCount === "number") {
+      host.chatVisibleHistoryCount = 200;
+    }
   }
   if (ok && opts?.restoreDraft && opts.previousDraft?.trim()) {
     host.chatMessage = opts.previousDraft;

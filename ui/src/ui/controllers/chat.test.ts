@@ -541,6 +541,58 @@ describe("handleChatEvent", () => {
 });
 
 describe("loadChatHistory", () => {
+  it("filters persisted /new and /reset control messages from visible history", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "/new" }],
+              timestamp: 100,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Fresh session started." }],
+              timestamp: 101,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "/reset" }],
+              timestamp: 102,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "real question" }],
+              timestamp: 103,
+            },
+          ],
+          thinkingLevel: null,
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Fresh session started." }],
+    });
+    expect(state.chatMessages[1]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "real question" }],
+    });
+  });
+});
+
+describe("loadChatHistory", () => {
   it("filters NO_REPLY assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },

@@ -75,6 +75,23 @@ function normalizeComparableUserText(message: Record<string, unknown>): string {
   return (extractText(message) ?? "").replace(/\r\n/g, "\n").trim();
 }
 
+function isResetControlText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "/new" || normalized === "/reset";
+}
+
+function isResetControlUserMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role.toLowerCase() : "";
+  if (role !== "user") {
+    return false;
+  }
+  return isResetControlText(normalizeComparableUserText(record));
+}
+
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -183,10 +200,11 @@ function filterHistoryAfterReset(
   messages: unknown[],
   cutoffTs: number | null | undefined,
 ): unknown[] {
+  const nonControlMessages = messages.filter((message) => !isResetControlUserMessage(message));
   if (!cutoffTs) {
-    return messages;
+    return nonControlMessages;
   }
-  return messages.filter((message) => {
+  return nonControlMessages.filter((message) => {
     const timestamp = getMessageTimestampMs(message);
     return timestamp != null && timestamp >= cutoffTs;
   });

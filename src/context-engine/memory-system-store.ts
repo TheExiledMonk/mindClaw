@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -256,6 +257,12 @@ export type MemoryStoreExportBundle = {
     path: string;
     text: string;
   }>;
+  integrity?: {
+    algorithm: "sha256";
+    snapshotHash: string;
+    artifactsHash?: string;
+    bundleHash: string;
+  };
 };
 
 export type MemoryStoreHealthReport = {
@@ -281,6 +288,7 @@ export type MemoryStoreHealthReport = {
   permanentEligibleCount: number;
   staleMemoryCount: number;
   backupAvailable: boolean;
+  backupIntegrityStatus: "ok" | "missing" | "corrupt";
   recoveryRecommended: boolean;
 };
 
@@ -901,15 +909,99 @@ function buildMemoryStoreExportBundle(params: {
   backendKind: MemoryStoreBackendKind;
   metadata: MemoryStoreMetadata;
   snapshot: MemoryStoreSnapshot;
+  artifacts?: Array<{
+    path: string;
+    text: string;
+  }>;
 }): MemoryStoreExportBundle {
-  return {
+  const baseBundle: MemoryStoreExportBundle = {
     version: 1,
     exportedAt: Date.now(),
     sessionId: params.sessionId,
     backendKind: params.backendKind,
     metadata: params.metadata,
     snapshot: params.snapshot,
+    ...(params.artifacts && params.artifacts.length > 0 ? { artifacts: params.artifacts } : {}),
   };
+  return {
+    ...baseBundle,
+    integrity: buildMemoryStoreBundleIntegrity(baseBundle),
+  };
+}
+
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function buildMemoryStoreBundleIntegrity(
+  bundle: Omit<MemoryStoreExportBundle, "integrity">,
+): NonNullable<MemoryStoreExportBundle["integrity"]> {
+  const snapshotHash = sha256Hex(JSON.stringify(bundle.snapshot));
+  const artifactsHash =
+    bundle.artifacts && bundle.artifacts.length > 0
+      ? sha256Hex(JSON.stringify(bundle.artifacts))
+      : undefined;
+  const bundleHash = sha256Hex(
+    JSON.stringify({
+      version: bundle.version,
+      exportedAt: bundle.exportedAt,
+      sessionId: bundle.sessionId,
+      backendKind: bundle.backendKind,
+      metadata: bundle.metadata,
+      snapshotHash,
+      artifactsHash: artifactsHash ?? null,
+    }),
+  );
+  return {
+    algorithm: "sha256",
+    snapshotHash,
+    ...(artifactsHash ? { artifactsHash } : {}),
+    bundleHash,
+  };
+}
+
+function verifyMemoryStoreBundleIntegrity(bundle: MemoryStoreExportBundle): {
+  ok: boolean;
+  issues: string[];
+} {
+  if (!bundle.integrity) {
+    return { ok: false, issues: ["backup integrity metadata missing"] };
+  }
+  if (bundle.integrity.algorithm !== "sha256") {
+    return {
+      ok: false,
+      issues: [`unsupported backup integrity algorithm: ${String(bundle.integrity.algorithm)}`],
+    };
+  }
+  const expected = buildMemoryStoreBundleIntegrity({
+    version: bundle.version,
+    exportedAt: bundle.exportedAt,
+    sessionId: bundle.sessionId,
+    backendKind: bundle.backendKind,
+    metadata: bundle.metadata,
+    snapshot: bundle.snapshot,
+    artifacts: bundle.artifacts,
+  });
+  const issues: string[] = [];
+  if (bundle.integrity.snapshotHash !== expected.snapshotHash) {
+    issues.push("backup snapshot hash mismatch");
+  }
+  if ((bundle.integrity.artifactsHash ?? undefined) !== (expected.artifactsHash ?? undefined)) {
+    issues.push("backup artifacts hash mismatch");
+  }
+  if (bundle.integrity.bundleHash !== expected.bundleHash) {
+    issues.push("backup bundle hash mismatch");
+  }
+  return { ok: issues.length === 0, issues };
+}
+
+function collectSnapshotArtifactRefs(snapshot: MemoryStoreSnapshot): string[] {
+  return uniqueStrings(
+    [
+      ...snapshot.longTermMemory.flatMap((entry) => entry.artifactRefs ?? []),
+      ...snapshot.pendingSignificance.flatMap((entry) => entry.artifactRefs ?? []),
+    ].filter((ref) => /(?:^|\/)artifacts\/[^/]+$/.test(ref)),
+  );
 }
 
 function clipText(text: string, max = 220): string {
@@ -11286,7 +11378,7 @@ export async function loadMemoryStoreSnapshot(params: {
     } catch (error) {
       if (params.allowBackupRecovery !== false) {
         const backup = await readJsonFile<MemoryStoreExportBundle | null>(paths.backupFile, null);
-        if (backup) {
+        if (backup && verifyMemoryStoreBundleIntegrity(backup).ok) {
           return recoverMemoryStoreFromBackup({
             workspaceDir: params.workspaceDir,
             sessionId: params.sessionId,
@@ -11618,6 +11710,10 @@ export async function persistMemoryStoreSnapshot(params: {
           backendKind: "sqlite-graph",
           metadata: persistedMetadata,
           snapshot,
+          artifacts: await readIntegratedArtifactEntries(
+            params.workspaceDir,
+            collectSnapshotArtifactRefs(snapshot),
+          ),
         }),
       );
       return;
@@ -11659,6 +11755,10 @@ export async function persistMemoryStoreSnapshot(params: {
           previous: metadata,
         }),
         snapshot,
+        artifacts: await readIntegratedArtifactEntries(
+          params.workspaceDir,
+          collectSnapshotArtifactRefs(snapshot),
+        ),
       }),
     ),
   ]);
@@ -11860,22 +11960,18 @@ export async function exportMemoryStoreBundle(params: {
     sessionId: params.sessionId,
     backendKind,
   });
-  const bundle = buildMemoryStoreExportBundle({
+  const artifactRefs = collectSnapshotArtifactRefs(snapshot);
+  const artifacts =
+    artifactRefs.length > 0
+      ? await readIntegratedArtifactEntries(params.workspaceDir, artifactRefs)
+      : undefined;
+  return buildMemoryStoreExportBundle({
     sessionId: params.sessionId,
     backendKind,
     metadata,
     snapshot,
+    artifacts,
   });
-  const artifactRefs = uniqueStrings(
-    [
-      ...snapshot.longTermMemory.flatMap((entry) => entry.artifactRefs ?? []),
-      ...snapshot.pendingSignificance.flatMap((entry) => entry.artifactRefs ?? []),
-    ].filter((ref) => /(?:^|\/)artifacts\/[^/]+$/.test(ref)),
-  );
-  if (artifactRefs.length > 0) {
-    bundle.artifacts = await readIntegratedArtifactEntries(params.workspaceDir, artifactRefs);
-  }
-  return bundle;
 }
 
 export async function importMemoryStoreBundle(params: {
@@ -11884,6 +11980,10 @@ export async function importMemoryStoreBundle(params: {
   targetSessionId?: string;
   backendKind?: MemoryStoreBackendKind;
 }): Promise<void> {
+  const integrity = verifyMemoryStoreBundleIntegrity(params.bundle);
+  if (!integrity.ok) {
+    throw new Error(`memory store backup integrity check failed: ${integrity.issues.join("; ")}`);
+  }
   const sessionId = params.targetSessionId ?? params.bundle.sessionId;
   const backendKind = params.backendKind ?? params.bundle.backendKind;
   await writeIntegratedArtifactEntries(params.workspaceDir, params.bundle.artifacts);
@@ -12009,6 +12109,10 @@ export async function recoverMemoryStoreFromBackupWithReport(params: {
   if (!bundle) {
     throw new Error(`memory store backup not found for session ${params.sessionId}`);
   }
+  const integrity = verifyMemoryStoreBundleIntegrity(bundle);
+  if (!integrity.ok) {
+    throw new Error(`memory store backup integrity check failed: ${integrity.issues.join("; ")}`);
+  }
   const targetBackend = params.backendKind ?? bundle.backendKind;
   if (targetBackend === "sqlite-graph") {
     await fs.rm(path.join(paths.rootDir, SQLITE_STORE_FILENAME), { force: true });
@@ -12064,6 +12168,15 @@ export async function inspectMemoryStoreHealth(params: {
     .stat(paths.backupFile)
     .then(() => true)
     .catch(() => false);
+  const backupBundle = backupAvailable
+    ? await readJsonFile<MemoryStoreExportBundle | null>(paths.backupFile, null)
+    : null;
+  const backupIntegrity = backupBundle ? verifyMemoryStoreBundleIntegrity(backupBundle) : null;
+  const backupIntegrityStatus: "ok" | "missing" | "corrupt" = !backupAvailable
+    ? "missing"
+    : backupIntegrity?.ok
+      ? "ok"
+      : "corrupt";
   const [storageBytes, sessionBytes, artifactsBytes, backupBytes] = await Promise.all([
     computePathSizeBytes(memoryRootDir),
     computePathSizeBytes(paths.workingFile),
@@ -12094,12 +12207,19 @@ export async function inspectMemoryStoreHealth(params: {
     if (metadata.lastIntegrityCheckResult && metadata.lastIntegrityCheckResult !== "ok") {
       issues.push(`integrity status: ${String(metadata.lastIntegrityCheckResult)}`);
     }
-    if (!backupAvailable) {
+    if (backupIntegrityStatus === "corrupt") {
+      issues.push(`backup integrity failed: ${(backupIntegrity?.issues ?? []).join("; ")}`);
+    } else if (!backupAvailable) {
       issues.push("backup bundle missing");
     }
-    const recommendations = backupAvailable
-      ? ["run store recovery from backup before normal diagnostics or retrieval"]
-      : ["store is unreadable and no backup bundle is available"];
+    const recommendations =
+      backupIntegrityStatus === "corrupt"
+        ? [
+            "backup bundle is corrupted; recreate or restore from an external export before recovery",
+          ]
+        : backupAvailable
+          ? ["run store recovery from backup before normal diagnostics or retrieval"]
+          : ["store is unreadable and no backup bundle is available"];
     return {
       backendKind,
       sessionId: params.sessionId,
@@ -12133,7 +12253,8 @@ export async function inspectMemoryStoreHealth(params: {
       permanentEligibleCount: 0,
       staleMemoryCount: 0,
       backupAvailable,
-      recoveryRecommended: true,
+      backupIntegrityStatus,
+      recoveryRecommended: backupIntegrityStatus === "ok",
     };
   }
   const adjudications = buildPersistedMemoryAdjudications({
@@ -12212,7 +12333,9 @@ export async function inspectMemoryStoreHealth(params: {
   if (backendKind === "sqlite-graph" && !metadata.schemaVersion) {
     issues.push("sqlite-graph metadata missing schema version");
   }
-  if (!backupAvailable) {
+  if (backupIntegrityStatus === "corrupt") {
+    issues.push(`backup integrity failed: ${(backupIntegrity?.issues ?? []).join("; ")}`);
+  } else if (!backupAvailable) {
     issues.push("backup bundle missing");
   }
   const recommendations: string[] = [];
@@ -12242,7 +12365,11 @@ export async function inspectMemoryStoreHealth(params: {
   if (staleMemoryCount > Math.max(8, Math.floor(snapshot.longTermMemory.length * 0.35))) {
     recommendations.push("run sleep review or archival cleanup to reduce stale memory pressure");
   }
-  if (!backupAvailable) {
+  if (backupIntegrityStatus === "corrupt") {
+    recommendations.push(
+      "recreate the integrated memory backup bundle before relying on automatic recovery",
+    );
+  } else if (!backupAvailable) {
     recommendations.push("persist the store once to create a recovery backup bundle");
   }
   if (backendKind === "sqlite-graph" && !metadata.schemaVersion) {
@@ -12253,7 +12380,7 @@ export async function inspectMemoryStoreHealth(params: {
   }
   const recoveryRecommended =
     (integrityStatus !== undefined && integrityStatus !== "ok") ||
-    !backupAvailable ||
+    backupIntegrityStatus !== "ok" ||
     (backendKind === "sqlite-graph" && !metadata.schemaVersion);
   const summary = clipText(
     [
@@ -12299,6 +12426,7 @@ export async function inspectMemoryStoreHealth(params: {
     permanentEligibleCount,
     staleMemoryCount,
     backupAvailable,
+    backupIntegrityStatus,
     recoveryRecommended,
   };
 }

@@ -317,6 +317,7 @@ describe("memory cli", () => {
       permanentEligibleCount: 0,
       staleMemoryCount: 0,
       backupAvailable: true,
+      backupIntegrityStatus: "ok",
       recoveryRecommended: false,
     });
     loadMemoryStoreSnapshot.mockResolvedValue({

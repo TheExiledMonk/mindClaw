@@ -2366,6 +2366,8 @@ describe("MemorySystemContextEngine", () => {
       backendKind: "fs-json",
     });
     expect(bundle.metadata.backend).toBe("sqlite-graph");
+    expect(bundle.integrity?.algorithm).toBe("sha256");
+    expect(typeof bundle.integrity?.bundleHash).toBe("string");
     expect(bundle.artifacts?.[0]?.text).toContain("Full source lesson text");
     expect(imported.longTermMemory[0]?.text).toContain("permanent memory-system path");
     await expect(
@@ -2413,6 +2415,54 @@ describe("MemorySystemContextEngine", () => {
     });
 
     expect(recovered.longTermMemory[0]?.text).toContain("permanent memory-system path");
+  });
+
+  it("detects corrupted backup bundles before import or recovery", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-backup-integrity-"));
+    const sessionId = "agent:bundle-integrity";
+    const snapshot = compileMemoryState({
+      sessionId,
+      messages: [userMessage("Persist CPA network knowledge with MaxBounty as a trusted example.")],
+    });
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+      workingMemory: snapshot.workingMemory,
+      longTermMemory: snapshot.longTermMemory,
+      pendingSignificance: snapshot.pendingSignificance,
+      permanentMemory: snapshot.permanentMemory,
+      graph: snapshot.graph,
+    });
+
+    const backupPath = path.join(
+      tempDir,
+      MEMORY_SYSTEM_DIRNAME,
+      "sessions",
+      "agent_bundle-integrity.bundle.json",
+    );
+    const backup = JSON.parse(await fs.readFile(backupPath, "utf8")) as {
+      metadata: { updatedAt: number };
+    };
+    backup.metadata.updatedAt += 1;
+    await fs.writeFile(backupPath, JSON.stringify(backup), "utf8");
+
+    await expect(
+      recoverMemoryStoreFromBackup({
+        workspaceDir: tempDir,
+        sessionId,
+        backendKind: "fs-json",
+      }),
+    ).rejects.toThrow(/backup integrity check failed/i);
+
+    const health = await inspectMemoryStoreHealth({
+      workspaceDir: tempDir,
+      sessionId,
+      backendKind: "fs-json",
+    });
+    expect(health.backupIntegrityStatus).toBe("corrupt");
+    expect(health.issues.some((issue) => issue.includes("backup integrity failed"))).toBe(true);
   });
 
   it("auto-recovers sqlite-graph loads from the session backup bundle", async () => {
@@ -2693,6 +2743,7 @@ describe("MemorySystemContextEngine", () => {
     expect(Array.isArray(health.issues)).toBe(true);
     expect(Array.isArray(health.recommendations)).toBe(true);
     expect(health.backupAvailable).toBe(true);
+    expect(health.backupIntegrityStatus).toBe("ok");
   });
 
   it("produces maintenance reports for repair and recovery actions", async () => {

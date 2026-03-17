@@ -394,13 +394,26 @@ function readMemorySourceTypeParam(
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "user_stated" ||
-    normalized === "direct_observation" ||
-    normalized === "summary_derived" ||
-    normalized === "system_inferred"
-  ) {
-    return normalized;
+  switch (normalized) {
+    case "user_stated":
+    case "user":
+    case "human":
+      return "user_stated";
+    case "direct_observation":
+    case "observation":
+    case "observed":
+      return "direct_observation";
+    case "summary_derived":
+    case "summary":
+    case "training":
+    case "lesson":
+    case "course":
+    case "study":
+      return "summary_derived";
+    case "system_inferred":
+    case "inferred":
+    case "derived":
+      return "system_inferred";
   }
   throw new ToolInputError(`unsupported memory source type: ${value}`);
 }

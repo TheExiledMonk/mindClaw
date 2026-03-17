@@ -52,4 +52,34 @@ describe("memory_search unavailable payloads", () => {
       error: "integrated memory store unavailable",
     });
   });
+
+  it("accepts human-friendly source type aliases like training", async () => {
+    const mod = await import("../../context-engine/memory-system-store.js");
+    vi.mocked(mod.storeIntegratedMemoryEntry).mockResolvedValue({
+      created: true,
+      entry: {
+        id: "mem-1",
+        text: "Remember this lesson",
+        category: "fact",
+        importanceClass: "useful",
+        sourceType: "summary_derived",
+      },
+    } as Awaited<ReturnType<typeof mod.storeIntegratedMemoryEntry>>);
+
+    const tool = createMemoryStoreToolOrThrow();
+    const result = await tool.execute("store-training", {
+      text: "Remember this lesson",
+      sourceType: "training",
+    });
+
+    expect(mod.storeIntegratedMemoryEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceType: "summary_derived",
+      }),
+    );
+    expect(result.details).toMatchObject({
+      stored: true,
+      sourceType: "summary_derived",
+    });
+  });
 });

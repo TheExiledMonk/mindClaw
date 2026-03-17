@@ -1,6 +1,8 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  createMemoryCheckpointTool,
+  createMemoryDeleteTool,
   createMemoryGetTool,
   createMemorySchemaTool,
   createMemorySearchTool,
@@ -58,6 +60,34 @@ export function createMemoryStoreToolOrThrow(params?: {
   agentSessionKey?: string;
 }) {
   const tool = createMemoryStoreTool({
+    config: params?.config ?? createDefaultMemoryToolConfig(),
+    ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+  });
+  if (!tool) {
+    throw new Error("tool missing");
+  }
+  return tool;
+}
+
+export function createMemoryCheckpointToolOrThrow(params?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}) {
+  const tool = createMemoryCheckpointTool({
+    config: params?.config ?? createDefaultMemoryToolConfig(),
+    ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+  });
+  if (!tool) {
+    throw new Error("tool missing");
+  }
+  return tool;
+}
+
+export function createMemoryDeleteToolOrThrow(params?: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}) {
+  const tool = createMemoryDeleteTool({
     config: params?.config ?? createDefaultMemoryToolConfig(),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
   });

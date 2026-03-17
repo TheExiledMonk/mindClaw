@@ -17,7 +17,14 @@ type RefreshJob = {
   workspaceDir: string;
   sessionId: string;
   backendKind?: MemoryStoreBackendKind;
-  reason: "after-turn" | "memory-store" | "review" | "compact" | "maintenance";
+  reason:
+    | "after-turn"
+    | "memory-store"
+    | "memory-checkpoint"
+    | "memory-delete"
+    | "review"
+    | "compact"
+    | "maintenance";
 };
 
 export type MemoryBackgroundWorkerStats = {

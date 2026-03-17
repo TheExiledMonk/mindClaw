@@ -13,6 +13,8 @@ import {
 import { waitForMemoryBackgroundWorkerIdle } from "../../context-engine/memory-system-worker.js";
 import {
   asOpenClawConfig,
+  createMemoryCheckpointToolOrThrow,
+  createMemoryDeleteToolOrThrow,
   createMemoryGetToolOrThrow,
   createMemorySearchToolOrThrow,
   createMemoryStoreToolOrThrow,
@@ -150,6 +152,44 @@ describe("memory tools", () => {
     });
   });
 
+  it("stores checkpoint memory in the pending surface without promoting it to long-term memory", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const checkpointTool = createMemoryCheckpointToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const getTool = createMemoryGetToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+
+    const checkpointResult = await checkpointTool.execute("call_checkpoint", {
+      text: "Temporary checkpoint: compare MaxBounty payout benchmarks before promoting this lesson.",
+      category: "fact",
+      pendingReason: "hold until payout numbers are confirmed",
+    });
+    const stored = checkpointResult.details as { path: string; kind: string };
+    expect(stored.kind).toBe("checkpoint");
+    expect(stored.path).toMatch(/^mindclaw_memory:\/\/pending\//);
+
+    const getResult = await getTool.execute("call_checkpoint_get", {
+      path: stored.path,
+    });
+    expect((getResult.details as { text: string }).text).toContain("MaxBounty payout benchmarks");
+
+    const searchResult = await searchTool.execute("call_checkpoint_search", {
+      query: "payout benchmarks",
+    });
+    const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
+    expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
+  });
+
   it("stores explicit durable memory into the integrated memory store", async () => {
     const cfg = configForWorkspace({
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -223,6 +263,52 @@ describe("memory tools", () => {
     });
     const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
     expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
+  });
+
+  it("deletes stored durable memory and removes it from search/get results", async () => {
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const storeTool = createMemoryStoreToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const deleteTool = createMemoryDeleteToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const getTool = createMemoryGetToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+
+    const storeResult = await storeTool.execute("call_store_delete", {
+      text: "Remember that CPA metrics include ROI and break-even CPC.",
+      category: "fact",
+      importanceClass: "useful",
+    });
+    const stored = storeResult.details as { path: string };
+
+    const deleteResult = await deleteTool.execute("call_delete", {
+      path: stored.path,
+    });
+    expect(deleteResult.details).toMatchObject({ deleted: true, path: stored.path });
+
+    const getResult = await getTool.execute("call_get_after_delete", { path: stored.path });
+    expect(getResult.details).toEqual({
+      path: stored.path,
+      text: "",
+    });
+
+    const searchResult = await searchTool.execute("call_search_after_delete", {
+      query: "break-even CPC",
+    });
+    const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
+    expect(details.results.some((entry) => entry.path === stored.path)).toBe(false);
   });
 
   it("stores long source text as a raw artifact while persisting distilled memory entries", async () => {

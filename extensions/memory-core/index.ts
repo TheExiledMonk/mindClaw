@@ -14,6 +14,10 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
+        const memoryCheckpointTool = api.runtime.tools.createMemoryCheckpointTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
         const memorySchemaTool = api.runtime.tools.createMemorySchemaTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
@@ -22,16 +26,43 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
+        const memoryDeleteTool = api.runtime.tools.createMemoryDeleteTool({
+          config: ctx.config,
+          agentSessionKey: ctx.sessionKey,
+        });
         const memoryStoreTool = api.runtime.tools.createMemoryStoreTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
-        if (!memorySearchTool || !memorySchemaTool || !memoryGetTool || !memoryStoreTool) {
+        if (
+          !memorySearchTool ||
+          !memoryCheckpointTool ||
+          !memorySchemaTool ||
+          !memoryGetTool ||
+          !memoryDeleteTool ||
+          !memoryStoreTool
+        ) {
           return null;
         }
-        return [memorySearchTool, memorySchemaTool, memoryGetTool, memoryStoreTool];
+        return [
+          memorySearchTool,
+          memoryCheckpointTool,
+          memorySchemaTool,
+          memoryGetTool,
+          memoryDeleteTool,
+          memoryStoreTool,
+        ];
       },
-      { names: ["memory_search", "memory_schema", "memory_get", "memory_store"] },
+      {
+        names: [
+          "memory_search",
+          "memory_checkpoint",
+          "memory_schema",
+          "memory_get",
+          "memory_delete",
+          "memory_store",
+        ],
+      },
     );
 
     api.registerCli(

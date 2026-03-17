@@ -77,6 +77,11 @@
       "title": "Memory Search",
       "detailKeys": ["query"]
     },
+    "memory_checkpoint": {
+      "emoji": "📌",
+      "title": "Memory Checkpoint",
+      "detailKeys": ["category", "sourceType", "pendingReason"]
+    },
     "memory_schema": {
       "emoji": "🗺️",
       "title": "Memory Schema",
@@ -86,6 +91,11 @@
       "emoji": "📓",
       "title": "Memory Get",
       "detailKeys": ["path", "from", "lines"]
+    },
+    "memory_delete": {
+      "emoji": "🧹",
+      "title": "Memory Delete",
+      "detailKeys": ["path", "deleteArtifacts"]
     },
     "memory_store": {
       "emoji": "📝",

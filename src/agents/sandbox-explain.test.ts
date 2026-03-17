@@ -54,7 +54,10 @@ describe("sandbox explain helpers", () => {
     const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
     expect(policy.allow).toEqual([
       "memory_search",
+      "memory_checkpoint",
+      "memory_schema",
       "memory_get",
+      "memory_delete",
       "memory_store",
       "read",
       "write",

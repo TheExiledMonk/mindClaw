@@ -1,4 +1,6 @@
 import {
+  createMemoryCheckpointTool,
+  createMemoryDeleteTool,
   createMemoryGetTool,
   createMemorySchemaTool,
   createMemorySearchTool,
@@ -9,7 +11,9 @@ import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeTools(): PluginRuntime["tools"] {
   return {
+    createMemoryCheckpointTool,
     createMemoryGetTool,
+    createMemoryDeleteTool,
     createMemorySchemaTool,
     createMemorySearchTool,
     createMemoryStoreTool,

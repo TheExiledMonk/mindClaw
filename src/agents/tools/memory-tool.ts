@@ -14,6 +14,8 @@ import {
 import {
   loadMemoryStoreMetadata,
   loadMemoryStoreSnapshot,
+  deleteIntegratedMemoryEntry,
+  storeIntegratedMemoryCheckpoint,
   storeIntegratedMemoryEntry,
   retrieveMemoryContextPacket,
   MEMORY_SYSTEM_DIRNAME,
@@ -25,6 +27,7 @@ import {
   type PermanentMemoryNode,
 } from "../../context-engine/memory-system-store.js";
 import { enqueueMemoryBackgroundRefresh } from "../../context-engine/memory-system-worker.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -49,6 +52,18 @@ const MemoryStoreSchema = Type.Object({
   category: Type.Optional(Type.String()),
   importanceClass: Type.Optional(Type.String()),
   sourceType: Type.Optional(Type.String()),
+});
+
+const MemoryCheckpointSchema = Type.Object({
+  text: Type.String(),
+  category: Type.Optional(Type.String()),
+  sourceType: Type.Optional(Type.String()),
+  pendingReason: Type.Optional(Type.String()),
+});
+
+const MemoryDeleteSchema = Type.Object({
+  path: Type.String(),
+  deleteArtifacts: Type.Optional(Type.Boolean()),
 });
 
 const MemorySchemaToolSchema = Type.Object({});
@@ -77,6 +92,8 @@ function createMemoryTool<
     | typeof MemorySearchSchema
     | typeof MemoryGetSchema
     | typeof MemoryStoreSchema
+    | typeof MemoryCheckpointSchema
+    | typeof MemoryDeleteSchema
     | typeof MemorySchemaToolSchema,
 >(params: {
   options: {
@@ -330,6 +347,137 @@ export function createMemorySchemaTool(options: {
   });
 }
 
+export function createMemoryCheckpointTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  return createMemoryTool({
+    options,
+    label: "Memory Checkpoint",
+    name: "memory_checkpoint",
+    description:
+      "Store temporary checkpoint memory in the integrated MindClaw memory store without promoting it to durable long-term memory. Use for in-progress notes, tentative findings, temporary reminders, and short-lived working context that may need retrieval later.",
+    parameters: MemoryCheckpointSchema,
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const text = readStringParam(params, "text", { required: true });
+        const category = readMemoryCategoryParam(params, "category");
+        const sourceType = readMemorySourceTypeParam(params, "sourceType");
+        const pendingReason = readStringParam(params, "pendingReason");
+        try {
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const sessionId = resolveDurableMemorySessionId(agentId);
+          const backendKind = resolveIntegratedMemoryBackendKind();
+          const stored = await storeIntegratedMemoryCheckpoint({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            text,
+            category,
+            sourceType,
+            pendingReason,
+          });
+          primeMemoryStoreSnapshot({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            metadata: await loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+            snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
+          });
+          enqueueMemoryBackgroundRefresh({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            reason: "memory-checkpoint",
+          });
+          const path = `${MINDCLAW_MEMORY_PREFIX}pending/${encodeURIComponent(stored.entry.id)}`;
+          return jsonResult({
+            stored: true,
+            created: stored.created,
+            provider: "mindclaw-memory",
+            mode: "integrated-memory",
+            kind: "checkpoint",
+            path,
+            text: stored.entry.text,
+            category: stored.entry.category,
+            sourceType: stored.entry.sourceType,
+            pendingReason: stored.entry.pendingReason,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({
+            stored: false,
+            disabled: true,
+            kind: "checkpoint",
+            error: message,
+          });
+        }
+      },
+  });
+}
+
+export function createMemoryDeleteTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  return createMemoryTool({
+    options,
+    label: "Memory Delete",
+    name: "memory_delete",
+    description:
+      "Delete or forget a specific integrated MindClaw memory by pseudo-path. Use on paths returned by memory_search or memory_get when a memory is wrong, obsolete, or should be forgotten.",
+    parameters: MemoryDeleteSchema,
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const relPath = readStringParam(params, "path", { required: true });
+        const deleteArtifacts = readBooleanParam(params, "deleteArtifacts") ?? false;
+        try {
+          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const sessionId = resolveDurableMemorySessionId(agentId);
+          const backendKind = resolveIntegratedMemoryBackendKind();
+          const result = await deleteIntegratedMemoryEntry({
+            workspaceDir,
+            sessionId,
+            path: relPath,
+            backendKind,
+            deleteArtifacts,
+          });
+          primeMemoryStoreSnapshot({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            metadata: await loadMemoryStoreMetadata({ workspaceDir, sessionId, backendKind }),
+            snapshot: await loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
+          });
+          enqueueMemoryBackgroundRefresh({
+            workspaceDir,
+            sessionId,
+            backendKind,
+            reason: "memory-delete",
+          });
+          return jsonResult({
+            deleted: result.deleted,
+            provider: "mindclaw-memory",
+            mode: "integrated-memory",
+            path: relPath,
+            deletedMemoryIds: result.deletedMemoryIds,
+            deletedArtifactRefs: result.deletedArtifactRefs,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({
+            deleted: false,
+            disabled: true,
+            path: relPath,
+            error: message,
+          });
+        }
+      },
+  });
+}
+
 function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
   if (mode === "on" || mode === "off" || mode === "auto") {
@@ -410,9 +558,20 @@ function buildMemorySchemaDetails() {
       aliases: [...MEMORY_SOURCE_TYPE_ALIASES[id]],
       whenToUse: describeMemorySourceType(id),
     })),
+    checkpointUsage: {
+      tool: "memory_checkpoint",
+      whenToUse:
+        "Use for temporary checkpoints, in-progress findings, working reminders, tentative conclusions, and other short-lived context that should stay retrievable without becoming durable long-term memory.",
+      notes: [
+        "Checkpoint memories are stored in pending significance, not durable long-term memory.",
+        "Use memory_store only for durable knowledge that should survive as a long-term takeaway.",
+      ],
+    },
     guidance: [
-      "If unsure, call memory_schema before memory_store instead of guessing labels.",
+      "If unsure, call memory_schema before memory_store or memory_checkpoint instead of guessing labels.",
       "Keep stored memories distilled; use memory_store for durable takeaways, not raw transcript dumps.",
+      "Use memory_checkpoint for temporary notes, active checkpoints, and in-progress working context.",
+      "Use memory_delete when a stored memory is wrong, obsolete, or should be forgotten.",
       "If the input is long training material, prefer sourceType=summary_derived.",
       "Use category=fact when in doubt unless the memory is clearly a preference, decision, strategy, entity, episode, or pattern.",
     ],

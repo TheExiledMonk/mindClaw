@@ -34,7 +34,9 @@ export type PluginRuntimeCore = {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
   };
   tools: {
+    createMemoryCheckpointTool: typeof import("../../agents/tools/memory-tool.js").createMemoryCheckpointTool;
     createMemoryGetTool: typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
+    createMemoryDeleteTool: typeof import("../../agents/tools/memory-tool.js").createMemoryDeleteTool;
     createMemorySchemaTool: typeof import("../../agents/tools/memory-tool.js").createMemorySchemaTool;
     createMemorySearchTool: typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
     createMemoryStoreTool: typeof import("../../agents/tools/memory-tool.js").createMemoryStoreTool;

@@ -12061,6 +12061,292 @@ export async function storeIntegratedMemoryEntry(params: ExplicitMemoryStorePara
   };
 }
 
+function hashMemoryExplorerText(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 12);
+}
+
+export async function storeIntegratedMemoryCheckpoint(params: {
+  workspaceDir: string;
+  sessionId: string;
+  text: string;
+  category?: MemoryCategory;
+  sourceType?: MemorySourceType;
+  pendingReason?: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<{
+  entry: PendingMemoryEntry;
+  created: boolean;
+}> {
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+  });
+  const normalized = clipText(params.text.trim(), 260);
+  const category = params.category ?? detectCandidateCategory(normalized) ?? "fact";
+  const sourceType = params.sourceType ?? "direct_observation";
+  const ontologyKind = inferOntologyKind(category, normalized);
+  const semanticKey = buildMemorySemanticKey({
+    category,
+    text: normalized,
+  });
+  const now = Date.now();
+  const incoming: PendingMemoryEntry = sanitizePendingEntry({
+    id: `pending-${createHash("sha256").update(semanticKey).digest("hex").slice(0, 12)}`,
+    semanticKey,
+    conceptKey: buildMemoryConceptKey({
+      category,
+      ontologyKind,
+      text: normalized,
+    }),
+    canonicalText: canonicalizeComparable(normalized),
+    conceptAliases: [normalized],
+    ontologyKind,
+    category,
+    text: normalized,
+    strength: Math.max(0.48, baseStrengthForCategory(category) - 0.14),
+    evidence: uniqueStrings([normalized]),
+    provenance: [
+      createProvenanceRecord(
+        sourceType === "summary_derived" ? "derived" : "message",
+        params.pendingReason ?? normalized,
+      ),
+    ],
+    sourceType,
+    confidence: sourceType === "direct_observation" ? 0.76 : 0.68,
+    importanceClass: "temporary",
+    permanenceStatus: "deferred",
+    permanenceReasons: ["temporary checkpoint; do not promote automatically"],
+    compressionState: "active",
+    activeStatus: "pending",
+    adjudicationStatus: "authoritative",
+    revisionCount: 0,
+    lastRevisionKind: "new",
+    trend: "stable",
+    accessCount: 0,
+    createdAt: now,
+    lastConfirmedAt: now,
+    contradictionCount: 0,
+    relatedMemoryIds: [],
+    relations: [],
+    environmentTags: ["pending:checkpoint"],
+    artifactRefs: [],
+    updatedAt: now,
+    pendingReason:
+      params.pendingReason ??
+      "temporary checkpoint for current work; keep available until confirmed, promoted, or deleted",
+  });
+  const previousPending = snapshot.pendingSignificance.find(
+    (entry) =>
+      entry.id === incoming.id ||
+      entry.semanticKey === incoming.semanticKey ||
+      entry.conceptKey === incoming.conceptKey,
+  );
+  const nextPending = [
+    incoming,
+    ...snapshot.pendingSignificance.filter(
+      (entry) =>
+        entry.id !== incoming.id &&
+        entry.semanticKey !== incoming.semanticKey &&
+        entry.conceptKey !== incoming.conceptKey,
+    ),
+  ].map((entry) => sanitizePendingEntry(entry));
+  const nextWorkingMemory: WorkingMemorySnapshot = {
+    ...snapshot.workingMemory,
+    updatedAt: Date.now(),
+    recentEvents: dedupeTexts([
+      clipText(incoming.text, 140),
+      ...snapshot.workingMemory.recentEvents,
+    ]),
+    openLoops: dedupeTexts(
+      [
+        clipText(incoming.pendingReason || "temporary checkpoint pending review", 140),
+        ...snapshot.workingMemory.openLoops,
+      ],
+      MAX_WORKING_ITEMS,
+    ),
+  };
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    workingMemory: nextWorkingMemory,
+    longTermMemory: snapshot.longTermMemory,
+    pendingSignificance: nextPending,
+    permanentMemory: snapshot.permanentMemory,
+    graph: snapshot.graph,
+  });
+  return {
+    entry: incoming,
+    created: !previousPending,
+  };
+}
+
+export async function deleteIntegratedMemoryEntry(params: {
+  workspaceDir: string;
+  sessionId: string;
+  path: string;
+  backendKind?: MemoryStoreBackendKind;
+  deleteArtifacts?: boolean;
+}): Promise<{
+  deleted: boolean;
+  path: string;
+  deletedMemoryIds: string[];
+  deletedArtifactRefs: string[];
+}> {
+  const prefix = "mindclaw_memory://";
+  if (!params.path.startsWith(prefix)) {
+    throw new Error(`unsupported memory path: ${params.path}`);
+  }
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+  });
+  const [, remainder] = params.path.split(prefix);
+  const [kind, ...rest] = remainder.split("/");
+  const key = decodeURIComponent(rest.join("/"));
+  let deletedMemoryIds = new Set<string>();
+  let deletedArtifactRefs = new Set<string>();
+  let nextLongTerm = snapshot.longTermMemory;
+  let nextPending = snapshot.pendingSignificance;
+
+  if (kind === "long-term") {
+    const entry = snapshot.longTermMemory.find((item) => item.id === key);
+    if (!entry) {
+      return { deleted: false, path: params.path, deletedMemoryIds: [], deletedArtifactRefs: [] };
+    }
+    deletedMemoryIds = new Set([entry.id]);
+    deletedArtifactRefs = new Set(entry.artifactRefs);
+    nextLongTerm = snapshot.longTermMemory.filter((item) => item.id !== entry.id);
+    nextPending = snapshot.pendingSignificance.filter((item) => item.id !== entry.id);
+  } else if (kind === "pending") {
+    const entry = snapshot.pendingSignificance.find((item) => item.id === key);
+    if (!entry) {
+      return { deleted: false, path: params.path, deletedMemoryIds: [], deletedArtifactRefs: [] };
+    }
+    deletedMemoryIds = new Set([entry.id]);
+    deletedArtifactRefs = new Set(entry.artifactRefs);
+    nextPending = snapshot.pendingSignificance.filter((item) => item.id !== entry.id);
+  } else if (kind === "permanent") {
+    const node = flattenPermanentNodes(snapshot.permanentMemory).find(
+      (item) => item.summary && hashMemoryExplorerText(item.summary) === key,
+    );
+    if (!node) {
+      return { deleted: false, path: params.path, deletedMemoryIds: [], deletedArtifactRefs: [] };
+    }
+    deletedMemoryIds = new Set(node.sourceMemoryIds);
+    deletedArtifactRefs = new Set(
+      snapshot.longTermMemory
+        .filter((entry) => deletedMemoryIds.has(entry.id))
+        .flatMap((entry) => entry.artifactRefs),
+    );
+    nextLongTerm = snapshot.longTermMemory.filter((item) => !deletedMemoryIds.has(item.id));
+    nextPending = snapshot.pendingSignificance.filter((item) => !deletedMemoryIds.has(item.id));
+  } else if (kind === "artifacts") {
+    deletedArtifactRefs = new Set([`${prefix}artifacts/${encodeURIComponent(key)}`]);
+    nextLongTerm = snapshot.longTermMemory.map((entry) =>
+      entry.artifactRefs.includes(`${prefix}artifacts/${encodeURIComponent(key)}`)
+        ? {
+            ...entry,
+            artifactRefs: entry.artifactRefs.filter(
+              (ref) => ref !== `${prefix}artifacts/${encodeURIComponent(key)}`,
+            ),
+          }
+        : entry,
+    );
+    nextPending = snapshot.pendingSignificance.map((entry) =>
+      entry.artifactRefs.includes(`${prefix}artifacts/${encodeURIComponent(key)}`)
+        ? {
+            ...entry,
+            artifactRefs: entry.artifactRefs.filter(
+              (ref) => ref !== `${prefix}artifacts/${encodeURIComponent(key)}`,
+            ),
+          }
+        : entry,
+    );
+  } else {
+    throw new Error(`unsupported integrated memory path kind: ${kind}`);
+  }
+
+  if (deletedMemoryIds.size > 0) {
+    nextLongTerm = nextLongTerm.map((entry) => ({
+      ...entry,
+      relatedMemoryIds: entry.relatedMemoryIds.filter((id) => !deletedMemoryIds.has(id)),
+      relations: entry.relations.filter(
+        (relation) => !deletedMemoryIds.has(relation.targetMemoryId),
+      ),
+    }));
+  }
+
+  const review = reviewMemoryState({
+    workingMemory: snapshot.workingMemory,
+    longTermMemory: nextLongTerm,
+    pendingSignificance: nextPending,
+    revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: nextLongTerm,
+      revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    }),
+  });
+  const nextPermanent = reconcilePermanentMemoryTree({
+    root: snapshot.permanentMemory,
+    longTermMemory: nextLongTerm,
+    adjudications: buildPersistedMemoryAdjudications({
+      sessionId: params.sessionId,
+      entries: nextLongTerm,
+      revisions: collectPersistedMemoryRevisions(nextLongTerm),
+    }),
+  });
+  const nextGraph = buildMemoryGraphSnapshot(nextLongTerm);
+  await persistMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    workingMemory: {
+      ...snapshot.workingMemory,
+      carryForwardSummary: review.carryForwardSummary ?? snapshot.workingMemory.carryForwardSummary,
+      updatedAt: Date.now(),
+    },
+    longTermMemory: nextLongTerm,
+    pendingSignificance: nextPending,
+    permanentMemory: nextPermanent,
+    graph: nextGraph,
+  });
+
+  if (params.deleteArtifacts && deletedArtifactRefs.size > 0) {
+    const remainingRefs = new Set(
+      collectSnapshotArtifactRefs({
+        workingMemory: snapshot.workingMemory,
+        longTermMemory: nextLongTerm,
+        pendingSignificance: nextPending,
+        permanentMemory: nextPermanent,
+        graph: nextGraph,
+      }),
+    );
+    for (const artifactRef of deletedArtifactRefs) {
+      if (remainingRefs.has(artifactRef)) {
+        continue;
+      }
+      const fileName = decodeURIComponent(artifactRef.split("/").at(-1) ?? "");
+      if (!fileName) {
+        continue;
+      }
+      await fs
+        .unlink(path.join(resolveArtifactsDir(params.workspaceDir), fileName))
+        .catch(() => {});
+    }
+  }
+
+  return {
+    deleted: deletedMemoryIds.size > 0 || deletedArtifactRefs.size > 0,
+    path: params.path,
+    deletedMemoryIds: [...deletedMemoryIds],
+    deletedArtifactRefs: [...deletedArtifactRefs],
+  };
+}
+
 export async function exportMemoryStoreBundle(params: {
   workspaceDir: string;
   sessionId: string;

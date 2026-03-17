@@ -31,7 +31,6 @@ import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { ToolInputError, jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -77,9 +76,6 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
-  if (!resolveMemorySearchConfig(cfg, agentId)) {
-    return null;
-  }
   return { cfg, agentId };
 }
 

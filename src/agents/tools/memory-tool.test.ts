@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  asOpenClawConfig,
   createMemoryCheckpointToolOrThrow,
   createMemoryDeleteToolOrThrow,
   createMemorySchemaToolOrThrow,
@@ -59,6 +60,24 @@ describe("memory_search unavailable payloads", () => {
       stored: false,
       disabled: true,
       error: "integrated memory store unavailable",
+    });
+  });
+
+  it("still exposes integrated memory tools even when legacy memorySearch is disabled", async () => {
+    const tool = createMemorySchemaToolOrThrow({
+      config: asOpenClawConfig({
+        agents: {
+          defaults: {
+            memorySearch: { enabled: false },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      }),
+    });
+
+    const result = await tool.execute("memory-schema-disabled-legacy", {});
+    expect(result.details).toMatchObject({
+      mode: "integrated-memory",
     });
   });
 

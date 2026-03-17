@@ -255,6 +255,35 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("ignores final payloads without an assistant role and falls back to streamed text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Real assistant reply",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        text: "A new session was started via /new or /reset.",
+        timestamp: 101,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Real assistant reply" }],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
   it("settles the optimistic user message when the run finishes", () => {
     const state = createState({
       sessionKey: "main",

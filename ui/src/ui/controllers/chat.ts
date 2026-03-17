@@ -317,7 +317,7 @@ function normalizeAbortedAssistantMessage(message: unknown): Record<string, unkn
 
 function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
   return normalizeAssistantMessage(message, {
-    roleRequirement: "optional",
+    roleRequirement: "required",
     allowTextField: true,
   });
 }

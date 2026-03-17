@@ -34,6 +34,7 @@ export type ChatState = {
   sessionKey: string;
   chatLoading: boolean;
   chatMessages: unknown[];
+  chatResetCutoffTs?: number | null;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -151,6 +152,46 @@ function mergeLocalUserMessages(history: unknown[], current: unknown[]): unknown
   return merged;
 }
 
+function toTimestampMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function getMessageTimestampMs(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const record = message as Record<string, unknown>;
+  return toTimestampMs(record.timestamp ?? record.ts ?? record.createdAt);
+}
+
+function filterHistoryAfterReset(
+  messages: unknown[],
+  cutoffTs: number | null | undefined,
+): unknown[] {
+  if (!cutoffTs) {
+    return messages;
+  }
+  return messages.filter((message) => {
+    const timestamp = getMessageTimestampMs(message);
+    return timestamp != null && timestamp >= cutoffTs;
+  });
+}
+
 function settleLocalUserMessage(messages: unknown[], runId: string | null): unknown[] {
   if (!runId) {
     return messages;
@@ -188,7 +229,10 @@ export async function loadChatHistory(state: ChatState) {
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    const filteredMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const filteredMessages = filterHistoryAfterReset(
+      messages.filter((message) => !isAssistantSilentReply(message)),
+      state.chatResetCutoffTs,
+    );
     state.chatMessages = mergeLocalUserMessages(filteredMessages, state.chatMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text

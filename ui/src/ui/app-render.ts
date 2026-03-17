@@ -1399,6 +1399,7 @@ export function renderApp(state: AppViewState) {
                   try {
                     await state.client.request("sessions.reset", { key: state.sessionKey });
                     state.chatMessages = [];
+                    state.chatResetCutoffTs = Date.now();
                     state.chatVisibleHistoryCount = 200;
                     state.chatStream = null;
                     state.chatRunId = null;
@@ -1412,6 +1413,7 @@ export function renderApp(state: AppViewState) {
                 onAgentChange: (agentId: string) => {
                   state.sessionKey = buildAgentMainSessionKey({ agentId });
                   state.chatMessages = [];
+                  state.chatResetCutoffTs = null;
                   state.chatVisibleHistoryCount = 200;
                   state.chatStream = null;
                   state.chatRunId = null;
@@ -1430,6 +1432,7 @@ export function renderApp(state: AppViewState) {
                 onSessionSelect: (key: string) => {
                   state.setSessionKey(key);
                   state.chatMessages = [];
+                  state.chatResetCutoffTs = null;
                   state.chatVisibleHistoryCount = 200;
                   void loadChatHistory(state);
                   void state.loadAssistantIdentity();

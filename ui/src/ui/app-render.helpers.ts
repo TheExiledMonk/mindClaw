@@ -38,6 +38,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatStream = null;
+  state.chatResetCutoffTs = null;
   state.chatVisibleHistoryCount = 200;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;

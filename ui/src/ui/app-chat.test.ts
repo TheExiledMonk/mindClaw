@@ -155,5 +155,6 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toEqual([]);
     expect(host.chatVisibleHistoryCount).toBe(200);
     expect(host.chatStream).toBe("");
+    expect(host.chatResetCutoffTs).toEqual(expect.any(Number));
   });
 });

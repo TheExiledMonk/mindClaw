@@ -15,6 +15,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatResetCutoffTs: null,
     chatRunId: null,
     chatSending: false,
     chatStream: null,
@@ -857,5 +858,26 @@ describe("loadChatHistory", () => {
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual([persisted]);
+  });
+
+  it("ignores persisted pre-reset messages after a reset cutoff", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "user", content: [{ type: "text", text: "old" }], timestamp: 100 },
+        { role: "assistant", content: [{ type: "text", text: "new" }], timestamp: 250 },
+      ],
+      thinkingLevel: "medium",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatResetCutoffTs: 200,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "new" }], timestamp: 250 },
+    ]);
   });
 });

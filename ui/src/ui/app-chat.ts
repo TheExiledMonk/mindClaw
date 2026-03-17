@@ -19,6 +19,7 @@ export type ChatHost = {
   chatMessages: unknown[];
   chatToolMessages?: unknown[];
   chatVisibleHistoryCount?: number;
+  chatResetCutoffTs?: number | null;
   chatStream: string | null;
   chatStreamSegments?: Array<{ text: string; ts: number }>;
   connected: boolean;
@@ -148,6 +149,7 @@ async function sendChatMessageNow(
   if (ok && isResetCommand) {
     host.chatMessages = [];
     host.chatStream = "";
+    host.chatResetCutoffTs = Date.now();
     if (typeof host.chatVisibleHistoryCount === "number") {
       host.chatVisibleHistoryCount = 200;
     }
@@ -346,6 +348,7 @@ async function clearChatHistory(host: ChatHost) {
   try {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
+    host.chatResetCutoffTs = Date.now();
     host.chatStream = null;
     host.chatRunId = null;
     await loadChatHistory(host as unknown as OpenClawApp);

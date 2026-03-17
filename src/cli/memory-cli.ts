@@ -663,6 +663,7 @@ async function runIntegratedMemorySystemStatus(opts: MemoryCommandOptions) {
       `${theme.muted("Long-term:")} ${String(payload.longTermCount)}`,
       `${theme.muted("Pending:")} ${String(payload.pendingCount)}`,
       `${theme.muted("Artifacts:")} ${String(rawArtifactCount)}`,
+      `${theme.muted("Storage:")} total=${health.storageBytes}B session=${health.sessionBytes}B artifacts=${health.artifactsBytes}B backup=${health.backupBytes}B`,
       `${theme.muted("Worker:")} queued=${worker.queued} completed=${worker.completed} failed=${worker.failed} active=${worker.active} maintenance=${worker.maintenanceRuns}`,
       `${theme.muted("Summary:")} ${health.summary}`,
       health.issues.length > 0 ? `${theme.muted("Issues:")} ${health.issues.join("; ")}` : null,

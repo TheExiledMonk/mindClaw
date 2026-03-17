@@ -262,6 +262,10 @@ export type MemoryStoreHealthReport = {
   backendKind: MemoryStoreBackendKind;
   sessionId: string;
   metadata: MemoryStoreMetadata;
+  storageBytes: number;
+  sessionBytes: number;
+  artifactsBytes: number;
+  backupBytes: number;
   issues: string[];
   recommendations: string[];
   summary: string;
@@ -485,6 +489,25 @@ function resolveStorePaths(workspaceDir: string, sessionId: string): MemoryStore
 
 function resolveArtifactsDir(workspaceDir: string): string {
   return path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME, "artifacts");
+}
+
+async function computePathSizeBytes(targetPath: string): Promise<number> {
+  const stat = await fs.stat(targetPath).catch(() => null);
+  if (!stat) {
+    return 0;
+  }
+  if (stat.isFile()) {
+    return stat.size;
+  }
+  if (!stat.isDirectory()) {
+    return 0;
+  }
+  const entries = await fs.readdir(targetPath, { withFileTypes: true }).catch(() => []);
+  let total = 0;
+  for (const entry of entries) {
+    total += await computePathSizeBytes(path.join(targetPath, entry.name));
+  }
+  return total;
 }
 
 async function readIntegratedArtifactEntries(
@@ -12035,10 +12058,18 @@ export async function inspectMemoryStoreHealth(params: {
 }): Promise<MemoryStoreHealthReport> {
   const backendKind = params.backendKind ?? "fs-json";
   const paths = resolveStorePaths(params.workspaceDir, params.sessionId);
+  const memoryRootDir = path.join(params.workspaceDir, MEMORY_SYSTEM_DIRNAME);
+  const artifactsDir = resolveArtifactsDir(params.workspaceDir);
   const backupAvailable = await fs
     .stat(paths.backupFile)
     .then(() => true)
     .catch(() => false);
+  const [storageBytes, sessionBytes, artifactsBytes, backupBytes] = await Promise.all([
+    computePathSizeBytes(memoryRootDir),
+    computePathSizeBytes(paths.workingFile),
+    computePathSizeBytes(artifactsDir),
+    computePathSizeBytes(paths.backupFile),
+  ]);
   const metadata = await loadPersistedStoreMetadata({
     workspaceDir: params.workspaceDir,
     sessionId: params.sessionId,
@@ -12073,6 +12104,10 @@ export async function inspectMemoryStoreHealth(params: {
       backendKind,
       sessionId: params.sessionId,
       metadata,
+      storageBytes,
+      sessionBytes,
+      artifactsBytes,
+      backupBytes,
       issues,
       recommendations,
       summary: clipText(
@@ -12080,6 +12115,7 @@ export async function inspectMemoryStoreHealth(params: {
           `backend=${backendKind}`,
           `long-term=${metadata.longTermCount ?? 0}`,
           `concepts=${metadata.conceptCount ?? 0}`,
+          `storage-bytes=${storageBytes}`,
           `backup=${backupAvailable ? "yes" : "no"}`,
           `issues=${issues.join("; ")}`,
         ].join(" | "),
@@ -12233,6 +12269,8 @@ export async function inspectMemoryStoreHealth(params: {
       `superseded=${supersededMemoryCount}`,
       `stale=${staleMemoryCount}`,
       `permanent-eligible=${permanentEligibleCount}`,
+      `storage-bytes=${storageBytes}`,
+      `artifacts-bytes=${artifactsBytes}`,
       `backup=${backupAvailable ? "yes" : "no"}`,
       issues[0] ? `issues=${issues.join("; ")}` : "issues=none",
     ].join(" | "),
@@ -12242,6 +12280,10 @@ export async function inspectMemoryStoreHealth(params: {
     backendKind,
     sessionId: params.sessionId,
     metadata,
+    storageBytes,
+    sessionBytes,
+    artifactsBytes,
+    backupBytes,
     issues,
     recommendations,
     summary,

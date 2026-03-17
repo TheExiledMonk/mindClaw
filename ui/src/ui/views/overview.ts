@@ -15,6 +15,7 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../types.ts";
+import { formatBytes } from "./agents-utils.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
@@ -428,6 +429,14 @@ export function renderOverview(props: OverviewProps) {
                     <div class="stat">
                       <div class="stat-label">Topic matches</div>
                       <div class="stat-value">${memoryReport.retrieval?.topicMatchedItemCount ?? 0}</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-label">Store size</div>
+                      <div class="stat-value">${formatBytes(memoryReport.health.storageBytes)}</div>
+                    </div>
+                    <div class="stat">
+                      <div class="stat-label">Artifacts size</div>
+                      <div class="stat-value">${formatBytes(memoryReport.health.artifactsBytes)}</div>
                     </div>
                   </div>
 

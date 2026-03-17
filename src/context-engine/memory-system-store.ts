@@ -430,6 +430,36 @@ export type MemoryDiagnosticsReport = {
 
 export type MemoryDiagnosticsReportFormat = "json" | "summary" | "markdown";
 
+export type MemoryExplorerNode = {
+  id: string;
+  kind: "memory" | "artifact";
+  category: MemoryCategory;
+  summary: string;
+  confidence: number;
+  activeStatus: MemoryActiveStatus;
+  artifactRef?: string;
+  updatedAt: number;
+  degree: number;
+  connectedNodeIds: string[];
+  relationTypes: MemoryRelationType[];
+  excerpt?: string;
+};
+
+export type MemoryExplorerEdge = MemoryGraphEdge;
+
+export type MemoryExplorerGraph = {
+  generatedAt: number;
+  workspaceDir: string;
+  sessionId: string;
+  totalNodes: number;
+  totalEdges: number;
+  visibleNodeCount: number;
+  visibleEdgeCount: number;
+  recommendations: string[];
+  nodes: MemoryExplorerNode[];
+  edges: MemoryExplorerEdge[];
+};
+
 export type MemoryAgenticTrendReport = {
   totalSignals: number;
   observabilitySignals: number;
@@ -9949,6 +9979,93 @@ export async function generateMemoryDiagnosticsReport(params: {
     maintenance: maintenance.repair || maintenance.recovery ? maintenance : undefined,
     recommendations,
     summary,
+  };
+}
+
+export async function generateMemoryExplorerGraph(params: {
+  workspaceDir: string;
+  sessionId: string;
+  nodeLimit?: number;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<MemoryExplorerGraph> {
+  const snapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+  });
+  const limit = Math.max(8, Math.min(params.nodeLimit ?? 28, 64));
+  const degrees = new Map<string, number>();
+  const relationTypesByNode = new Map<string, Set<MemoryRelationType>>();
+  const connectedIdsByNode = new Map<string, Set<string>>();
+  for (const edge of snapshot.graph.edges) {
+    degrees.set(edge.from, (degrees.get(edge.from) ?? 0) + 1);
+    degrees.set(edge.to, (degrees.get(edge.to) ?? 0) + 1);
+    const fromTypes = relationTypesByNode.get(edge.from) ?? new Set<MemoryRelationType>();
+    fromTypes.add(edge.type);
+    relationTypesByNode.set(edge.from, fromTypes);
+    const toTypes = relationTypesByNode.get(edge.to) ?? new Set<MemoryRelationType>();
+    toTypes.add(edge.type);
+    relationTypesByNode.set(edge.to, toTypes);
+    const fromIds = connectedIdsByNode.get(edge.from) ?? new Set<string>();
+    fromIds.add(edge.to);
+    connectedIdsByNode.set(edge.from, fromIds);
+    const toIds = connectedIdsByNode.get(edge.to) ?? new Set<string>();
+    toIds.add(edge.from);
+    connectedIdsByNode.set(edge.to, toIds);
+  }
+  const excerptById = new Map(
+    snapshot.longTermMemory.map((entry) => [
+      entry.id,
+      entry.text.length > 220 ? `${entry.text.slice(0, 217)}...` : entry.text,
+    ]),
+  );
+  const activeRank = (status: MemoryActiveStatus): number =>
+    status === "active" ? 0 : status === "superseded" ? 1 : 2;
+  const kindRank = (kind: "memory" | "artifact"): number => (kind === "memory" ? 0 : 1);
+  const rankedNodes = [...snapshot.graph.nodes].toSorted((a, b) => {
+    return (
+      activeRank(a.activeStatus) - activeRank(b.activeStatus) ||
+      kindRank(a.kind) - kindRank(b.kind) ||
+      (degrees.get(b.id) ?? 0) - (degrees.get(a.id) ?? 0) ||
+      b.confidence - a.confidence ||
+      b.updatedAt - a.updatedAt
+    );
+  });
+  const selectedIds = new Set(rankedNodes.slice(0, limit).map((node) => node.id));
+  const edges = snapshot.graph.edges
+    .filter((edge) => selectedIds.has(edge.from) && selectedIds.has(edge.to))
+    .toSorted((a, b) => b.weight - a.weight || b.updatedAt - a.updatedAt);
+  const nodes = rankedNodes
+    .filter((node) => selectedIds.has(node.id))
+    .map<MemoryExplorerNode>((node) => ({
+      ...node,
+      degree: degrees.get(node.id) ?? 0,
+      connectedNodeIds: [...(connectedIdsByNode.get(node.id) ?? new Set<string>())],
+      relationTypes: [...(relationTypesByNode.get(node.id) ?? new Set<MemoryRelationType>())],
+      excerpt: excerptById.get(node.id) ?? node.artifactRef,
+    }));
+  const recommendations: string[] = [];
+  if (snapshot.graph.nodes.length > nodes.length) {
+    recommendations.push(
+      `Showing ${nodes.length} of ${snapshot.graph.nodes.length} graph nodes to keep the explorer readable.`,
+    );
+  }
+  if (edges.length === 0 && nodes.length > 1) {
+    recommendations.push(
+      "This visible slice is weakly connected; related topics will show denser graph links.",
+    );
+  }
+  return {
+    generatedAt: Date.now(),
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    totalNodes: snapshot.graph.nodes.length,
+    totalEdges: snapshot.graph.edges.length,
+    visibleNodeCount: nodes.length,
+    visibleEdgeCount: edges.length,
+    recommendations,
+    nodes,
+    edges,
   };
 }
 

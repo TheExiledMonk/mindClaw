@@ -1,5 +1,6 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { MemoryDiagnosticsReport } from "../../../src/context-engine/memory-system-store.js";
+import type { MemoryExplorerGraph } from "../../../src/context-engine/memory-system-store.js";
 import type { MemoryBackgroundWorkerStats } from "../../../src/context-engine/memory-system-worker.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
@@ -410,6 +411,12 @@ export type DoctorMemoryDiagnosticsPayload = {
   workspaceDir: string;
   report: MemoryDiagnosticsReport;
   worker: MemoryBackgroundWorkerStats;
+};
+
+export type DoctorMemoryGraphPayload = {
+  agentId: string;
+  workspaceDir: string;
+  graph: MemoryExplorerGraph;
 };
 
 export type {

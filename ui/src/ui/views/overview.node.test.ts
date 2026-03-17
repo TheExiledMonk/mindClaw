@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { resolveAuthHintKind, shouldShowPairingHint } from "./overview-hints.ts";
+import { buildMemoryExplorerLayout } from "./overview.ts";
 
 describe("shouldShowPairingHint", () => {
   it("returns true for 'pairing required' close reason", () => {
@@ -85,5 +86,67 @@ describe("resolveAuthHintKind", () => {
         hasPassword: false,
       }),
     ).toBe("failed");
+  });
+});
+
+describe("buildMemoryExplorerLayout", () => {
+  it("places memory and artifact nodes into a stable overview graph layout", () => {
+    const layout = buildMemoryExplorerLayout({
+      generatedAt: 1,
+      workspaceDir: "/tmp/workspace",
+      sessionId: "main",
+      totalNodes: 3,
+      totalEdges: 2,
+      visibleNodeCount: 3,
+      visibleEdgeCount: 2,
+      recommendations: [],
+      nodes: [
+        {
+          id: "ltm-1",
+          kind: "memory",
+          category: "fact",
+          summary: "CPA metrics",
+          confidence: 0.9,
+          activeStatus: "active",
+          updatedAt: 1,
+          degree: 2,
+          connectedNodeIds: ["ltm-2", "artifact-1"],
+          relationTypes: ["linked_to"],
+        },
+        {
+          id: "ltm-2",
+          kind: "memory",
+          category: "strategy",
+          summary: "Campaign optimization",
+          confidence: 0.85,
+          activeStatus: "active",
+          updatedAt: 2,
+          degree: 1,
+          connectedNodeIds: ["ltm-1"],
+          relationTypes: ["linked_to"],
+        },
+        {
+          id: "artifact-1",
+          kind: "artifact",
+          category: "episode",
+          summary: "Raw course dump",
+          confidence: 0.7,
+          activeStatus: "active",
+          updatedAt: 3,
+          degree: 1,
+          connectedNodeIds: ["ltm-1"],
+          relationTypes: ["derived_from"],
+          artifactRef: "mindclaw_memory://artifacts/raw-course.md",
+        },
+      ],
+      edges: [
+        { from: "ltm-1", to: "ltm-2", type: "linked_to", weight: 0.8, updatedAt: 1 },
+        { from: "ltm-1", to: "artifact-1", type: "derived_from", weight: 0.7, updatedAt: 1 },
+      ],
+    });
+
+    expect(layout).toHaveLength(3);
+    expect(layout.find((node) => node.id === "ltm-1")?.r).toBeGreaterThan(10);
+    expect(layout.find((node) => node.id === "artifact-1")?.y).toBeDefined();
   });
 });

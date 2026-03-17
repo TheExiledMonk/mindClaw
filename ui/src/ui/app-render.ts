@@ -628,6 +628,9 @@ export function renderApp(state: AppViewState) {
                 overviewLogLines: state.overviewLogLines,
                 memoryDiagnostics: state.memoryDiagnostics,
                 memoryDiagnosticsError: state.memoryDiagnosticsError,
+                memoryGraph: state.memoryGraph,
+                memoryGraphError: state.memoryGraphError,
+                selectedMemoryGraphNodeId: state.memoryGraphSelectedNodeId,
                 showGatewayToken: state.overviewShowGatewayToken,
                 showGatewayPassword: state.overviewShowGatewayPassword,
                 onSettingsChange: (next) => state.applySettings(next),
@@ -652,6 +655,9 @@ export function renderApp(state: AppViewState) {
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
                 onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
+                onSelectMemoryGraphNode: (nodeId) => {
+                  state.memoryGraphSelectedNodeId = nodeId;
+                },
                 onRefreshLogs: () => state.loadOverview(),
               })
             : nothing

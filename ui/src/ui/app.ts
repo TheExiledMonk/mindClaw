@@ -396,6 +396,9 @@ export class OpenClawApp extends LitElement {
   @state() overviewLogCursor = 0;
   @state() memoryDiagnostics: import("./types.js").DoctorMemoryDiagnosticsPayload | null = null;
   @state() memoryDiagnosticsError: string | null = null;
+  @state() memoryGraph: import("./types.js").DoctorMemoryGraphPayload | null = null;
+  @state() memoryGraphError: string | null = null;
+  @state() memoryGraphSelectedNodeId: string | null = null;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;

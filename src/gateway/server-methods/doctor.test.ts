@@ -6,6 +6,7 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const generateMemoryDiagnosticsReport = vi.hoisted(() => vi.fn());
+const generateMemoryExplorerGraph = vi.hoisted(() => vi.fn());
 const getMemoryBackgroundWorkerStats = vi.hoisted(() =>
   vi.fn(() => ({
     queued: 1,
@@ -32,6 +33,7 @@ vi.mock("../../memory/index.js", () => ({
 
 vi.mock("../../context-engine/memory-system-store.js", () => ({
   generateMemoryDiagnosticsReport,
+  generateMemoryExplorerGraph,
 }));
 
 vi.mock("../../context-engine/memory-system-worker.js", () => ({
@@ -65,6 +67,20 @@ const invokeDoctorMemoryDiagnostics = async (
   });
 };
 
+const invokeDoctorMemoryGraph = async (
+  respond: ReturnType<typeof vi.fn>,
+  params?: Record<string, unknown>,
+) => {
+  await doctorHandlers["doctor.memory.graph"]({
+    req: {} as never,
+    params: (params ?? {}) as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -86,6 +102,7 @@ describe("doctor.memory.status", () => {
     resolveAgentWorkspaceDir.mockClear();
     getMemorySearchManager.mockReset();
     generateMemoryDiagnosticsReport.mockReset();
+    generateMemoryExplorerGraph.mockReset();
     getMemoryBackgroundWorkerStats.mockClear();
   });
 
@@ -155,6 +172,7 @@ describe("doctor.memory.diagnostics", () => {
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockClear();
     generateMemoryDiagnosticsReport.mockReset();
+    generateMemoryExplorerGraph.mockReset();
     getMemoryBackgroundWorkerStats.mockClear();
   });
 
@@ -207,6 +225,65 @@ describe("doctor.memory.diagnostics", () => {
         report: expect.objectContaining({ sessionId: "research" }),
         worker: expect.objectContaining({ completed: 2, maintenanceRuns: 1 }),
       },
+      undefined,
+    );
+  });
+});
+
+describe("doctor.memory.graph", () => {
+  beforeEach(() => {
+    loadConfig.mockClear();
+    resolveDefaultAgentId.mockClear();
+    resolveAgentWorkspaceDir.mockClear();
+    generateMemoryExplorerGraph.mockReset();
+  });
+
+  it("returns a UI-safe memory graph slice for the requested session", async () => {
+    generateMemoryExplorerGraph.mockResolvedValue({
+      generatedAt: 1,
+      workspaceDir: "/tmp/workspace",
+      sessionId: "research",
+      totalNodes: 12,
+      totalEdges: 16,
+      visibleNodeCount: 8,
+      visibleEdgeCount: 10,
+      recommendations: ["keep the graph readable"],
+      nodes: [
+        {
+          id: "ltm-1",
+          kind: "memory",
+          category: "fact",
+          summary: "CPA metrics matter",
+          confidence: 0.9,
+          activeStatus: "active",
+          updatedAt: 1,
+          degree: 3,
+          connectedNodeIds: ["ltm-2"],
+          relationTypes: ["supports"],
+          excerpt: "CPA metrics matter",
+        },
+      ],
+      edges: [{ from: "ltm-1", to: "ltm-2", type: "supports", weight: 0.8, updatedAt: 1 }],
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryGraph(respond, { sessionKey: "research", nodeLimit: 8 });
+
+    expect(generateMemoryExplorerGraph).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      sessionId: "research",
+      nodeLimit: 8,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+        graph: expect.objectContaining({
+          sessionId: "research",
+          visibleNodeCount: 8,
+        }),
+      }),
       undefined,
     );
   });

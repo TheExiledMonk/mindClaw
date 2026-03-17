@@ -310,6 +310,9 @@ export type AppViewState = {
     overviewLogCursor: number;
     memoryDiagnostics: DoctorMemoryDiagnosticsPayload | null;
     memoryDiagnosticsError: string | null;
+    memoryGraph: import("./types.js").DoctorMemoryGraphPayload | null;
+    memoryGraphError: string | null;
+    memoryGraphSelectedNodeId: string | null;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;

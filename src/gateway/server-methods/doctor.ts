@@ -2,7 +2,9 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { loadConfig } from "../../config/config.js";
 import {
   generateMemoryDiagnosticsReport,
+  generateMemoryExplorerGraph,
   type MemoryDiagnosticsReport,
+  type MemoryExplorerGraph,
 } from "../../context-engine/memory-system-store.js";
 import {
   getMemoryBackgroundWorkerStats,
@@ -26,6 +28,12 @@ export type DoctorMemoryDiagnosticsPayload = {
   workspaceDir: string;
   report: MemoryDiagnosticsReport;
   worker: MemoryBackgroundWorkerStats;
+};
+
+export type DoctorMemoryGraphPayload = {
+  agentId: string;
+  workspaceDir: string;
+  graph: MemoryExplorerGraph;
 };
 
 export const doctorHandlers: GatewayRequestHandlers = {
@@ -92,6 +100,31 @@ export const doctorHandlers: GatewayRequestHandlers = {
       workspaceDir,
       report,
       worker: getMemoryBackgroundWorkerStats(),
+    };
+    respond(true, payload, undefined);
+  },
+  "doctor.memory.graph": async ({ params, respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const sessionId =
+      typeof (params as { sessionKey?: unknown } | undefined)?.sessionKey === "string" &&
+      (params as { sessionKey?: string }).sessionKey?.trim()
+        ? (params as { sessionKey?: string }).sessionKey!.trim()
+        : "main";
+    const nodeLimit =
+      typeof (params as { nodeLimit?: unknown } | undefined)?.nodeLimit === "number"
+        ? (params as { nodeLimit?: number }).nodeLimit
+        : undefined;
+    const graph = await generateMemoryExplorerGraph({
+      workspaceDir,
+      sessionId,
+      nodeLimit,
+    });
+    const payload: DoctorMemoryGraphPayload = {
+      agentId,
+      workspaceDir,
+      graph,
     };
     respond(true, payload, undefined);
   },

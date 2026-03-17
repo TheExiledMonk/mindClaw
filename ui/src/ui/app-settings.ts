@@ -472,6 +472,7 @@ export async function loadOverview(host: SettingsHost) {
     loadUsage(app),
     loadOverviewLogs(app),
     loadOverviewMemoryDiagnostics(app),
+    loadOverviewMemoryGraph(app),
   ]);
   buildAttentionItems(app);
 }
@@ -491,6 +492,32 @@ async function loadOverviewMemoryDiagnostics(host: OpenClawApp) {
   } catch (err) {
     host.memoryDiagnostics = null;
     host.memoryDiagnosticsError = String(err);
+  }
+}
+
+async function loadOverviewMemoryGraph(host: OpenClawApp) {
+  if (!host.client || !host.connected) {
+    host.memoryGraph = null;
+    host.memoryGraphError = null;
+    host.memoryGraphSelectedNodeId = null;
+    return;
+  }
+  try {
+    const res = await host.client.request("doctor.memory.graph", {
+      sessionKey: host.sessionKey || undefined,
+      nodeLimit: 28,
+    });
+    host.memoryGraph = res as import("./types.js").DoctorMemoryGraphPayload;
+    host.memoryGraphError = null;
+    const visibleIds = new Set(host.memoryGraph.graph.nodes.map((node) => node.id));
+    host.memoryGraphSelectedNodeId =
+      host.memoryGraphSelectedNodeId && visibleIds.has(host.memoryGraphSelectedNodeId)
+        ? host.memoryGraphSelectedNodeId
+        : (host.memoryGraph.graph.nodes[0]?.id ?? null);
+  } catch (err) {
+    host.memoryGraph = null;
+    host.memoryGraphError = String(err);
+    host.memoryGraphSelectedNodeId = null;
   }
 }
 

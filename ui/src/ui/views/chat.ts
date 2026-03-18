@@ -13,6 +13,7 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
+import { extractTextCached } from "../chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
@@ -116,6 +117,8 @@ const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 const CHAT_HISTORY_WINDOW_SIZE = 200;
 const CHAT_HISTORY_LOAD_MORE_THRESHOLD_PX = 120;
+const CHAT_VISIBLE_CONTEXT_TRIM_THRESHOLD = 0.75;
+const CHAT_VISIBLE_CONTEXT_KEEP_SHARE = 0.25;
 
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
@@ -295,6 +298,84 @@ function formatTokensCompact(n: number): string {
     return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   return String(n);
+}
+
+function estimateVisibleMessageWeight(message: unknown): number {
+  const text = extractTextCached(message);
+  if (text && text.trim()) {
+    return Math.max(24, text.trim().length);
+  }
+  if (!message || typeof message !== "object") {
+    return 24;
+  }
+  const role =
+    typeof (message as Record<string, unknown>).role === "string"
+      ? ((message as Record<string, unknown>).role as string).toLowerCase()
+      : "";
+  if (role === "toolresult" || role === "tool_result" || role === "tool") {
+    return 48;
+  }
+  return 24;
+}
+
+function isUserTurnBoundaryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role =
+    typeof (message as Record<string, unknown>).role === "string"
+      ? ((message as Record<string, unknown>).role as string).toLowerCase()
+      : "";
+  return role === "user";
+}
+
+function resolveVisibleHistoryRange(params: {
+  messages: unknown[];
+  visibleHistoryCount?: number;
+  session?: GatewaySessionRow;
+  defaultContextTokens: number | null;
+}): { start: number; hidden: number } {
+  const history = Array.isArray(params.messages) ? params.messages : [];
+  const totalHistory = history.length;
+  const visibleHistoryCount = Math.max(1, params.visibleHistoryCount ?? CHAT_HISTORY_WINDOW_SIZE);
+  const countStart = Math.max(0, totalHistory - visibleHistoryCount);
+  const countWindow = history.slice(countStart);
+  const used = params.session?.inputTokens ?? 0;
+  const limit = params.session?.contextTokens ?? params.defaultContextTokens ?? 0;
+  const ratio = used > 0 && limit > 0 ? used / limit : 0;
+  if (ratio < CHAT_VISIBLE_CONTEXT_TRIM_THRESHOLD || countWindow.length <= 1) {
+    return { start: countStart, hidden: totalHistory - countWindow.length };
+  }
+
+  const totalWeight = countWindow.reduce<number>(
+    (sum, message) => sum + estimateVisibleMessageWeight(message),
+    0,
+  );
+  if (totalWeight <= 0) {
+    return { start: countStart, hidden: totalHistory - countWindow.length };
+  }
+
+  const trimTarget = totalWeight * (1 - CHAT_VISIBLE_CONTEXT_KEEP_SHARE);
+  let cumulative = 0;
+  let lastUserIndex = 0;
+  let cutoffIndex = 0;
+  for (let i = 0; i < countWindow.length; i += 1) {
+    const message = countWindow[i];
+    if (isUserTurnBoundaryMessage(message)) {
+      lastUserIndex = i;
+    }
+    cumulative += estimateVisibleMessageWeight(message);
+    if (cumulative >= trimTarget) {
+      cutoffIndex = lastUserIndex > 0 ? lastUserIndex : i;
+      break;
+    }
+  }
+
+  const finalStart = Math.min(totalHistory - 1, countStart + cutoffIndex);
+  return {
+    start: finalStart,
+    hidden: Math.max(0, finalStart),
+  };
 }
 
 function generateAttachmentId(): string {
@@ -854,9 +935,13 @@ export function renderChat(props: ChatProps) {
 
   const chatItems = buildChatItems(props);
   const isEmpty = chatItems.length === 0 && !props.loading;
-  const totalHistory = Array.isArray(props.messages) ? props.messages.length : 0;
-  const visibleHistoryCount = Math.max(1, props.visibleHistoryCount ?? CHAT_HISTORY_WINDOW_SIZE);
-  const hiddenHistoryCount = Math.max(0, totalHistory - visibleHistoryCount);
+  const historyRange = resolveVisibleHistoryRange({
+    messages: props.messages,
+    visibleHistoryCount: props.visibleHistoryCount,
+    session: activeSession,
+    defaultContextTokens: props.sessions?.defaults?.contextTokens ?? null,
+  });
+  const hiddenHistoryCount = historyRange.hidden;
 
   const thread = html`
     <div
@@ -1422,8 +1507,12 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const visibleHistoryCount = Math.max(1, props.visibleHistoryCount ?? CHAT_HISTORY_WINDOW_SIZE);
-  const historyStart = Math.max(0, history.length - visibleHistoryCount);
+  const historyStart = resolveVisibleHistoryRange({
+    messages: history,
+    visibleHistoryCount: props.visibleHistoryCount,
+    session: props.sessions?.sessions?.find((row) => row.key === props.sessionKey),
+    defaultContextTokens: props.sessions?.defaults?.contextTokens ?? null,
+  }).start;
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);

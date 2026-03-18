@@ -249,6 +249,105 @@ describe("chat view", () => {
     expect(onLoadOlderHistory).toHaveBeenCalled();
   });
 
+  it("auto-hides oldest visible history under high context pressure", () => {
+    const container = document.createElement("div");
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "old user one" }], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old assistant one ".repeat(10) }],
+        timestamp: 2,
+      },
+      { role: "user", content: [{ type: "text", text: "old user two" }], timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old assistant two ".repeat(10) }],
+        timestamp: 4,
+      },
+      { role: "user", content: [{ type: "text", text: "keep from here" }], timestamp: 5 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "latest assistant reply ".repeat(8) }],
+        timestamp: 6,
+      },
+    ];
+
+    render(
+      renderChat(
+        createProps({
+          messages,
+          sessions: {
+            ...createSessions(),
+            defaults: { model: null, contextTokens: 1000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 950,
+                contextTokens: 1000,
+              },
+            ],
+          },
+          visibleHistoryCount: 200,
+        }),
+      ),
+      container,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("old user one");
+    expect(text).not.toContain("old user two");
+    expect(text).toContain("keep from here");
+    expect(text).toContain("4 hidden");
+  });
+
+  it("cuts visible history at the oldest kept user turn boundary, not mid-reply", () => {
+    const container = document.createElement("div");
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "discard me" }], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "discarded assistant ".repeat(20) }],
+        timestamp: 2,
+      },
+      { role: "user", content: [{ type: "text", text: "boundary user" }], timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "boundary assistant ".repeat(20) }],
+        timestamp: 4,
+      },
+      { role: "user", content: [{ type: "text", text: "newest user" }], timestamp: 5 },
+    ];
+
+    render(
+      renderChat(
+        createProps({
+          messages,
+          sessions: {
+            ...createSessions(),
+            defaults: { model: null, contextTokens: 1000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 990,
+                contextTokens: 1000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("discard me");
+    expect(text).toContain("boundary user");
+    expect(text).toContain("boundary assistant");
+  });
+
   it("keeps grouped assistant avatar fallbacks under the mounted base path", () => {
     const container = document.createElement("div");
     render(

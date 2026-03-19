@@ -417,6 +417,86 @@ describe("memory tools", () => {
     }
   });
 
+  it("re-syncs legacy workspace memory when new entries appear after the first migration", async () => {
+    const legacyWorkspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mindclaw-memory-legacy-resync-"),
+    );
+    const globalStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "mindclaw-memory-global-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      await persistMemoryStoreSnapshot({
+        workspaceDir: legacyWorkspaceDir,
+        sessionId: "memory:workspace",
+        workingMemory: buildWorkingMemory(),
+        longTermMemory: [
+          buildLongTermEntry({
+            id: "ltm-legacy-initial",
+            text: "Initial legacy payout memory should migrate into the platform store.",
+          }),
+        ],
+        pendingSignificance: [],
+        permanentMemory: buildPermanentRoot([]),
+        graph: emptyGraph(),
+      });
+
+      process.env.OPENCLAW_STATE_DIR = globalStateDir;
+      const cfg = configForWorkspace({
+        agents: {
+          list: [{ id: "main", default: true, workspace: legacyWorkspaceDir }],
+        },
+      });
+      const searchTool = createMemorySearchToolOrThrow({
+        config: cfg,
+        agentSessionKey: "agent:main:discord:dm:user-a",
+      });
+
+      const initialResult = await searchTool.execute("call_search_migrated_initial", {
+        query: "initial legacy payout",
+      });
+      expect(
+        (initialResult.details as { results: Array<{ snippet: string }> }).results.some((entry) =>
+          entry.snippet.includes("Initial legacy payout memory"),
+        ),
+      ).toBe(true);
+
+      await persistMemoryStoreSnapshot({
+        workspaceDir: legacyWorkspaceDir,
+        sessionId: "memory:workspace",
+        workingMemory: buildWorkingMemory(),
+        longTermMemory: [
+          buildLongTermEntry({
+            id: "ltm-legacy-initial",
+            text: "Initial legacy payout memory should migrate into the platform store.",
+          }),
+          buildLongTermEntry({
+            id: "ltm-legacy-later",
+            text: "Later legacy compliance memory should still migrate after markers already exist.",
+          }),
+        ],
+        pendingSignificance: [],
+        permanentMemory: buildPermanentRoot([]),
+        graph: emptyGraph(),
+      });
+
+      const laterResult = await searchTool.execute("call_search_migrated_later", {
+        query: "later legacy compliance",
+      });
+      expect(
+        (laterResult.details as { results: Array<{ snippet: string }> }).results.some((entry) =>
+          entry.snippet.includes("Later legacy compliance memory"),
+        ),
+      ).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(legacyWorkspaceDir, { recursive: true, force: true });
+      await fs.rm(globalStateDir, { recursive: true, force: true });
+    }
+  });
+
   it("deletes stored durable memory and removes it from search/get results", async () => {
     const cfg = configForWorkspace({
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -564,6 +644,48 @@ describe("memory tools", () => {
       results: Array<{ snippet: string }>;
     };
     expect(details.results[0]?.snippet).toContain("evergreen casino compliance ladder");
+  });
+
+  it("searches the full long-term store instead of only the truncated context packet", async () => {
+    const crowdedEntries = [
+      { id: "ltm-crowd-1", text: "alpha beta gamma standard note one" },
+      { id: "ltm-crowd-2", text: "alpha beta gamma standard note two" },
+      { id: "ltm-crowd-3", text: "alpha beta gamma standard note three" },
+      { id: "ltm-crowd-4", text: "alpha beta gamma standard note four" },
+      { id: "ltm-crowd-5", text: "alpha beta gamma standard note five" },
+      { id: "ltm-hidden", text: "alpha beta gamma hiddenneedle recovery note" },
+    ].map((entry, index) => ({
+      ...buildLongTermEntry(entry),
+      strength: entry.id === "ltm-hidden" ? 0.12 : 0.99 - index * 0.01,
+      confidence: entry.id === "ltm-hidden" ? 0.1 : 0.98 - index * 0.01,
+    }));
+
+    await persistMemoryStoreSnapshot({
+      workspaceDir,
+      sessionId: "memory:platform",
+      workingMemory: buildWorkingMemory(),
+      longTermMemory: crowdedEntries,
+      pendingSignificance: [],
+      permanentMemory: buildPermanentRoot([]),
+      graph: emptyGraph(),
+    });
+
+    const cfg = configForWorkspace({
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    });
+    const searchTool = createMemorySearchToolOrThrow({
+      config: cfg,
+      agentSessionKey: "session-main",
+    });
+
+    const result = await searchTool.execute("call_search_full_store", {
+      query: "alpha beta gamma hiddenneedle",
+      maxResults: 10,
+    });
+    const details = result.details as { results: Array<{ path: string; snippet: string }> };
+    expect(
+      details.results.some((entry) => entry.path === "mindclaw_memory://long-term/ltm-hidden"),
+    ).toBe(true);
   });
 
   it("keeps repeated identical searches warm instead of invalidating cache on read", async () => {

@@ -10,17 +10,18 @@ import {
   buildMemoryQuerySignature,
   getCachedMemoryContextPacket,
   getCachedMemoryStoreSnapshot,
+  invalidateMemoryCache,
   primeMemoryStoreSnapshot,
 } from "../../context-engine/memory-system-cache.js";
 import {
   loadMemoryStoreMetadata,
   loadMemoryStoreSnapshot,
+  persistMemoryStoreSnapshot,
   deleteIntegratedMemoryEntry,
   storeIntegratedMemoryCheckpoint,
   storeIntegratedMemoryEntry,
   retrieveMemoryContextPacket,
   MEMORY_SYSTEM_DIRNAME,
-  type MemoryContextPacket,
   type MemoryCategory,
   type MemorySourceType,
   type MemoryRetrievalItem,
@@ -67,8 +68,12 @@ const MemoryDeleteSchema = Type.Object({
 
 const MemorySchemaToolSchema = Type.Object({});
 const PLATFORM_MIGRATION_FILENAME = "platform-scope-migrations.json";
-const completedPlatformMigrations = new Set<string>();
 const pendingPlatformMigrations = new Map<string, Promise<void>>();
+type PlatformMigrationState = {
+  version: 2;
+  applied: string[];
+  sources: Record<string, string>;
+};
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
@@ -114,32 +119,52 @@ function buildLegacyScopeMigrationKey(params: {
     .digest("hex");
 }
 
-async function readAppliedPlatformMigrationKeys(workspaceDir: string): Promise<Set<string>> {
+async function readAppliedPlatformMigrationKeys(
+  workspaceDir: string,
+): Promise<Map<string, string>> {
   const filePath = resolvePlatformMigrationFile(workspaceDir);
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as { applied?: unknown };
-    return new Set(
-      Array.isArray(parsed.applied)
-        ? parsed.applied.filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
+    const parsed = JSON.parse(raw) as {
+      applied?: unknown;
+      sources?: unknown;
+    };
+    const applied = Array.isArray(parsed.applied)
+      ? parsed.applied.filter(
+          (value): value is string => typeof value === "string" && value.trim().length > 0,
+        )
+      : [];
+    const sources =
+      parsed.sources && typeof parsed.sources === "object"
+        ? Object.fromEntries(
+            Object.entries(parsed.sources).filter(
+              ([key, value]) =>
+                typeof key === "string" &&
+                key.trim().length > 0 &&
+                typeof value === "string" &&
+                value.trim().length > 0,
+            ),
           )
-        : [],
+        : {};
+    return new Map(
+      applied.map((key) => [key, sources[key] ?? "legacy-applied-without-fingerprint"] as const),
     );
   } catch {
-    return new Set();
+    return new Map();
   }
 }
 
 async function writeAppliedPlatformMigrationKeys(
   workspaceDir: string,
-  keys: Set<string>,
+  keys: Map<string, string>,
 ): Promise<void> {
   const filePath = resolvePlatformMigrationFile(workspaceDir);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const applied = [...keys.keys()].toSorted();
+  const sources = Object.fromEntries(applied.map((key) => [key, keys.get(key) ?? ""]));
   await fs.writeFile(
     filePath,
-    `${JSON.stringify({ version: 1, applied: [...keys].toSorted() }, null, 2)}\n`,
+    `${JSON.stringify({ version: 2, applied, sources } satisfies PlatformMigrationState, null, 2)}\n`,
     "utf8",
   );
 }
@@ -207,7 +232,93 @@ function resolveLegacyIntegratedMemorySources(cfg: OpenClawConfig): Array<{
       sources.push({ workspaceDir, sessionId });
     }
   }
+  for (const sessionId of ["memory:workspace", "memory:main"]) {
+    const workspaceDir = path.join(resolveStateDir(process.env), "workspace");
+    const key = `${path.resolve(workspaceDir)}::${sessionId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    sources.push({ workspaceDir, sessionId });
+  }
   return sources;
+}
+
+async function computeLegacyIntegratedMemoryFingerprint(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<string | null> {
+  try {
+    const snapshot = await loadMemoryStoreSnapshot({
+      workspaceDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      backendKind: params.backendKind,
+      allowBackupRecovery: false,
+    });
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          workingUpdatedAt: snapshot.workingMemory.updatedAt,
+          longTerm: snapshot.longTermMemory.map((entry) => ({
+            id: entry.id,
+            updatedAt: entry.updatedAt,
+            text: entry.text,
+            category: entry.category,
+          })),
+          pending: snapshot.pendingSignificance.map((entry) => ({
+            id: entry.id,
+            updatedAt: entry.updatedAt,
+            text: entry.text,
+            category: entry.category,
+          })),
+          permanentSummaryCount: flattenPermanentSummaries(snapshot.permanentMemory).length,
+          graphCounts: {
+            nodes: snapshot.graph.nodes.length,
+            edges: snapshot.graph.edges.length,
+          },
+        }),
+      )
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function buildLongTermMigrationFingerprint(entry: {
+  text: string;
+  category: string;
+  sourceType?: string;
+  artifactRefs?: string[];
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        text: entry.text.trim(),
+        category: entry.category,
+        sourceType: entry.sourceType ?? "",
+        artifactRefs: [...(entry.artifactRefs ?? [])].toSorted(),
+      }),
+    )
+    .digest("hex");
+}
+
+function buildPendingMigrationFingerprint(entry: {
+  text: string;
+  category: string;
+  sourceType?: string;
+  pendingReason?: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        text: entry.text.trim(),
+        category: entry.category,
+        sourceType: entry.sourceType ?? "",
+        pendingReason: entry.pendingReason ?? "",
+      }),
+    )
+    .digest("hex");
 }
 
 async function migrateLegacyIntegratedMemoryScopes(params: {
@@ -218,6 +329,12 @@ async function migrateLegacyIntegratedMemoryScopes(params: {
 }): Promise<void> {
   const applied = await readAppliedPlatformMigrationKeys(params.workspaceDir);
   let changed = false;
+  let targetSnapshot = await loadMemoryStoreSnapshot({
+    workspaceDir: params.workspaceDir,
+    sessionId: params.sessionId,
+    backendKind: params.backendKind,
+    allowBackupRecovery: false,
+  });
   for (const source of resolveLegacyIntegratedMemorySources(params.cfg)) {
     if (
       path.resolve(source.workspaceDir) === path.resolve(params.workspaceDir) &&
@@ -230,10 +347,18 @@ async function migrateLegacyIntegratedMemoryScopes(params: {
       sessionId: source.sessionId,
       backendKind: params.backendKind,
     });
-    if (applied.has(migrationKey)) {
+    if (!(await hasLegacyIntegratedMemoryStore(source.workspaceDir))) {
       continue;
     }
-    if (!(await hasLegacyIntegratedMemoryStore(source.workspaceDir))) {
+    const sourceFingerprint = await computeLegacyIntegratedMemoryFingerprint({
+      workspaceDir: source.workspaceDir,
+      sessionId: source.sessionId,
+      backendKind: params.backendKind,
+    });
+    if (!sourceFingerprint) {
+      continue;
+    }
+    if (applied.get(migrationKey) === sourceFingerprint) {
       continue;
     }
     let snapshot: Awaited<ReturnType<typeof loadMemoryStoreSnapshot>>;
@@ -252,7 +377,7 @@ async function migrateLegacyIntegratedMemoryScopes(params: {
       snapshot.pendingSignificance.length === 0 &&
       snapshot.graph.nodes.length === 0
     ) {
-      applied.add(migrationKey);
+      applied.set(migrationKey, sourceFingerprint);
       changed = true;
       continue;
     }
@@ -264,35 +389,65 @@ async function migrateLegacyIntegratedMemoryScopes(params: {
         ...snapshot.pendingSignificance.flatMap((entry) => entry.artifactRefs),
       ],
     });
+    const mergedLongTerm = new Map(
+      targetSnapshot.longTermMemory.map((entry) => [
+        buildLongTermMigrationFingerprint(entry),
+        entry,
+      ]),
+    );
     for (const entry of snapshot.longTermMemory) {
-      await storeIntegratedMemoryEntry({
-        workspaceDir: params.workspaceDir,
-        sessionId: params.sessionId,
-        backendKind: params.backendKind,
-        text: entry.text,
-        category: entry.category,
-        importanceClass:
-          entry.importanceClass === "critical" || entry.importanceClass === "useful"
-            ? entry.importanceClass
-            : undefined,
-        sourceType: entry.sourceType,
-        evidence: entry.evidence,
-        artifactRefs: entry.artifactRefs,
-        provenanceDetail: entry.provenance[0]?.detail ?? entry.text,
-      });
+      mergedLongTerm.set(buildLongTermMigrationFingerprint(entry), entry);
     }
+    const mergedPending = new Map(
+      targetSnapshot.pendingSignificance.map((entry) => [
+        buildPendingMigrationFingerprint(entry),
+        entry,
+      ]),
+    );
     for (const entry of snapshot.pendingSignificance) {
-      await storeIntegratedMemoryCheckpoint({
+      mergedPending.set(buildPendingMigrationFingerprint(entry), entry);
+    }
+    const nextSnapshot = {
+      ...targetSnapshot,
+      longTermMemory: [...mergedLongTerm.values()].toSorted((a, b) => b.updatedAt - a.updatedAt),
+      pendingSignificance: [...mergedPending.values()].toSorted(
+        (a, b) => b.updatedAt - a.updatedAt,
+      ),
+      permanentMemory:
+        flattenPermanentSummaries(targetSnapshot.permanentMemory).length > 0
+          ? targetSnapshot.permanentMemory
+          : snapshot.permanentMemory,
+      graph:
+        targetSnapshot.graph.nodes.length > 0 || targetSnapshot.graph.edges.length > 0
+          ? targetSnapshot.graph
+          : snapshot.graph,
+    };
+    const targetChanged =
+      nextSnapshot.longTermMemory.length !== targetSnapshot.longTermMemory.length ||
+      nextSnapshot.pendingSignificance.length !== targetSnapshot.pendingSignificance.length ||
+      (flattenPermanentSummaries(targetSnapshot.permanentMemory).length === 0 &&
+        flattenPermanentSummaries(snapshot.permanentMemory).length > 0) ||
+      (targetSnapshot.graph.nodes.length === 0 && snapshot.graph.nodes.length > 0) ||
+      (targetSnapshot.graph.edges.length === 0 && snapshot.graph.edges.length > 0);
+    if (targetChanged) {
+      await persistMemoryStoreSnapshot({
         workspaceDir: params.workspaceDir,
         sessionId: params.sessionId,
         backendKind: params.backendKind,
-        text: entry.text,
-        category: entry.category,
-        sourceType: entry.sourceType,
-        pendingReason: entry.pendingReason,
+        workingMemory: nextSnapshot.workingMemory,
+        longTermMemory: nextSnapshot.longTermMemory,
+        pendingSignificance: nextSnapshot.pendingSignificance,
+        permanentMemory: nextSnapshot.permanentMemory,
+        graph: nextSnapshot.graph,
       });
+      invalidateMemoryCache({
+        workspaceDir: params.workspaceDir,
+        sessionId: params.sessionId,
+        backendKind: params.backendKind,
+      });
+      targetSnapshot = nextSnapshot;
     }
-    applied.add(migrationKey);
+    applied.set(migrationKey, sourceFingerprint);
     changed = true;
   }
   if (changed) {
@@ -307,9 +462,6 @@ async function ensureIntegratedMemoryPlatformMigration(params: {
   backendKind?: MemoryStoreBackendKind;
 }): Promise<void> {
   const scopeKey = buildPlatformMigrationScopeKey(params);
-  if (completedPlatformMigrations.has(scopeKey)) {
-    return;
-  }
   const existing = pendingPlatformMigrations.get(scopeKey);
   if (existing) {
     await existing;
@@ -317,7 +469,6 @@ async function ensureIntegratedMemoryPlatformMigration(params: {
   }
   const promise = migrateLegacyIntegratedMemoryScopes(params).finally(() => {
     pendingPlatformMigrations.delete(scopeKey);
-    completedPlatformMigrations.add(scopeKey);
   });
   pendingPlatformMigrations.set(scopeKey, promise);
   await promise;
@@ -395,7 +546,7 @@ export function createMemorySearchTool(options: {
             loadSnapshot: () => loadMemoryStoreSnapshot({ workspaceDir, sessionId, backendKind }),
           });
           const packetStartedAt = Date.now();
-          const { packet, cacheHit: packetCacheHit } = getCachedMemoryContextPacket({
+          const { cacheHit: packetCacheHit } = getCachedMemoryContextPacket({
             workspaceDir,
             sessionId,
             backendKind,
@@ -416,7 +567,7 @@ export function createMemorySearchTool(options: {
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
-          const rawResults = buildIntegratedMemorySearchResults(packet, {
+          const rawResults = buildIntegratedMemorySearchResults(snapshot, {
             query,
             maxResults,
             minScore,
@@ -979,7 +1130,7 @@ function resolveIntegratedMemoryBackendKind(): MemoryStoreBackendKind | undefine
 }
 
 function buildIntegratedMemorySearchResults(
-  packet: MemoryContextPacket,
+  snapshot: Awaited<ReturnType<typeof loadMemoryStoreSnapshot>>,
   params: {
     query: string;
     maxResults?: number;
@@ -989,16 +1140,30 @@ function buildIntegratedMemorySearchResults(
   const queryTokens = tokenizeMemoryQuery(params.query);
   const minScore = params.minScore ?? 0.1;
   const maxResults = Math.max(1, Math.floor(params.maxResults ?? 6));
-  const candidates = packet.retrievalItems
-    .filter(
-      (item) =>
-        (item.kind === "long-term" || item.kind === "pending" || item.kind === "permanent") &&
-        (item.memoryId || item.kind === "permanent"),
-    )
-    .map((item) => {
-      const score = scoreMemoryRetrievalItem(item, queryTokens);
-      return { item, score };
-    })
+
+  const longTermCandidates = snapshot.longTermMemory.map((entry) => ({
+    kind: "long-term" as const,
+    text: entry.text,
+    reason: entry.category,
+    memoryId: entry.id,
+  }));
+  const pendingCandidates = snapshot.pendingSignificance.map((entry) => ({
+    kind: "pending" as const,
+    text: entry.text,
+    reason: entry.pendingReason,
+    memoryId: entry.id,
+  }));
+  const permanentCandidates = flattenPermanentSummaries(snapshot.permanentMemory).map((node) => ({
+    kind: "permanent" as const,
+    text: node.summary,
+    reason: node.label,
+  }));
+
+  const candidates = [...longTermCandidates, ...pendingCandidates, ...permanentCandidates]
+    .map((item) => ({
+      item,
+      score: scoreMemoryRetrievalItem(item, queryTokens),
+    }))
     .filter(({ score }) => score >= minScore)
     .toSorted((a, b) => b.score - a.score);
 
@@ -1021,6 +1186,22 @@ function buildIntegratedMemorySearchResults(
     }
   }
   return [...deduped.values()];
+}
+
+function flattenPermanentSummaries(
+  node: PermanentMemoryNode,
+): Array<{ label: string; summary: string }> {
+  const output: Array<{ label: string; summary: string }> = [];
+  const visit = (current: PermanentMemoryNode) => {
+    if (current.summary?.trim()) {
+      output.push({ label: current.label, summary: current.summary.trim() });
+    }
+    for (const child of current.children) {
+      visit(child);
+    }
+  };
+  visit(node);
+  return output;
 }
 
 function tokenizeMemoryQuery(query: string): string[] {

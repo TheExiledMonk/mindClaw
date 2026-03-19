@@ -21,12 +21,19 @@ import {
 } from "./memory-tool.test-helpers.js";
 
 let workspaceDir = "";
+let envSnapshot: { openclaw?: string; clawdbot?: string } | null = null;
 
 beforeEach(async () => {
+  envSnapshot = {
+    openclaw: process.env.OPENCLAW_STATE_DIR,
+    clawdbot: process.env.CLAWDBOT_STATE_DIR,
+  };
   workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mindclaw-memory-tool-"));
+  process.env.OPENCLAW_STATE_DIR = workspaceDir;
+  delete process.env.CLAWDBOT_STATE_DIR;
   await persistMemoryStoreSnapshot({
     workspaceDir,
-    sessionId: "session-main",
+    sessionId: "memory:platform",
     workingMemory: buildWorkingMemory(),
     longTermMemory: [
       buildLongTermEntry({
@@ -49,6 +56,18 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await waitForMemoryBackgroundWorkerIdle();
+  if (envSnapshot) {
+    if (envSnapshot.openclaw === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = envSnapshot.openclaw;
+    }
+    if (envSnapshot.clawdbot === undefined) {
+      delete process.env.CLAWDBOT_STATE_DIR;
+    } else {
+      process.env.CLAWDBOT_STATE_DIR = envSnapshot.clawdbot;
+    }
+  }
   if (workspaceDir) {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   }
@@ -231,13 +250,18 @@ describe("memory tools", () => {
     expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
   });
 
-  it("shares durable memory across different session keys for the same agent", async () => {
+  it("shares durable memory across different session keys and agents in the same workspace", async () => {
     const cfg = configForWorkspace({
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: workspaceDir },
+          { id: "work", workspace: workspaceDir },
+        ],
+      },
     });
     const storeTool = createMemoryStoreToolOrThrow({
       config: cfg,
-      agentSessionKey: "agent:main:discord:dm:user-a",
+      agentSessionKey: "agent:work:discord:dm:user-a",
     });
     const getTool = createMemoryGetToolOrThrow({
       config: cfg,
@@ -263,6 +287,134 @@ describe("memory tools", () => {
     });
     const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
     expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
+  });
+
+  it("shares durable memory across separate workspaces because the store is OpenClaw-wide", async () => {
+    const otherWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mindclaw-memory-tool-b-"));
+    try {
+      const cfg = configForWorkspace({
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: workspaceDir },
+            { id: "other", workspace: otherWorkspaceDir },
+          ],
+        },
+      });
+      const storeTool = createMemoryStoreToolOrThrow({
+        config: cfg,
+        agentSessionKey: "agent:main:discord:dm:user-a",
+      });
+      const getTool = createMemoryGetToolOrThrow({
+        config: cfg,
+        agentSessionKey: "agent:other:discord:dm:user-b",
+      });
+      const searchTool = createMemorySearchToolOrThrow({
+        config: cfg,
+        agentSessionKey: "agent:other:discord:dm:user-b",
+      });
+
+      const storeResult = await storeTool.execute("call_store_cross_workspace", {
+        text: "OpenClaw durable memory is platform-wide across all workspaces.",
+        category: "fact",
+        importanceClass: "useful",
+      });
+      const stored = storeResult.details as { path: string };
+
+      const getResult = await getTool.execute("call_get_cross_workspace", { path: stored.path });
+      expect((getResult.details as { text: string }).text).toContain("platform-wide");
+
+      const searchResult = await searchTool.execute("call_search_cross_workspace", {
+        query: "platform-wide across all workspaces",
+      });
+      const details = searchResult.details as { results: Array<{ path: string; snippet: string }> };
+      expect(details.results.some((entry) => entry.path === stored.path)).toBe(true);
+    } finally {
+      await fs.rm(otherWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates legacy workspace and agent-scoped memory into the OpenClaw-wide store", async () => {
+    const legacyWorkspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mindclaw-memory-legacy-a-"),
+    );
+    const legacyAgentWorkspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "mindclaw-memory-legacy-b-"),
+    );
+    const globalStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "mindclaw-memory-global-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      await persistMemoryStoreSnapshot({
+        workspaceDir: legacyWorkspaceDir,
+        sessionId: "memory:workspace",
+        workingMemory: buildWorkingMemory(),
+        longTermMemory: [
+          buildLongTermEntry({
+            id: "ltm-legacy-workspace",
+            text: "Legacy payout benchmark memory should migrate from the workspace scope.",
+          }),
+        ],
+        pendingSignificance: [],
+        permanentMemory: buildPermanentRoot([]),
+        graph: emptyGraph(),
+      });
+      await persistMemoryStoreSnapshot({
+        workspaceDir: legacyAgentWorkspaceDir,
+        sessionId: "memory:other",
+        workingMemory: buildWorkingMemory(),
+        longTermMemory: [
+          buildLongTermEntry({
+            id: "ltm-legacy-agent",
+            text: "Legacy creative compliance memory should migrate from the agent scope.",
+          }),
+        ],
+        pendingSignificance: [],
+        permanentMemory: buildPermanentRoot([]),
+        graph: emptyGraph(),
+      });
+
+      process.env.OPENCLAW_STATE_DIR = globalStateDir;
+      const cfg = configForWorkspace({
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: legacyWorkspaceDir },
+            { id: "other", workspace: legacyAgentWorkspaceDir },
+          ],
+        },
+      });
+      const searchTool = createMemorySearchToolOrThrow({
+        config: cfg,
+        agentSessionKey: "agent:main:discord:dm:user-a",
+      });
+
+      const workspaceResult = await searchTool.execute("call_search_migrated_workspace", {
+        query: "legacy payout benchmark workspace scope",
+      });
+      const workspaceDetails = workspaceResult.details as {
+        results: Array<{ path: string; snippet: string }>;
+      };
+      expect(
+        workspaceDetails.results.some((entry) => entry.snippet.includes("Legacy payout benchmark")),
+      ).toBe(true);
+
+      const agentResult = await searchTool.execute("call_search_migrated_agent", {
+        query: "legacy creative compliance agent scope",
+      });
+      const agentDetails = agentResult.details as {
+        results: Array<{ path: string; snippet: string }>;
+      };
+      expect(
+        agentDetails.results.some((entry) => entry.snippet.includes("Legacy creative compliance")),
+      ).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(legacyWorkspaceDir, { recursive: true, force: true });
+      await fs.rm(legacyAgentWorkspaceDir, { recursive: true, force: true });
+      await fs.rm(globalStateDir, { recursive: true, force: true });
+    }
   });
 
   it("deletes stored durable memory and removes it from search/get results", async () => {
@@ -451,7 +603,7 @@ function configForWorkspace(config: Record<string, unknown>) {
 
 function buildWorkingMemory(): WorkingMemorySnapshot {
   return {
-    sessionId: "session-main",
+    sessionId: "memory:platform",
     updatedAt: Date.now(),
     rollingSummary: "Discussed durable course setup.",
     carryForwardSummary: "",

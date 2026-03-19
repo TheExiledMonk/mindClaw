@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import {
   buildMemoryQuerySignature,
@@ -29,8 +30,7 @@ import {
 import { enqueueMemoryBackgroundRefresh } from "../../context-engine/memory-system-worker.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveAgentWorkspaceDir } from "../agent-scope.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { ToolInputError, jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -66,6 +66,9 @@ const MemoryDeleteSchema = Type.Object({
 });
 
 const MemorySchemaToolSchema = Type.Object({});
+const PLATFORM_MIGRATION_FILENAME = "platform-scope-migrations.json";
+const completedPlatformMigrations = new Set<string>();
+const pendingPlatformMigrations = new Map<string, Promise<void>>();
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
@@ -79,8 +82,245 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
   return { cfg, agentId };
 }
 
-function resolveDurableMemorySessionId(agentId: string): string {
-  return `memory:${agentId}`;
+function resolveDurableMemorySessionId(_agentId: string): string {
+  return "memory:platform";
+}
+
+function resolveIntegratedMemoryWorkspaceDir(): string {
+  return resolveStateDir(process.env);
+}
+
+function buildPlatformMigrationScopeKey(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): string {
+  return `${params.workspaceDir}::${params.sessionId}::${params.backendKind ?? "fs-json"}`;
+}
+
+function resolvePlatformMigrationFile(workspaceDir: string): string {
+  return path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME, PLATFORM_MIGRATION_FILENAME);
+}
+
+function buildLegacyScopeMigrationKey(params: {
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): string {
+  return createHash("sha256")
+    .update(
+      `${path.resolve(params.workspaceDir)}::${params.sessionId}::${params.backendKind ?? "fs-json"}`,
+    )
+    .digest("hex");
+}
+
+async function readAppliedPlatformMigrationKeys(workspaceDir: string): Promise<Set<string>> {
+  const filePath = resolvePlatformMigrationFile(workspaceDir);
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as { applied?: unknown };
+    return new Set(
+      Array.isArray(parsed.applied)
+        ? parsed.applied.filter(
+            (value): value is string => typeof value === "string" && value.trim().length > 0,
+          )
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+async function writeAppliedPlatformMigrationKeys(
+  workspaceDir: string,
+  keys: Set<string>,
+): Promise<void> {
+  const filePath = resolvePlatformMigrationFile(workspaceDir);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    `${JSON.stringify({ version: 1, applied: [...keys].toSorted() }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+async function hasLegacyIntegratedMemoryStore(workspaceDir: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(path.join(workspaceDir, MEMORY_SYSTEM_DIRNAME));
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function copyReferencedIntegratedMemoryArtifacts(params: {
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+  artifactRefs: string[];
+}): Promise<void> {
+  const targetArtifactsDir = path.join(
+    params.targetWorkspaceDir,
+    MEMORY_SYSTEM_DIRNAME,
+    "artifacts",
+  );
+  const sourceArtifactsDir = path.join(
+    params.sourceWorkspaceDir,
+    MEMORY_SYSTEM_DIRNAME,
+    "artifacts",
+  );
+  for (const ref of params.artifactRefs) {
+    const fileName = decodeURIComponent(ref.split("/").at(-1) ?? "");
+    if (!fileName || !ref.includes("/artifacts/")) {
+      continue;
+    }
+    const sourceFile = path.join(sourceArtifactsDir, fileName);
+    const targetFile = path.join(targetArtifactsDir, fileName);
+    try {
+      await fs.stat(sourceFile);
+    } catch {
+      continue;
+    }
+    try {
+      await fs.stat(targetFile);
+      continue;
+    } catch {
+      await fs.mkdir(targetArtifactsDir, { recursive: true });
+      await fs.copyFile(sourceFile, targetFile).catch(() => {});
+    }
+  }
+}
+
+function resolveLegacyIntegratedMemorySources(cfg: OpenClawConfig): Array<{
+  workspaceDir: string;
+  sessionId: string;
+}> {
+  const sources: Array<{ workspaceDir: string; sessionId: string }> = [];
+  const seen = new Set<string>();
+  for (const agentId of listAgentIds(cfg)) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    for (const sessionId of [`memory:${agentId}`, "memory:workspace"]) {
+      const key = `${path.resolve(workspaceDir)}::${sessionId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      sources.push({ workspaceDir, sessionId });
+    }
+  }
+  return sources;
+}
+
+async function migrateLegacyIntegratedMemoryScopes(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<void> {
+  const applied = await readAppliedPlatformMigrationKeys(params.workspaceDir);
+  let changed = false;
+  for (const source of resolveLegacyIntegratedMemorySources(params.cfg)) {
+    if (
+      path.resolve(source.workspaceDir) === path.resolve(params.workspaceDir) &&
+      source.sessionId === params.sessionId
+    ) {
+      continue;
+    }
+    const migrationKey = buildLegacyScopeMigrationKey({
+      workspaceDir: source.workspaceDir,
+      sessionId: source.sessionId,
+      backendKind: params.backendKind,
+    });
+    if (applied.has(migrationKey)) {
+      continue;
+    }
+    if (!(await hasLegacyIntegratedMemoryStore(source.workspaceDir))) {
+      continue;
+    }
+    let snapshot: Awaited<ReturnType<typeof loadMemoryStoreSnapshot>>;
+    try {
+      snapshot = await loadMemoryStoreSnapshot({
+        workspaceDir: source.workspaceDir,
+        sessionId: source.sessionId,
+        backendKind: params.backendKind,
+        allowBackupRecovery: false,
+      });
+    } catch {
+      continue;
+    }
+    if (
+      snapshot.longTermMemory.length === 0 &&
+      snapshot.pendingSignificance.length === 0 &&
+      snapshot.graph.nodes.length === 0
+    ) {
+      applied.add(migrationKey);
+      changed = true;
+      continue;
+    }
+    await copyReferencedIntegratedMemoryArtifacts({
+      sourceWorkspaceDir: source.workspaceDir,
+      targetWorkspaceDir: params.workspaceDir,
+      artifactRefs: [
+        ...snapshot.longTermMemory.flatMap((entry) => entry.artifactRefs),
+        ...snapshot.pendingSignificance.flatMap((entry) => entry.artifactRefs),
+      ],
+    });
+    for (const entry of snapshot.longTermMemory) {
+      await storeIntegratedMemoryEntry({
+        workspaceDir: params.workspaceDir,
+        sessionId: params.sessionId,
+        backendKind: params.backendKind,
+        text: entry.text,
+        category: entry.category,
+        importanceClass:
+          entry.importanceClass === "critical" || entry.importanceClass === "useful"
+            ? entry.importanceClass
+            : undefined,
+        sourceType: entry.sourceType,
+        evidence: entry.evidence,
+        artifactRefs: entry.artifactRefs,
+        provenanceDetail: entry.provenance[0]?.detail ?? entry.text,
+      });
+    }
+    for (const entry of snapshot.pendingSignificance) {
+      await storeIntegratedMemoryCheckpoint({
+        workspaceDir: params.workspaceDir,
+        sessionId: params.sessionId,
+        backendKind: params.backendKind,
+        text: entry.text,
+        category: entry.category,
+        sourceType: entry.sourceType,
+        pendingReason: entry.pendingReason,
+      });
+    }
+    applied.add(migrationKey);
+    changed = true;
+  }
+  if (changed) {
+    await writeAppliedPlatformMigrationKeys(params.workspaceDir, applied);
+  }
+}
+
+async function ensureIntegratedMemoryPlatformMigration(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+  sessionId: string;
+  backendKind?: MemoryStoreBackendKind;
+}): Promise<void> {
+  const scopeKey = buildPlatformMigrationScopeKey(params);
+  if (completedPlatformMigrations.has(scopeKey)) {
+    return;
+  }
+  const existing = pendingPlatformMigrations.get(scopeKey);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const promise = migrateLegacyIntegratedMemoryScopes(params).finally(() => {
+    pendingPlatformMigrations.delete(scopeKey);
+    completedPlatformMigrations.add(scopeKey);
+  });
+  pendingPlatformMigrations.set(scopeKey, promise);
+  await promise;
 }
 
 function createMemoryTool<
@@ -133,9 +373,15 @@ export function createMemorySearchTool(options: {
         const maxResults = readNumberParam(params, "maxResults");
         const minScore = readNumberParam(params, "minScore");
         try {
-          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const workspaceDir = resolveIntegratedMemoryWorkspaceDir();
           const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
+          await ensureIntegratedMemoryPlatformMigration({
+            cfg,
+            workspaceDir,
+            sessionId,
+            backendKind,
+          });
           const startedAt = Date.now();
           const {
             snapshot,
@@ -216,9 +462,15 @@ export function createMemoryGetTool(options: {
       async (_toolCallId, params) => {
         const relPath = readStringParam(params, "path", { required: true });
         try {
-          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const workspaceDir = resolveIntegratedMemoryWorkspaceDir();
           const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
+          await ensureIntegratedMemoryPlatformMigration({
+            cfg,
+            workspaceDir,
+            sessionId,
+            backendKind,
+          });
           const { snapshot } = await getCachedMemoryStoreSnapshot({
             workspaceDir,
             sessionId,
@@ -256,9 +508,15 @@ export function createMemoryStoreTool(options: {
         const importanceClass = readImportanceClassParam(params, "importanceClass");
         const sourceType = readMemorySourceTypeParam(params, "sourceType");
         try {
-          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const workspaceDir = resolveIntegratedMemoryWorkspaceDir();
           const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
+          await ensureIntegratedMemoryPlatformMigration({
+            cfg,
+            workspaceDir,
+            sessionId,
+            backendKind,
+          });
           const plan = await prepareMemoryStorePlan({
             workspaceDir,
             sessionId,
@@ -362,9 +620,15 @@ export function createMemoryCheckpointTool(options: {
         const sourceType = readMemorySourceTypeParam(params, "sourceType");
         const pendingReason = readStringParam(params, "pendingReason");
         try {
-          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const workspaceDir = resolveIntegratedMemoryWorkspaceDir();
           const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
+          await ensureIntegratedMemoryPlatformMigration({
+            cfg,
+            workspaceDir,
+            sessionId,
+            backendKind,
+          });
           const stored = await storeIntegratedMemoryCheckpoint({
             workspaceDir,
             sessionId,
@@ -430,9 +694,15 @@ export function createMemoryDeleteTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         const deleteArtifacts = readBooleanParam(params, "deleteArtifacts") ?? false;
         try {
-          const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const workspaceDir = resolveIntegratedMemoryWorkspaceDir();
           const sessionId = resolveDurableMemorySessionId(agentId);
           const backendKind = resolveIntegratedMemoryBackendKind();
+          await ensureIntegratedMemoryPlatformMigration({
+            cfg,
+            workspaceDir,
+            sessionId,
+            backendKind,
+          });
           const result = await deleteIntegratedMemoryEntry({
             workspaceDir,
             sessionId,

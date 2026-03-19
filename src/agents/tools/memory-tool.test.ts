@@ -130,7 +130,7 @@ describe("memory_search unavailable payloads", () => {
     } as unknown as Awaited<ReturnType<typeof mod.loadMemoryStoreMetadata>>);
     vi.mocked(mod.loadMemoryStoreSnapshot).mockResolvedValue({
       workingMemory: {
-        sessionId: "memory:main",
+        sessionId: "memory:platform",
         updatedAt: Date.now(),
         rollingSummary: "",
         activeFacts: [],
@@ -255,7 +255,7 @@ describe("memory_search unavailable payloads", () => {
     } as unknown as Awaited<ReturnType<typeof mod.loadMemoryStoreMetadata>>);
     vi.mocked(mod.loadMemoryStoreSnapshot).mockResolvedValue({
       workingMemory: {
-        sessionId: "memory:main",
+        sessionId: "memory:platform",
         updatedAt: Date.now(),
         rollingSummary: "",
         activeFacts: [],
@@ -296,7 +296,7 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
-  it("uses a stable agent-level durable memory scope instead of live session keys", async () => {
+  it("uses a stable workspace-level durable memory scope instead of live session keys", async () => {
     const mod = await import("../../context-engine/memory-system-store.js");
     vi.mocked(mod.loadMemoryStoreMetadata).mockResolvedValue({
       schemaVersion: 1,
@@ -309,7 +309,7 @@ describe("memory_search unavailable payloads", () => {
     } as unknown as Awaited<ReturnType<typeof mod.loadMemoryStoreMetadata>>);
     vi.mocked(mod.loadMemoryStoreSnapshot).mockResolvedValue({
       workingMemory: {
-        sessionId: "memory:main",
+        sessionId: "memory:platform",
         updatedAt: Date.now(),
         rollingSummary: "",
         activeFacts: [],
@@ -356,7 +356,7 @@ describe("memory_search unavailable payloads", () => {
 
     expect(mod.storeIntegratedMemoryEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: "memory:main",
+        sessionId: "memory:platform",
       }),
     );
   });
